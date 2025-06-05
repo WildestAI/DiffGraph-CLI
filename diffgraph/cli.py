@@ -5,6 +5,7 @@ import click
 from typing import List, Dict
 import os
 from .ai_analysis import CodeAnalysisAgent
+from .html_report import generate_html_report, AnalysisResult
 from dotenv import load_dotenv
 
 # Load environment variables from .env if present
@@ -20,6 +21,28 @@ def is_git_repo() -> bool:
             text=True
         )
         return True
+    except subprocess.CalledProcessError:
+        return False
+
+def is_clean_state() -> bool:
+    """Check if the working directory is clean (no changes)."""
+    try:
+        # Check for any changes in tracked files
+        diff_result = subprocess.run(
+            ["git", "diff", "--quiet"],
+            capture_output=True
+        )
+
+        # Check for any untracked files
+        status_result = subprocess.run(
+            ["git", "status", "--porcelain"],
+            check=True,
+            capture_output=True,
+            text=True
+        )
+
+        # If diff returns 0 (no changes) and status is empty (no untracked files)
+        return diff_result.returncode == 0 and not status_result.stdout.strip()
     except subprocess.CalledProcessError:
         return False
 
@@ -140,11 +163,17 @@ def load_file_contents(changed_files: List[Dict[str, str]]) -> List[Dict[str, st
 @click.command()
 @click.version_option()
 @click.option('--api-key', envvar='OPENAI_API_KEY', help='OpenAI API key')
-def main(api_key: str):
+@click.option('--output', '-o', default='diffgraph.html', help='Output HTML file path')
+@click.option('--no-open', is_flag=True, help='Do not open the HTML report automatically')
+def main(api_key: str, output: str, no_open: bool):
     """DiffGraph - Visualize code changes with AI."""
     if not is_git_repo():
         click.echo("Error: Not a git repository", err=True)
         sys.exit(1)
+
+    if is_clean_state():
+        click.echo("No changes to analyze - working directory is clean")
+        sys.exit(0)
 
     changed_files = get_changed_files()
 
@@ -162,14 +191,24 @@ def main(api_key: str):
         # Analyze the changes
         analysis = agent.analyze_changes(files_with_content)
 
-        # Print the analysis results
-        click.echo("\nAnalysis Summary:")
-        click.echo(analysis.summary)
+        # Create analysis result
+        analysis_result = AnalysisResult(
+            summary=analysis.summary,
+            mermaid_diagram=analysis.mermaid_diagram
+        )
 
-        click.echo("\nDependency Diagram:")
-        click.echo("```mermaid")
-        click.echo(analysis.mermaid_diagram)
-        click.echo("```")
+        # Generate HTML report
+        html_path = generate_html_report(analysis_result, output)
+        click.echo(f"\nHTML report generated: {html_path}")
+
+        # Open the HTML report in the default browser
+        if not no_open:
+            if sys.platform == 'darwin':  # macOS
+                subprocess.run(['open', html_path])
+            elif sys.platform == 'win32':  # Windows
+                os.startfile(html_path)
+            else:  # Linux
+                subprocess.run(['xdg-open', html_path])
 
     except ValueError as e:
         click.echo(f"Error: {e}", err=True)

@@ -127,7 +127,7 @@ $ diffgraph-ai
 # Output: Structured response from GPT (summary + mermaid code)
 ```
 
-### 📌 Status: `Not Started`
+### 📌 Status: `In Progress`
 
 ---
 
@@ -158,7 +158,7 @@ $ diffgraph-ai > diffgraph.html && open diffgraph.html
 # Should show graph + explanation
 ```
 
-### 📌 Status: `Not Started`
+### 📌 Status: `Completed`
 
 ---
 
@@ -185,7 +185,7 @@ $ diffgraph-ai
 # Should print "No changes to analyze"
 ```
 
-### 📌 Status: `Not Started`
+### 📌 Status: `Completed`
 
 ---
 
@@ -195,7 +195,7 @@ $ diffgraph-ai
 
 Add CSS to the HTML output for a more polished look:
 
-* Title bar: "Diffgraph Report"
+* Title bar: "DiffGraph Report"
 * Syntax highlighting for code blocks
 * Optional dark mode toggle
 
@@ -214,7 +214,7 @@ Add CSS to the HTML output for a more polished look:
 # Open HTML and inspect: layout, styles, formatting
 ```
 
-### 📌 Status: `Not Started`
+### 📌 Status: `Completed`
 
 ---
 
@@ -241,14 +241,14 @@ $ cd examples/demo1
 $ diffgraph-ai && open diffgraph.html
 ```
 
-### 📌 Status: `Not Started`
+### 📌 Status: `Completed`
 
 ---
 
 ## 🏁 Final Deliverables Checklist
 
-* [ ] CLI (`diffgraph-ai`)
-* [ ] HTML diffgraph report (Mermaid + Summary)
-* [ ] Example repo with demo-ready diff
+* [x] CLI (`diffgraph-ai`)
+* [x] HTML diffgraph report (Mermaid + Summary)
+* [x] Example repo with demo-ready diff
 * [ ] Optional: OpenAI Agent configuration JSON (for Cursor / Claude etc.)
-* [ ] README with install + run instructions
+* [x] README with install + run instructions
