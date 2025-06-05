@@ -185,7 +185,7 @@ $ diffgraph-ai
 # Should print "No changes to analyze"
 ```
 
-### 📌 Status: `Not Started`
+### 📌 Status: `Completed`
 
 ---
 
