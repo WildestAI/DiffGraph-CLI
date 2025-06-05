@@ -67,7 +67,7 @@ $ diffgraph-ai
 # Should list modified AND untracked files
 ```
 
-### 📌 Status: `Not Started`
+### 📌 Status: `Completed`
 
 ---
 
