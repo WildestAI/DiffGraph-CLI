@@ -4,6 +4,11 @@ from pathlib import Path
 import click
 from typing import List, Dict
 import os
+from .ai_analysis import CodeAnalysisAgent
+from dotenv import load_dotenv
+
+# Load environment variables from .env if present
+load_dotenv()
 
 def is_git_repo() -> bool:
     """Check if current directory is a git repository."""
@@ -134,7 +139,8 @@ def load_file_contents(changed_files: List[Dict[str, str]]) -> List[Dict[str, st
 
 @click.command()
 @click.version_option()
-def main():
+@click.option('--api-key', envvar='OPENAI_API_KEY', help='OpenAI API key')
+def main(api_key: str):
     """DiffGraph - Visualize code changes with AI."""
     if not is_git_repo():
         click.echo("Error: Not a git repository", err=True)
@@ -149,11 +155,28 @@ def main():
     # Load contents of changed files
     files_with_content = load_file_contents(changed_files)
 
-    # Print summary of files with their content lengths
-    click.echo("\nChanged files with content:")
-    for file_info in files_with_content:
-        content_length = len(file_info['content'])
-        click.echo(f"{file_info['status']}: {file_info['path']} ({content_length} bytes)")
+    try:
+        # Initialize the AI analysis agent
+        agent = CodeAnalysisAgent(api_key=api_key)
+
+        # Analyze the changes
+        analysis = agent.analyze_changes(files_with_content)
+
+        # Print the analysis results
+        click.echo("\nAnalysis Summary:")
+        click.echo(analysis.summary)
+
+        click.echo("\nDependency Diagram:")
+        click.echo("```mermaid")
+        click.echo(analysis.mermaid_diagram)
+        click.echo("```")
+
+    except ValueError as e:
+        click.echo(f"Error: {e}", err=True)
+        sys.exit(1)
+    except Exception as e:
+        click.echo(f"Error during analysis: {e}", err=True)
+        sys.exit(1)
 
 if __name__ == "__main__":
     main()
