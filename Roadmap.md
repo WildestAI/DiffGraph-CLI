@@ -34,7 +34,7 @@ $ diffgraph-ai
 # should print raw git diff, or a friendly error message if repo not found
 ```
 
-### 📌 Status: `Not Started`
+### 📌 Status: `Completed`
 
 ---
 
@@ -170,7 +170,7 @@ Make sure `diffgraph-ai` exits cleanly when there is no diff (i.e., working dire
 
 ### 🧹 Constraints:
 
-* CLI should show: “No changes to analyze”
+* CLI should show: "No changes to analyze"
 * Should not call OpenAI if no diff or untracked file is present
 
 ### 💼 Resources:
@@ -195,7 +195,7 @@ $ diffgraph-ai
 
 Add CSS to the HTML output for a more polished look:
 
-* Title bar: “Diffgraph Report”
+* Title bar: "Diffgraph Report"
 * Syntax highlighting for code blocks
 * Optional dark mode toggle
 
