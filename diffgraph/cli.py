@@ -5,6 +5,7 @@ import click
 from typing import List, Dict
 import os
 from .ai_analysis import CodeAnalysisAgent
+from .html_report import generate_html_report, AnalysisResult
 from dotenv import load_dotenv
 
 # Load environment variables from .env if present
@@ -140,7 +141,9 @@ def load_file_contents(changed_files: List[Dict[str, str]]) -> List[Dict[str, st
 @click.command()
 @click.version_option()
 @click.option('--api-key', envvar='OPENAI_API_KEY', help='OpenAI API key')
-def main(api_key: str):
+@click.option('--output', '-o', default='diffgraph.html', help='Output HTML file path')
+@click.option('--no-open', is_flag=True, help='Do not open the HTML report automatically')
+def main(api_key: str, output: str, no_open: bool):
     """DiffGraph - Visualize code changes with AI."""
     if not is_git_repo():
         click.echo("Error: Not a git repository", err=True)
@@ -162,14 +165,24 @@ def main(api_key: str):
         # Analyze the changes
         analysis = agent.analyze_changes(files_with_content)
 
-        # Print the analysis results
-        click.echo("\nAnalysis Summary:")
-        click.echo(analysis.summary)
+        # Create analysis result
+        analysis_result = AnalysisResult(
+            summary=analysis.summary,
+            mermaid_diagram=analysis.mermaid_diagram
+        )
 
-        click.echo("\nDependency Diagram:")
-        click.echo("```mermaid")
-        click.echo(analysis.mermaid_diagram)
-        click.echo("```")
+        # Generate HTML report
+        html_path = generate_html_report(analysis_result, output)
+        click.echo(f"\nHTML report generated: {html_path}")
+
+        # Open the HTML report in the default browser
+        if not no_open:
+            if sys.platform == 'darwin':  # macOS
+                subprocess.run(['open', html_path])
+            elif sys.platform == 'win32':  # Windows
+                os.startfile(html_path)
+            else:  # Linux
+                subprocess.run(['xdg-open', html_path])
 
     except ValueError as e:
         click.echo(f"Error: {e}", err=True)

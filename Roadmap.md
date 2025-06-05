@@ -127,7 +127,7 @@ $ diffgraph-ai
 # Output: Structured response from GPT (summary + mermaid code)
 ```
 
-### 📌 Status: `Not Started`
+### 📌 Status: `In Progress`
 
 ---
 
@@ -158,7 +158,7 @@ $ diffgraph-ai > diffgraph.html && open diffgraph.html
 # Should show graph + explanation
 ```
 
-### 📌 Status: `Not Started`
+### 📌 Status: `Completed`
 
 ---
 
