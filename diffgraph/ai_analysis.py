@@ -3,6 +3,9 @@ from agents import Agent, Runner
 import os
 from pydantic import BaseModel
 from .graph_manager import GraphManager, FileStatus, ChangeType, ComponentNode
+import time
+import random
+import openai
 
 class FileChange(BaseModel):
     """Model representing a file change."""
@@ -14,6 +17,28 @@ class DiffAnalysis(BaseModel):
     """Model representing the analysis of code changes."""
     summary: str
     mermaid_diagram: str
+
+def exponential_backoff_retry(func):
+    """Decorator to implement exponential backoff retry logic."""
+    def wrapper(*args, **kwargs):
+        max_retries = 5
+        base_delay = 1  # Start with 1 second
+        max_delay = 60  # Maximum delay of 60 seconds
+
+        for attempt in range(max_retries):
+            try:
+                return func(*args, **kwargs)
+            except openai.RateLimitError as e:
+                if attempt == max_retries - 1:  # Last attempt
+                    raise  # Re-raise the exception if all retries failed
+
+                # Calculate delay with exponential backoff and jitter
+                delay = min(base_delay * (2 ** attempt) + random.uniform(0, 1), max_delay)
+                print(f"Rate limit hit. Retrying in {delay:.2f} seconds...")
+                time.sleep(delay)
+            except Exception as e:
+                raise  # Re-raise other exceptions immediately
+    return wrapper
 
 class CodeAnalysisAgent:
     """Agent for analyzing code changes using OpenAI's Agents SDK."""
@@ -66,6 +91,12 @@ class CodeAnalysisAgent:
         else:
             return ChangeType.MODIFIED
 
+    @exponential_backoff_retry
+    def _run_agent_analysis(self, prompt: str) -> str:
+        """Run the agent analysis with retry logic."""
+        result = Runner.run_sync(self.agent, prompt)
+        return result.final_output
+
     def analyze_changes(self, files_with_content: List[Dict[str, str]]) -> DiffAnalysis:
         """
         Analyze code changes using the OpenAI agent, processing files incrementally.
@@ -114,9 +145,8 @@ class CodeAnalysisAgent:
                     for comp in processed_components:
                         prompt += f"- {comp.name}: {comp.summary}\n"
 
-                # Run the agent
-                result = Runner.run_sync(self.agent, prompt)
-                response_text = result.final_output
+                # Run the agent with retry logic
+                response_text = self._run_agent_analysis(prompt)
 
                 # Parse the response
                 summary = ""
@@ -166,10 +196,26 @@ class CodeAnalysisAgent:
                     for dep in comp.get("dependencies", []):
                         # Try to find the dependency in other components
                         for other_comp in self.graph_manager.component_nodes.values():
-                            if other_comp.name == dep:
+                            # More flexible matching - check if the dependency name is contained in the component name
+                            # or if the component name is contained in the dependency name
+                            if (dep.lower() in other_comp.name.lower() or
+                                other_comp.name.lower() in dep.lower()):
                                 self.graph_manager.add_component_dependency(
                                     f"{current_file}::{comp['name']}",
                                     f"{other_comp.file_path}::{other_comp.name}"
+                                )
+
+                    # Add dependents
+                    for dep in comp.get("dependents", []):
+                        # Try to find the dependent in other components
+                        for other_comp in self.graph_manager.component_nodes.values():
+                            # More flexible matching - check if the dependent name is contained in the component name
+                            # or if the component name is contained in the dependent name
+                            if (dep.lower() in other_comp.name.lower() or
+                                other_comp.name.lower() in dep.lower()):
+                                self.graph_manager.add_component_dependency(
+                                    f"{other_comp.file_path}::{other_comp.name}",
+                                    f"{current_file}::{comp['name']}"
                                 )
 
                 # Mark file as processed
