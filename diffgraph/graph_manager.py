@@ -144,46 +144,38 @@ class GraphManager:
         """Generate a Mermaid diagram representation of the graph."""
         mermaid = ["graph TD"]
 
-        # Add file nodes with their change type colors
+        # Add file nodes with their change type colors (lighter shades)
         for file_path, node in self.file_nodes.items():
-            color = {
-                ChangeType.ADDED: "green",
-                ChangeType.DELETED: "red",
-                ChangeType.MODIFIED: "orange",
-                ChangeType.UNCHANGED: "gray"
-            }[node.change_type]
-
             label = f"{file_path}"
             if node.summary:
                 label += f"<br/>{node.summary[:50]}..."
             if node.error:
                 label += f"<br/>(Error: {node.error})"
 
-            mermaid.append(f'    {file_path.replace("/", "_")}["{label}"]:::change_{node.change_type.value}')
+            mermaid.append(f'    {file_path.replace("/", "_")}["{label}"]:::file_{node.change_type.value}')
 
-        # Add component nodes
+        # Add component nodes (darker shades)
         for component_id, node in self.component_nodes.items():
-            color = {
-                ChangeType.ADDED: "green",
-                ChangeType.DELETED: "red",
-                ChangeType.MODIFIED: "orange",
-                ChangeType.UNCHANGED: "gray"
-            }[node.change_type]
-
             label = f"{node.name}"
             if node.summary:
                 label += f"<br/>{node.summary[:50]}..."
 
-            mermaid.append(f'    {component_id.replace("/", "_").replace("::", "_")}["{label}"]:::change_{node.change_type.value}')
+            mermaid.append(f'    {component_id.replace("/", "_").replace("::", "_")}["{label}"]:::component_{node.change_type.value}')
 
         # Add edges between components
         for source, target in self.component_graph.edges():
             mermaid.append(f'    {source.replace("/", "_").replace("::", "_")} --> {target.replace("/", "_").replace("::", "_")}')
 
-        # Add style definitions
-        mermaid.append("    classDef change_added fill:green,stroke:#333,stroke-width:2px")
-        mermaid.append("    classDef change_deleted fill:red,stroke:#333,stroke-width:2px")
-        mermaid.append("    classDef change_modified fill:orange,stroke:#333,stroke-width:2px")
-        mermaid.append("    classDef change_unchanged fill:gray,stroke:#333,stroke-width:2px")
+        # Add style definitions for files (lighter shades)
+        mermaid.append("    classDef file_added fill:#90EE90,stroke:#333,stroke-width:2px")  # Light green
+        mermaid.append("    classDef file_deleted fill:#FFB6C1,stroke:#333,stroke-width:2px")  # Light red
+        mermaid.append("    classDef file_modified fill:#FFD580,stroke:#333,stroke-width:2px")  # Light orange
+        mermaid.append("    classDef file_unchanged fill:#D3D3D3,stroke:#333,stroke-width:2px")  # Light gray
+
+        # Add style definitions for components (darker shades)
+        mermaid.append("    classDef component_added fill:#32CD32,stroke:#333,stroke-width:2px")  # Lime green
+        mermaid.append("    classDef component_deleted fill:#DC143C,stroke:#333,stroke-width:2px")  # Crimson
+        mermaid.append("    classDef component_modified fill:#FF8C00,stroke:#333,stroke-width:2px")  # Dark orange
+        mermaid.append("    classDef component_unchanged fill:#808080,stroke:#333,stroke-width:2px")  # Gray
 
         return "\n".join(mermaid)

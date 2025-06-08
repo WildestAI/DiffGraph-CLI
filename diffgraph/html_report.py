@@ -147,15 +147,15 @@ def generate_html_report(analysis: AnalysisResult, output_path: str = "diffgraph
         <button class="theme-toggle" onclick="toggleTheme()">Toggle Dark Mode</button>
     </h1>
 
+    <div class="mermaid">
+        {mermaid_diagram}
+    </div>
+
     <div class="summary">
         <h2>Analysis Summary</h2>
         <div class="markdown-content" id="summary-content">
             {summary}
         </div>
-    </div>
-
-    <div class="mermaid">
-        {mermaid_diagram}
     </div>
 
     <script>
