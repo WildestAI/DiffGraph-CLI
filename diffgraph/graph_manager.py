@@ -2,6 +2,7 @@ from typing import Dict, List, Set, Optional
 from dataclasses import dataclass
 from enum import Enum
 import networkx as nx
+import re
 
 class ChangeType(Enum):
     """Type of change in the code."""
@@ -161,7 +162,7 @@ class GraphManager:
 
     def get_mermaid_diagram(self) -> str:
         """Generate a Mermaid diagram representation of the graph."""
-        mermaid = ["graph TD"]
+        mermaid = ["graph LR"]
 
         file_classes = []
         component_classes = []
@@ -185,19 +186,18 @@ class GraphManager:
             # Add components within this file
             if file_path in file_components:
                 for component_id, comp_node in file_components[file_path]:
-                    comp_id = component_id.replace("/", "_").replace("::", "_")
-                    component_label = comp_node.name
+                    comp_id = re.sub(r'[^a-zA-Z0-9_]', '_', component_id)
+                    component_label = comp_node.name.replace('"', '\\"').replace('`', '\\`')
                     if comp_node.summary:
-                        mermaid.append(f'        {comp_id}["{component_label}"]')
-                        component_classes.append(f'class {comp_id} component_{comp_node.change_type.value}')
+                        mermaid.append(f'        {comp_id}["{component_label}"]:::component_{comp_node.change_type.value}')
+                        mermaid.append(f'        click {comp_id} call callback("{comp_node.summary.replace('"', '\\"')}") "{comp_node.summary.replace('"', '\\"')}"')
                     else:
-                        mermaid.append(f'        {comp_id}["{component_label}"]')
-                        component_classes.append(f'class {comp_id} component_{comp_node.change_type.value}')
+                        mermaid.append(f'        {comp_id}["{component_label}"]:::component_{comp_node.change_type.value}')
             mermaid.append('    end')
 
         # Add edges between components
         for source, target in self.component_graph.edges():
-            mermaid.append(f'    {source.replace("/", "_").replace("::", "_")} --> {target.replace("/", "_").replace("::", "_")}')
+            mermaid.append(f'    {re.sub(r'[^a-zA-Z0-9_]', '_', source)} --> {re.sub(r'[^a-zA-Z0-9_]', '_', target)}')
 
         # Add style definitions for files (lighter shades)
         mermaid.append("    classDef file_added fill:#90EE90,stroke:#333,stroke-width:2px")  # Light green

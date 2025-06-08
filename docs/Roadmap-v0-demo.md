@@ -33,7 +33,7 @@ The output HTML graph should show component nodes (e.g., `validateUser()`, `Auth
 * Show 1–2 lines of the component summary (if available)
 * Link dependencies using edges (even hardcoded for now)
 
-### 📌 Status: `Not Started`
+### 📌 Status: `Completed`
 
 ---
 
@@ -73,7 +73,7 @@ You should be able to call each of these prompts independently and get JSON outp
 
 ### 🌟 Objective:
 
-Break large files into chunks so component extraction doesn’t fail due to context limits.
+Break large files into chunks so component extraction doesn't fail due to context limits.
 
 ### 🔹 Definition of Done:
 
@@ -128,7 +128,7 @@ A single `Runner.run()` call should:
 ### 🔧 Implementation Details:
 
 * Use [`openai_agents.Tool`](https://openai.github.io/openai-agents-python/agents/#tools) class
-* Each tool’s `call()` should be fully stateless and log input/output
+* Each tool's `call()` should be fully stateless and log input/output
 * Store intermediate results in a `Workspace` or memory dict
 * Use the built-in `Planner` or implement a `ToolPicker`
 
