@@ -139,6 +139,24 @@ def generate_html_report(analysis: AnalysisResult, output_path: str = "diffgraph
             border-radius: 0.25rem;
             font-size: 0.875em;
         }}
+
+        /* Tooltip styles */
+        .tooltip {{
+            position: fixed;
+            background: var(--bg-secondary);
+            border: 1px solid var(--border-color);
+            border-radius: 0.5rem;
+            padding: 1rem;
+            max-width: 400px;
+            box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
+            z-index: 1000;
+            display: none;
+            color: var(--text-primary);
+        }}
+
+        .tooltip.visible {{
+            display: block;
+        }}
     </style>
 </head>
 <body>
@@ -157,6 +175,9 @@ def generate_html_report(analysis: AnalysisResult, output_path: str = "diffgraph
             {summary}
         </div>
     </div>
+
+    <!-- Tooltip element -->
+    <div id="tooltip" class="tooltip"></div>
 
     <script>
         // Initialize Mermaid
@@ -202,6 +223,42 @@ def generate_html_report(analysis: AnalysisResult, output_path: str = "diffgraph
                 mermaid.init(undefined, el);
             }});
         }}
+
+        // Tooltip handling
+        window.showTooltip = function(text, event) {{
+            const tooltip = document.getElementById('tooltip');
+            tooltip.textContent = text;
+            tooltip.style.left = event.pageX + 10 + 'px';
+            tooltip.style.top = event.pageY + 10 + 'px';
+            tooltip.classList.add('visible');
+        }}
+
+        window.hideTooltip = function() {{
+            const tooltip = document.getElementById('tooltip');
+            tooltip.classList.remove('visible');
+        }}
+
+        // Add click handlers for component nodes
+        document.addEventListener('DOMContentLoaded', (event) => {{
+            document.querySelectorAll('.mermaid').forEach((el) => {{
+                el.addEventListener('click', (e) => {{
+                    const target = e.target;
+                    if (target.classList.contains('node')) {{
+                        const tooltip = target.getAttribute('data-tooltip');
+                        if (tooltip) {{
+                            showTooltip(tooltip, e);
+                        }}
+                    }}
+                }});
+            }});
+
+            // Hide tooltip when clicking outside
+            document.addEventListener('click', (e) => {{
+                if (!e.target.classList.contains('node')) {{
+                    hideTooltip();
+                }}
+            }});
+        }});
     </script>
 </body>
 </html>

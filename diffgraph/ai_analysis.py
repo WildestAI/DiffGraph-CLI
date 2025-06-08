@@ -6,6 +6,7 @@ from .graph_manager import GraphManager, FileStatus, ChangeType, ComponentNode
 import time
 import random
 import openai
+import re
 
 class FileChange(BaseModel):
     """Model representing a file change."""
@@ -158,65 +159,81 @@ class CodeAnalysisAgent:
                 if "COMPONENTS:" in response_text:
                     components_section = response_text.split("COMPONENTS:")[1].split("IMPACT:")[0].strip()
                     current_component = {}
+                    components = []  # Reset components list for each file
 
                     for line in components_section.split("\n"):
                         line = line.strip()
                         if not line:
-                            if current_component:
+                            if current_component and "name" in current_component:  # Only add if we have a name
                                 components.append(current_component)
                                 current_component = {}
                             continue
 
-                        if line.startswith("- name:"):
-                            if current_component:
-                                components.append(current_component)
-                            current_component = {"name": line[7:].strip()}
-                        elif line.startswith("  type:"):
-                            current_component["type"] = line[7:].strip()
-                        elif line.startswith("  summary:"):
-                            current_component["summary"] = line[10:].strip()
-                        elif line.startswith("  dependencies:"):
-                            current_component["dependencies"] = [d.strip() for d in line[15:].split(",")]
-                        elif line.startswith("  dependents:"):
-                            current_component["dependents"] = [d.strip() for d in line[12:].split(",")]
+                        parts = line.split(":")
+                        if len(parts) > 1:
+                            field_name = re.sub(r'[^a-zA-Z0-9_]', '', parts[0].strip()).lower()
+                            field_value = ":".join(parts[1:]).strip()
+                            if field_name == "name":
+                                if current_component and "name" in current_component:  # Only add if we have a name
+                                    components.append(current_component)
+                                current_component = {"name": field_value}
+                            elif field_name == "type":
+                                current_component["type"] = re.sub(r'[^a-zA-Z0-9_]', '', field_value.strip()).lower()
+                            elif field_name == "summary":
+                                current_component["summary"] = field_value
+                            elif field_name == "dependencies":
+                                current_component["dependencies"] = [d.strip() for d in field_value.split(",") if d.strip()]
+                            elif field_name == "dependents":
+                                current_component["dependents"] = [d.strip() for d in field_value.split(",") if d.strip()]
 
-                    if current_component:
+                    if current_component and "name" in current_component:  # Only add if we have a name
                         components.append(current_component)
 
                 # Add components to the graph
                 for comp in components:
-                    change_type = ChangeType[comp["type"].upper()]
-                    self.graph_manager.add_component(
-                        comp["name"],
-                        current_file,
-                        change_type
-                    )
+                    if "name" not in comp or "type" not in comp:
+                        print(f"Skipping invalid component: {comp}")
+                        continue
 
-                    # Add dependencies
-                    for dep in comp.get("dependencies", []):
-                        # Try to find the dependency in other components
-                        for other_comp in self.graph_manager.component_nodes.values():
-                            # More flexible matching - check if the dependency name is contained in the component name
-                            # or if the component name is contained in the dependency name
-                            if (dep.lower() in other_comp.name.lower() or
-                                other_comp.name.lower() in dep.lower()):
-                                self.graph_manager.add_component_dependency(
-                                    f"{current_file}::{comp['name']}",
-                                    f"{other_comp.file_path}::{other_comp.name}"
-                                )
+                    try:
+                        change_type = ChangeType[comp["type"].upper()]
+                        self.graph_manager.add_component(
+                            comp["name"],
+                            current_file,
+                            change_type,
+                            summary=comp.get("summary"),
+                            dependencies=comp.get("dependencies", []),
+                            dependents=comp.get("dependents", [])
+                        )
 
-                    # Add dependents
-                    for dep in comp.get("dependents", []):
-                        # Try to find the dependent in other components
-                        for other_comp in self.graph_manager.component_nodes.values():
-                            # More flexible matching - check if the dependent name is contained in the component name
-                            # or if the component name is contained in the dependent name
-                            if (dep.lower() in other_comp.name.lower() or
-                                other_comp.name.lower() in dep.lower()):
-                                self.graph_manager.add_component_dependency(
-                                    f"{other_comp.file_path}::{other_comp.name}",
-                                    f"{current_file}::{comp['name']}"
-                                )
+                        # Add dependencies
+                        for dep in comp.get("dependencies", []):
+                            if not dep:  # Skip empty dependencies
+                                continue
+                            # Try to find the dependency in other components
+                            for other_comp in self.graph_manager.component_nodes.values():
+                                if (dep.lower() in other_comp.name.lower() or
+                                    other_comp.name.lower() in dep.lower()):
+                                    self.graph_manager.add_component_dependency(
+                                        f"{current_file}::{comp['name']}",
+                                        f"{other_comp.file_path}::{other_comp.name}"
+                                    )
+
+                        # Add dependents
+                        for dep in comp.get("dependents", []):
+                            if not dep:  # Skip empty dependents
+                                continue
+                            # Try to find the dependent in other components
+                            for other_comp in self.graph_manager.component_nodes.values():
+                                if (dep.lower() in other_comp.name.lower() or
+                                    other_comp.name.lower() in dep.lower()):
+                                    self.graph_manager.add_component_dependency(
+                                        f"{other_comp.file_path}::{other_comp.name}",
+                                        f"{current_file}::{comp['name']}"
+                                    )
+                    except Exception as e:
+                        print(f"Error processing component {comp.get('name', 'unknown')}: {str(e)}")
+                        continue
 
                 # Mark file as processed
                 self.graph_manager.mark_processed(current_file, summary, components)
