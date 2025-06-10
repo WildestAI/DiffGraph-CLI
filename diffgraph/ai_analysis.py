@@ -20,7 +20,7 @@ class DiffAnalysis(BaseModel):
     mermaid_diagram: str
 
 def exponential_backoff_retry(func):
-    """Decorator to implement exponential backoff retry logic."""
+    """Decorator to implement exponential backoff retry logic using API rate limit information."""
     def wrapper(*args, **kwargs):
         max_retries = 5
         base_delay = 1  # Start with 1 second
@@ -33,8 +33,19 @@ def exponential_backoff_retry(func):
                 if attempt == max_retries - 1:  # Last attempt
                     raise  # Re-raise the exception if all retries failed
 
-                # Calculate delay with exponential backoff and jitter
-                delay = min(base_delay * (2 ** attempt) + random.uniform(0, 1), max_delay)
+                # Try to get the retry delay from the error response
+                try:
+                    # The error response usually contains a 'retry_after' field
+                    retry_after = getattr(e, 'retry_after', None)
+                    if retry_after:
+                        delay = float(retry_after)
+                    else:
+                        # Fallback to exponential backoff if retry_after is not available
+                        delay = min(base_delay * (2 ** attempt) + random.uniform(0, 1), max_delay)
+                except (ValueError, TypeError):
+                    # If we can't parse the retry_after, fallback to exponential backoff
+                    delay = min(base_delay * (2 ** attempt) + random.uniform(0, 1), max_delay)
+
                 print(f"Rate limit hit. Retrying in {delay:.2f} seconds...")
                 time.sleep(delay)
             except Exception as e:
@@ -149,6 +160,9 @@ class CodeAnalysisAgent:
                 # Run the agent with retry logic
                 response_text = self._run_agent_analysis(prompt)
 
+                print("--------------------------------")
+                print(response_text)
+                print("--------------------------------")
                 # Parse the response
                 summary = ""
                 components = []
