@@ -3,6 +3,10 @@ from agents import Agent, Runner
 import os
 from pydantic import BaseModel
 from .graph_manager import GraphManager, FileStatus, ChangeType, ComponentNode
+import time
+import random
+import openai
+import re
 
 class FileChange(BaseModel):
     """Model representing a file change."""
@@ -14,6 +18,39 @@ class DiffAnalysis(BaseModel):
     """Model representing the analysis of code changes."""
     summary: str
     mermaid_diagram: str
+
+def exponential_backoff_retry(func):
+    """Decorator to implement exponential backoff retry logic using API rate limit information."""
+    def wrapper(*args, **kwargs):
+        max_retries = 5
+        base_delay = 1  # Start with 1 second
+        max_delay = 60  # Maximum delay of 60 seconds
+
+        for attempt in range(max_retries):
+            try:
+                return func(*args, **kwargs)
+            except openai.RateLimitError as e:
+                if attempt == max_retries - 1:  # Last attempt
+                    raise  # Re-raise the exception if all retries failed
+
+                # Try to get the retry delay from the error response
+                try:
+                    # The error response usually contains a 'retry_after' field
+                    retry_after = getattr(e, 'retry_after', None)
+                    if retry_after:
+                        delay = float(retry_after)
+                    else:
+                        # Fallback to exponential backoff if retry_after is not available
+                        delay = min(base_delay * (2 ** attempt) + random.uniform(0, 1), max_delay)
+                except (ValueError, TypeError):
+                    # If we can't parse the retry_after, fallback to exponential backoff
+                    delay = min(base_delay * (2 ** attempt) + random.uniform(0, 1), max_delay)
+
+                print(f"Rate limit hit. Retrying in {delay:.2f} seconds...")
+                time.sleep(delay)
+            except Exception as e:
+                raise  # Re-raise other exceptions immediately
+    return wrapper
 
 class CodeAnalysisAgent:
     """Agent for analyzing code changes using OpenAI's Agents SDK."""
@@ -66,6 +103,12 @@ class CodeAnalysisAgent:
         else:
             return ChangeType.MODIFIED
 
+    @exponential_backoff_retry
+    def _run_agent_analysis(self, prompt: str) -> str:
+        """Run the agent analysis with retry logic."""
+        result = Runner.run_sync(self.agent, prompt)
+        return result.final_output
+
     def analyze_changes(self, files_with_content: List[Dict[str, str]]) -> DiffAnalysis:
         """
         Analyze code changes using the OpenAI agent, processing files incrementally.
@@ -114,10 +157,12 @@ class CodeAnalysisAgent:
                     for comp in processed_components:
                         prompt += f"- {comp.name}: {comp.summary}\n"
 
-                # Run the agent
-                result = Runner.run_sync(self.agent, prompt)
-                response_text = result.final_output
+                # Run the agent with retry logic
+                response_text = self._run_agent_analysis(prompt)
 
+                print("--------------------------------")
+                print(response_text)
+                print("--------------------------------")
                 # Parse the response
                 summary = ""
                 components = []
@@ -128,49 +173,81 @@ class CodeAnalysisAgent:
                 if "COMPONENTS:" in response_text:
                     components_section = response_text.split("COMPONENTS:")[1].split("IMPACT:")[0].strip()
                     current_component = {}
+                    components = []  # Reset components list for each file
 
                     for line in components_section.split("\n"):
                         line = line.strip()
                         if not line:
-                            if current_component:
+                            if current_component and "name" in current_component:  # Only add if we have a name
                                 components.append(current_component)
                                 current_component = {}
                             continue
 
-                        if line.startswith("- name:"):
-                            if current_component:
-                                components.append(current_component)
-                            current_component = {"name": line[7:].strip()}
-                        elif line.startswith("  type:"):
-                            current_component["type"] = line[7:].strip()
-                        elif line.startswith("  summary:"):
-                            current_component["summary"] = line[10:].strip()
-                        elif line.startswith("  dependencies:"):
-                            current_component["dependencies"] = [d.strip() for d in line[15:].split(",")]
-                        elif line.startswith("  dependents:"):
-                            current_component["dependents"] = [d.strip() for d in line[12:].split(",")]
+                        parts = line.split(":")
+                        if len(parts) > 1:
+                            field_name = re.sub(r'[^a-zA-Z0-9_]', '', parts[0].strip()).lower()
+                            field_value = ":".join(parts[1:]).strip()
+                            if field_name == "name":
+                                if current_component and "name" in current_component:  # Only add if we have a name
+                                    components.append(current_component)
+                                current_component = {"name": field_value}
+                            elif field_name == "type":
+                                current_component["type"] = re.sub(r'[^a-zA-Z0-9_]', '', field_value.strip()).lower()
+                            elif field_name == "summary":
+                                current_component["summary"] = field_value
+                            elif field_name == "dependencies":
+                                current_component["dependencies"] = [d.strip() for d in field_value.split(",") if d.strip()]
+                            elif field_name == "dependents":
+                                current_component["dependents"] = [d.strip() for d in field_value.split(",") if d.strip()]
 
-                    if current_component:
+                    if current_component and "name" in current_component:  # Only add if we have a name
                         components.append(current_component)
 
                 # Add components to the graph
                 for comp in components:
-                    change_type = ChangeType[comp["type"].upper()]
-                    self.graph_manager.add_component(
-                        comp["name"],
-                        current_file,
-                        change_type
-                    )
+                    if "name" not in comp or "type" not in comp:
+                        print(f"Skipping invalid component: {comp}")
+                        continue
 
-                    # Add dependencies
-                    for dep in comp.get("dependencies", []):
-                        # Try to find the dependency in other components
-                        for other_comp in self.graph_manager.component_nodes.values():
-                            if other_comp.name == dep:
-                                self.graph_manager.add_component_dependency(
-                                    f"{current_file}::{comp['name']}",
-                                    f"{other_comp.file_path}::{other_comp.name}"
-                                )
+                    try:
+                        change_type = ChangeType[comp["type"].upper()]
+                        self.graph_manager.add_component(
+                            comp["name"],
+                            current_file,
+                            change_type,
+                            summary=comp.get("summary"),
+                            dependencies=comp.get("dependencies", []),
+                            dependents=comp.get("dependents", [])
+                        )
+
+                        # Add dependencies
+                        for dep in comp.get("dependencies", []):
+                            if not dep:  # Skip empty dependencies
+                                continue
+                            # Try to find the dependency in other components
+                            for other_comp in self.graph_manager.component_nodes.values():
+                                if (dep.lower() in other_comp.name.lower() or
+                                    other_comp.name.lower() in dep.lower()):
+                                    self.graph_manager.add_component_dependency(
+                                        f"{current_file}::{comp['name']}",
+                                        f"{other_comp.file_path}::{other_comp.name}"
+                                    )
+
+                        # Add dependents
+                        for dep in comp.get("dependents", []):
+                            if not dep:  # Skip empty dependents
+                                continue
+                            # Try to find the dependent in other components
+                            for other_comp in self.graph_manager.component_nodes.values():
+                                if (dep.lower() in other_comp.name.lower() or
+                                    other_comp.name.lower() in dep.lower()):
+                                    self.graph_manager.add_component_dependency(
+                                        f"{other_comp.file_path}::{other_comp.name}",
+                                        f"{current_file}::{comp['name']}"
+                                    )
+                    except Exception as e:
+                        print(f"Error processing component {comp.get('name', 'unknown')}: {str(e)}")
+                        continue
 
                 # Mark file as processed
                 self.graph_manager.mark_processed(current_file, summary, components)
