@@ -38,6 +38,8 @@ class ComponentNode:
     name: str
     file_path: str
     change_type: ChangeType
+    component_type: str  # container, function, method
+    parent: Optional[str] = None  # name of the parent component if nested
     summary: Optional[str] = None
     dependencies: List[str] = None  # List of component names this depends on
     dependents: List[str] = None    # List of component names that depend on this
@@ -71,7 +73,7 @@ class GraphManager:
             self.file_graph.add_node(file_path)
             self.processing_queue.append(file_path)
 
-    def add_component(self, name: str, file_path: str, change_type: ChangeType, summary: str = None, dependencies: list = None, dependents: list = None) -> None:
+    def add_component(self, name: str, file_path: str, change_type: ChangeType, component_type: str, parent: Optional[str] = None, summary: str = None, dependencies: list = None, dependents: list = None) -> None:
         """Add a new component to the graph."""
         component_id = f"{file_path}::{name}"
         # Clean up dependencies and dependents lists
@@ -83,6 +85,8 @@ class GraphManager:
                 name=name,
                 file_path=file_path,
                 change_type=change_type,
+                component_type=component_type,
+                parent=parent,
                 summary=summary,
                 dependencies=dependencies,
                 dependents=dependents
@@ -94,6 +98,8 @@ class GraphManager:
             existing.summary = summary or existing.summary
             existing.dependencies = dependencies or existing.dependencies
             existing.dependents = dependents or existing.dependents
+            existing.component_type = component_type
+            existing.parent = parent
 
     def add_component_dependency(self, source: str, target: str) -> None:
         """Add a dependency relationship between components."""
@@ -167,12 +173,21 @@ class GraphManager:
         file_classes = []
         component_classes = []
 
-        # Group components by their file paths
+        # Group components by their file paths and create a hierarchy
         file_components = {}
+        component_hierarchy = {}  # parent -> children mapping
+
         for component_id, node in self.component_nodes.items():
             if node.file_path not in file_components:
                 file_components[node.file_path] = []
             file_components[node.file_path].append((component_id, node))
+
+            # If this component has a parent, add it to the hierarchy
+            if hasattr(node, 'parent') and node.parent:
+                parent_id = f"{node.file_path}::{node.parent}"
+                if parent_id not in component_hierarchy:
+                    component_hierarchy[parent_id] = []
+                component_hierarchy[parent_id].append(component_id)
 
         # Add file nodes as subgraphs with their components inside
         for file_path, node in self.file_nodes.items():
@@ -183,21 +198,53 @@ class GraphManager:
             mermaid.append(f'    subgraph {file_id}["{file_label}"]')
             mermaid.append(f'        direction TB')
             file_classes.append(f'class {file_id} file_{node.change_type.value}')
+
             # Add components within this file
             if file_path in file_components:
+                # First add container components
                 for component_id, comp_node in file_components[file_path]:
-                    comp_id = re.sub(r'[^a-zA-Z0-9_]', '_', component_id)
-                    component_label = comp_node.name.replace('"', '\\"').replace('`', '\\`')
-                    if comp_node.summary:
-                        mermaid.append(f'        {comp_id}["{component_label}"]:::component_{comp_node.change_type.value}')
-                        mermaid.append(f'        click {comp_id} call callback("{comp_node.summary.replace('"', '\\"')}") "{comp_node.summary.replace('"', '\\"')}"')
-                    else:
-                        mermaid.append(f'        {comp_id}["{component_label}"]:::component_{comp_node.change_type.value}')
+                    if hasattr(comp_node, 'component_type') and comp_node.component_type == 'container':
+                        comp_id = re.sub(r'[^a-zA-Z0-9_]', '_', component_id)
+                        component_label = comp_node.name.replace('"', '\\"').replace('`', '\\`')
+
+                        # Create a subgraph for the container
+                        mermaid.append(f'        subgraph {comp_id}["{component_label}"]')
+                        mermaid.append(f'            direction TB')
+
+                        # Add nested components if any
+                        if component_id in component_hierarchy:
+                            for nested_id in component_hierarchy[component_id]:
+                                nested_node = self.component_nodes[nested_id]
+                                nested_comp_id = re.sub(r'[^a-zA-Z0-9_]', '_', nested_id)
+                                nested_label = nested_node.name.replace('"', '\\"').replace('`', '\\`')
+                                if nested_node.summary:
+                                    mermaid.append(f'            {nested_comp_id}["{nested_label}"]:::component_{nested_node.change_type.value}')
+                                    mermaid.append(f'            click {nested_comp_id} call callback("{nested_node.summary.replace('"', '\\"')}") "{nested_node.summary.replace('"', '\\"')}"')
+                                else:
+                                    mermaid.append(f'            {nested_comp_id}["{nested_label}"]:::component_{nested_node.change_type.value}')
+
+                        mermaid.append('        end')
+                        mermaid.append(f'        {comp_id}:::component_{comp_node.change_type.value}')
+
+                # Then add standalone components (functions, methods without containers)
+                for component_id, comp_node in file_components[file_path]:
+                    if not hasattr(comp_node, 'component_type') or comp_node.component_type != 'container':
+                        if not hasattr(comp_node, 'parent') or not comp_node.parent:  # Only add if not nested
+                            comp_id = re.sub(r'[^a-zA-Z0-9_]', '_', component_id)
+                            component_label = comp_node.name.replace('"', '\\"').replace('`', '\\`')
+                            if comp_node.summary:
+                                mermaid.append(f'        {comp_id}["{component_label}"]:::component_{comp_node.change_type.value}')
+                                mermaid.append(f'        click {comp_id} call callback("{comp_node.summary.replace('"', '\\"')}") "{comp_node.summary.replace('"', '\\"')}"')
+                            else:
+                                mermaid.append(f'        {comp_id}["{component_label}"]:::component_{comp_node.change_type.value}')
+
             mermaid.append('    end')
 
         # Add edges between components
         for source, target in self.component_graph.edges():
-            mermaid.append(f'    {re.sub(r'[^a-zA-Z0-9_]', '_', source)} --> {re.sub(r'[^a-zA-Z0-9_]', '_', target)}')
+            source_id = re.sub(r'[^a-zA-Z0-9_]', '_', source)
+            target_id = re.sub(r'[^a-zA-Z0-9_]', '_', target)
+            mermaid.append(f'    {source_id} --> {target_id}')
 
         # Add style definitions for files (lighter shades)
         mermaid.append("    classDef file_added fill:#90EE90,stroke:#333,stroke-width:2px")  # Light green
