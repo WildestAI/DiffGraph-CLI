@@ -19,6 +19,21 @@ class DiffAnalysis(BaseModel):
     summary: str
     mermaid_diagram: str
 
+class ComponentAnalysis(BaseModel):
+    """Model representing a single component's analysis."""
+    name: str
+    component_type: str  # class, method, function, etc.
+    change_type: str    # added, deleted, modified
+    summary: str
+    dependencies: List[str] = []
+    dependents: List[str] = []
+
+class CodeChangeAnalysis(BaseModel):
+    """Model representing the analysis of code changes from the LLM."""
+    summary: str
+    components: List[ComponentAnalysis]
+    impact: str
+
 def exponential_backoff_retry(func):
     """Decorator to implement exponential backoff retry logic using API rate limit information."""
     def wrapper(*args, **kwargs):
@@ -66,30 +81,19 @@ class CodeAnalysisAgent:
             name="Code Analysis Agent",
             instructions="""You are an expert code analyzer. Your task is to:
             1. Analyze the given code changes
-            2. Identify all components (functions, classes, methods) that were:
-               - Added (new code)
-               - Deleted (removed code)
-               - Modified (changed code)
-            3. For each component, identify:
+            2. For each component (functions, classes, methods) that was changed, identify:
+               - Its name
+               - Its type (class, method, function)
+               - How it was changed (added, deleted, or modified)
                - Its dependencies (what it uses)
                - Its dependents (what uses it)
-            4. Generate a clear summary of the changes
+            3. Generate a clear summary of the changes
 
-            Format your response as:
-            SUMMARY:
-            [Your analysis summary]
-
-            COMPONENTS:
-            [List of components with their change type and summary]
-            - name: [component name]
-              type: [added/deleted/modified]
-              summary: [brief description of changes]
-              dependencies: [list of component names this depends on]
-              dependents: [list of component names that depend on this]
-
-            IMPACT:
-            [Analysis of potential impact of these changes]""",
-            model="gpt-4o"
+            Note: For each component, you must specify both:
+            - component_type: what kind of component it is (class, method, function)
+            - change_type: how it was changed (added, deleted, modified)""",
+            model="gpt-4o",
+            output_type=CodeChangeAnalysis
         )
 
         self.graph_manager = GraphManager()
@@ -158,70 +162,28 @@ class CodeAnalysisAgent:
                         prompt += f"- {comp.name}: {comp.summary}\n"
 
                 # Run the agent with retry logic
-                response_text = self._run_agent_analysis(prompt)
-
+                response_data = self._run_agent_analysis(prompt)
                 print("--------------------------------")
-                print(response_text)
+                print(response_data)
                 print("--------------------------------")
-                # Parse the response
-                summary = ""
-                components = []
-
-                if "SUMMARY:" in response_text:
-                    summary = response_text.split("SUMMARY:")[1].split("COMPONENTS:")[0].strip()
-
-                if "COMPONENTS:" in response_text:
-                    components_section = response_text.split("COMPONENTS:")[1].split("IMPACT:")[0].strip()
-                    current_component = {}
-                    components = []  # Reset components list for each file
-
-                    for line in components_section.split("\n"):
-                        line = line.strip()
-                        if not line:
-                            if current_component and "name" in current_component:  # Only add if we have a name
-                                components.append(current_component)
-                                current_component = {}
-                            continue
-
-                        parts = line.split(":")
-                        if len(parts) > 1:
-                            field_name = re.sub(r'[^a-zA-Z0-9_]', '', parts[0].strip()).lower()
-                            field_value = ":".join(parts[1:]).strip()
-                            if field_name == "name":
-                                if current_component and "name" in current_component:  # Only add if we have a name
-                                    components.append(current_component)
-                                current_component = {"name": field_value}
-                            elif field_name == "type":
-                                current_component["type"] = re.sub(r'[^a-zA-Z0-9_]', '', field_value.strip()).lower()
-                            elif field_name == "summary":
-                                current_component["summary"] = field_value
-                            elif field_name == "dependencies":
-                                current_component["dependencies"] = [d.strip() for d in field_value.split(",") if d.strip()]
-                            elif field_name == "dependents":
-                                current_component["dependents"] = [d.strip() for d in field_value.split(",") if d.strip()]
-
-                    if current_component and "name" in current_component:  # Only add if we have a name
-                        components.append(current_component)
+                summary = response_data.summary
+                components = response_data.components
 
                 # Add components to the graph
                 for comp in components:
-                    if "name" not in comp or "type" not in comp:
-                        print(f"Skipping invalid component: {comp}")
-                        continue
-
                     try:
-                        change_type = ChangeType[comp["type"].upper()]
+                        change_type = ChangeType[comp.change_type.upper()]
                         self.graph_manager.add_component(
-                            comp["name"],
+                            comp.name,
                             current_file,
                             change_type,
-                            summary=comp.get("summary"),
-                            dependencies=comp.get("dependencies", []),
-                            dependents=comp.get("dependents", [])
+                            summary=comp.summary,
+                            dependencies=comp.dependencies,
+                            dependents=comp.dependents
                         )
 
                         # Add dependencies
-                        for dep in comp.get("dependencies", []):
+                        for dep in comp.dependencies:
                             if not dep:  # Skip empty dependencies
                                 continue
                             # Try to find the dependency in other components
@@ -229,12 +191,12 @@ class CodeAnalysisAgent:
                                 if (dep.lower() in other_comp.name.lower() or
                                     other_comp.name.lower() in dep.lower()):
                                     self.graph_manager.add_component_dependency(
-                                        f"{current_file}::{comp['name']}",
+                                        f"{current_file}::{comp.name}",
                                         f"{other_comp.file_path}::{other_comp.name}"
                                     )
 
                         # Add dependents
-                        for dep in comp.get("dependents", []):
+                        for dep in comp.dependents:
                             if not dep:  # Skip empty dependents
                                 continue
                             # Try to find the dependent in other components
@@ -243,10 +205,10 @@ class CodeAnalysisAgent:
                                     other_comp.name.lower() in dep.lower()):
                                     self.graph_manager.add_component_dependency(
                                         f"{other_comp.file_path}::{other_comp.name}",
-                                        f"{current_file}::{comp['name']}"
+                                        f"{current_file}::{comp.name}"
                                     )
                     except Exception as e:
-                        print(f"Error processing component {comp.get('name', 'unknown')}: {str(e)}")
+                        print(f"Error processing component {comp.name}: {str(e)}")
                         continue
 
                 # Mark file as processed
