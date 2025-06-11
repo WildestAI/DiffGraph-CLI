@@ -130,16 +130,21 @@ class CodeAnalysisAgent:
         result = Runner.run_sync(self.agent, prompt)
         return result.final_output
 
-    def analyze_changes(self, files_with_content: List[Dict[str, str]]) -> DiffAnalysis:
+    def analyze_changes(self, files_with_content: List[Dict[str, str]], progress_callback=None) -> DiffAnalysis:
         """
         Analyze code changes using the OpenAI agent, processing files incrementally.
 
         Args:
             files_with_content: List of dictionaries containing file changes
+            progress_callback: Optional callback function to report progress
+                             Should accept (current_file, total_files, status)
 
         Returns:
             DiffAnalysis object containing summary and mermaid diagram
         """
+        total_files = len(files_with_content)
+        processed_files = 0
+
         # Initialize the graph with all files
         for file_info in files_with_content:
             change_type = self._determine_change_type(file_info['status'])
@@ -154,6 +159,8 @@ class CodeAnalysisAgent:
             try:
                 # Mark file as processing
                 self.graph_manager.mark_processing(current_file)
+                if progress_callback:
+                    progress_callback(current_file, total_files, "processing")
 
                 # Find the file content
                 file_content = next(
@@ -179,14 +186,15 @@ class CodeAnalysisAgent:
                         prompt += f"- {comp.name}: {comp.summary}\n"
 
                 # Run the agent with retry logic
+                if progress_callback:
+                    progress_callback(current_file, total_files, "analyzing")
                 response_data = self._run_agent_analysis(prompt)
-                print("--------------------------------")
-                print(response_data)
-                print("--------------------------------")
                 summary = response_data.summary
                 components = response_data.components
 
                 # Add components to the graph
+                if progress_callback:
+                    progress_callback(current_file, total_files, "processing_components")
                 for comp in components:
                     try:
                         change_type = ChangeType[comp.change_type.upper()]
@@ -232,11 +240,19 @@ class CodeAnalysisAgent:
 
                 # Mark file as processed
                 self.graph_manager.mark_processed(current_file, summary, components)
+                processed_files += 1
+                if progress_callback:
+                    progress_callback(current_file, total_files, "completed")
 
             except Exception as e:
                 self.graph_manager.mark_error(current_file, str(e))
+                if progress_callback:
+                    progress_callback(current_file, total_files, "error")
+                processed_files += 1
 
         # Generate the final Mermaid diagram
+        if progress_callback:
+            progress_callback(None, total_files, "generating_diagram")
         mermaid_diagram = self.graph_manager.get_mermaid_diagram()
 
         # Generate overall summary
