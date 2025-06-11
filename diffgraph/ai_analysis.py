@@ -22,11 +22,13 @@ class DiffAnalysis(BaseModel):
 class ComponentAnalysis(BaseModel):
     """Model representing a single component's analysis."""
     name: str
-    component_type: str  # class, method, function, etc.
+    component_type: str  # container (class/interface/trait/module), function, method, etc.
     change_type: str    # added, deleted, modified
     summary: str
+    parent: Optional[str] = None  # name of the parent component if this is a nested component
     dependencies: List[str] = []
     dependents: List[str] = []
+    nested_components: List[str] = []  # names of components that are nested within this one
 
 class CodeChangeAnalysis(BaseModel):
     """Model representing the analysis of code changes from the LLM."""
@@ -81,17 +83,32 @@ class CodeAnalysisAgent:
             name="Code Analysis Agent",
             instructions="""You are an expert code analyzer. Your task is to:
             1. Analyze the given code changes
-            2. For each component (functions, classes, methods) that was changed, identify:
+            2. For each component that was changed, identify:
                - Its name
-               - Its type (class, method, function)
+               - Its type (container/function/method)
                - How it was changed (added, deleted, or modified)
+               - Its parent component (if it's nested within another component)
                - Its dependencies (what it uses)
                - Its dependents (what uses it)
+               - Any nested components within it (if it's a container)
+
+            Important guidelines:
+            - A 'container' is any component that can contain other components (classes, interfaces, traits, modules, namespaces)
+            - A 'function' is any standalone function or procedure
+            - A 'method' is any function that belongs to a container
+            - Always include both container-level and nested component changes
+            - For nested components, specify their parent container
+            - For containers, list any nested components that were changed
+            - Dependencies can be to both container-level and nested components
+            - If a method/function is changed, it should be listed as a separate component with its parent specified
+
             3. Generate a clear summary of the changes
 
-            Note: For each component, you must specify both:
-            - component_type: what kind of component it is (class, method, function)
-            - change_type: how it was changed (added, deleted, modified)""",
+            Note: For each component, you must specify:
+            - component_type: what kind of component it is (container/function/method)
+            - change_type: how it was changed (added, deleted, modified)
+            - parent: the name of its parent component if it's nested (e.g., a method within a class)
+            - nested_components: list of any components nested within this one (if it's a container)""",
             model="gpt-4o",
             output_type=CodeChangeAnalysis
         )
@@ -177,6 +194,8 @@ class CodeAnalysisAgent:
                             comp.name,
                             current_file,
                             change_type,
+                            component_type=comp.component_type,
+                            parent=comp.parent,
                             summary=comp.summary,
                             dependencies=comp.dependencies,
                             dependents=comp.dependents
