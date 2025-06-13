@@ -2,7 +2,8 @@ from typing import Dict, List, Set, Optional
 from dataclasses import dataclass
 from enum import Enum
 import networkx as nx
-import json, re
+import re
+import html
 
 class ChangeType(Enum):
     """Type of change in the code."""
@@ -61,6 +62,25 @@ class GraphManager:
         self.component_nodes: Dict[str, ComponentNode] = {}
         self.processing_queue: List[str] = []  # BFS queue
         self.processed_files: Set[str] = set()
+
+    def _sanitize_tooltip(self, text: str) -> str:
+        """
+        Sanitize text for Mermaid tooltips.
+        Handles escape sequences, preserves intentional spacing, escapes HTML, and removes Mermaid-breaking characters.
+        """
+        if not text:
+            return ""
+
+        # Replace escape sequences with spaces while preserving intentional spacing
+        text = text.replace('\n', ' ').replace('\r', ' ').replace('\t', ' ')
+
+        # Then escape HTML special characters
+        text = html.escape(text)
+
+        # Remove backticks and backslashes as they can break Mermaid syntax
+        text = text.replace('`', '').replace('\\', '')
+
+        return text
 
     def add_file(self, file_path: str, change_type: ChangeType) -> None:
         """Add a new file to the graph if it doesn't exist."""
@@ -170,9 +190,6 @@ class GraphManager:
         """Generate a Mermaid diagram representation of the graph."""
         mermaid = ["graph LR"]
 
-        file_classes = []
-        component_classes = []
-
         # Group components by their file paths and create a hierarchy
         file_components = {}
         component_hierarchy = {}  # parent -> children mapping
@@ -191,13 +208,17 @@ class GraphManager:
 
         # Add file nodes as subgraphs with their components inside
         for file_path, node in self.file_nodes.items():
-            file_id = file_path.replace("/", "_")
-            file_label = file_path
+            # Create a valid ID for the file node
+            file_id = re.sub(r'[^a-zA-Z0-9_]', '_', file_path)
+
+            # Create a properly escaped label
+            file_label = file_path.replace('"', '\\"').replace('`', '\\`')
             if node.error:
                 file_label += f"<br/>(Error: {node.error})"
+
             mermaid.append(f'    subgraph {file_id}["{file_label}"]')
             mermaid.append(f'        direction TB')
-            file_classes.append(f'class {file_id} file_{node.change_type.value}')
+            mermaid.append(f'        class {file_id} file_{node.change_type.value}')
 
             # Add components within this file
             if file_path in file_components:
@@ -210,6 +231,7 @@ class GraphManager:
                         # Create a subgraph for the container
                         mermaid.append(f'        subgraph {comp_id}["{component_label}"]')
                         mermaid.append(f'            direction TB')
+                        mermaid.append(f'            class {comp_id} component_{comp_node.change_type.value}')
 
                         # Add nested components if any
                         if component_id in component_hierarchy:
@@ -219,9 +241,11 @@ class GraphManager:
                                 nested_label = nested_node.name.replace('"', '\\"').replace('`', '\\`')
                                 if nested_node.summary:
                                     mermaid.append(f'            {nested_comp_id}["{nested_label}"]:::component_{nested_node.change_type.value}')
-                                    mermaid.append(f'            click {nested_comp_id} call callback("{nested_node.summary.replace('"', '\\"')}") "{nested_node.summary.replace('"', '\\"')}"')
+                                    sanitized_summary = self._sanitize_tooltip(nested_node.summary)
+                                    mermaid.append(f'            click {nested_comp_id} call callback("{sanitized_summary}") "{sanitized_summary}"')
                                 else:
                                     mermaid.append(f'            {nested_comp_id}["{nested_label}"]:::component_{nested_node.change_type.value}')
+                                mermaid.append(f'            class {nested_comp_id} component_{nested_node.change_type.value}')
 
                         mermaid.append('        end')
                         mermaid.append(f'        {comp_id}:::component_{comp_node.change_type.value}')
@@ -235,9 +259,11 @@ class GraphManager:
                             if comp_node.summary:
                                 summary_txt = json.dumps(comp_node.summary)
                                 mermaid.append(f'        {comp_id}["{component_label}"]:::component_{comp_node.change_type.value}')
-                                mermaid.append(f'        click {comp_id} call callback("{summary_txt}") "{summary_txt}"')
+                                sanitized_summary = self._sanitize_tooltip(comp_node.summary)
+                                mermaid.append(f'        click {comp_id} call callback("{sanitized_summary}") "{sanitized_summary}"')
                             else:
                                 mermaid.append(f'        {comp_id}["{component_label}"]:::component_{comp_node.change_type.value}')
+                            mermaid.append(f'        class {comp_id} component_{comp_node.change_type.value}')
 
             mermaid.append('    end')
 
@@ -259,9 +285,5 @@ class GraphManager:
         mermaid.append("    classDef component_modified fill:#FF8C00,stroke:#333,stroke-width:2px")  # Dark orange
         mermaid.append("    classDef component_unchanged fill:#808080,stroke:#333,stroke-width:2px")  # Gray
         mermaid.append("    classDef hidden fill:none,stroke:none")
-
-        # Add explicit class statements for files and components
-        mermaid.extend(file_classes)
-        mermaid.extend(component_classes)
 
         return "\n".join(mermaid)

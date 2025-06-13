@@ -253,13 +253,19 @@ class CodeAnalysisAgent:
         # Generate the final Mermaid diagram
         if progress_callback:
             progress_callback(None, total_files, "generating_diagram")
-        mermaid_diagram = self.graph_manager.get_mermaid_diagram()
+        try:
+            mermaid_diagram = self.graph_manager.get_mermaid_diagram()
+            print(f"Mermaid diagram generated successfully: {mermaid_diagram}")
+        except Exception as e:
+            print(f"Error generating Mermaid diagram: {str(e)}")
+            mermaid_diagram = "Error generating diagram"
 
         # Generate overall summary
         overall_summary = "Analysis Summary:\n\n"
         for file_path, node in self.graph_manager.file_nodes.items():
             if node.status == FileStatus.PROCESSED:
                 overall_summary += f"- {file_path}: {node.summary}\n"
+                print(f"Processed file: {file_path}, Summary: {node.summary}")
             elif node.status == FileStatus.ERROR:
                 overall_summary += f"- {file_path}: Error - {node.error}\n"
 
