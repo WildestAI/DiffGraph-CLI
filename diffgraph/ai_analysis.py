@@ -7,6 +7,8 @@ import time
 import random
 import openai
 import re
+import networkx as nx
+from enum import Enum
 
 class FileChange(BaseModel):
     """Model representing a file change."""
@@ -35,6 +37,11 @@ class CodeChangeAnalysis(BaseModel):
     summary: str
     components: List[ComponentAnalysis]
     impact: str
+
+class DependencyMode(Enum):
+    """Mode for processing dependency relationships."""
+    DEPENDENCY = "dependency"  # Process components that this component depends on
+    DEPENDENT = "dependent"    # Process components that depend on this component
 
 def exponential_backoff_retry(func):
     """Decorator to implement exponential backoff retry logic using API rate limit information."""
@@ -209,31 +216,10 @@ class CodeAnalysisAgent:
                             dependents=comp.dependents
                         )
 
-                        # Add dependencies
-                        for dep in comp.dependencies:
-                            if not dep:  # Skip empty dependencies
-                                continue
-                            # Try to find the dependency in other components
-                            for other_comp in self.graph_manager.component_nodes.values():
-                                if (dep.lower() in other_comp.name.lower() or
-                                    other_comp.name.lower() in dep.lower()):
-                                    self.graph_manager.add_component_dependency(
-                                        f"{current_file}::{comp.name}",
-                                        f"{other_comp.file_path}::{other_comp.name}"
-                                    )
+                        # Process dependencies and dependents
+                        self._process_dependencies(comp, current_file, DependencyMode.DEPENDENCY)  # Process dependencies
+                        self._process_dependencies(comp, current_file, DependencyMode.DEPENDENT)   # Process dependents
 
-                        # Add dependents
-                        for dep in comp.dependents:
-                            if not dep:  # Skip empty dependents
-                                continue
-                            # Try to find the dependent in other components
-                            for other_comp in self.graph_manager.component_nodes.values():
-                                if (dep.lower() in other_comp.name.lower() or
-                                    other_comp.name.lower() in dep.lower()):
-                                    self.graph_manager.add_component_dependency(
-                                        f"{other_comp.file_path}::{other_comp.name}",
-                                        f"{current_file}::{comp.name}"
-                                    )
                     except Exception as e:
                         print(f"Error processing component {comp.name}: {str(e)}")
                         continue
@@ -273,3 +259,86 @@ class CodeAnalysisAgent:
             summary=overall_summary,
             mermaid_diagram=mermaid_diagram
         )
+
+    def _would_create_cycle(self, source: str, target: str) -> bool:
+        """Check if adding an edge would create a cycle in the component graph."""
+        # Create a temporary copy of the graph
+        temp_graph = self.graph_manager.component_graph.copy()
+
+        # Add the potential edge
+        temp_graph.add_edge(source, target)
+
+        # Check for cycles
+        try:
+            nx.find_cycle(temp_graph)
+            return True
+        except nx.NetworkXNoCycle:
+            return False
+
+    def _find_component_match(self, dep: str, other_comp: ComponentNode, comp: ComponentNode) -> bool:
+        """
+        Check if a dependency matches a component using precise matching rules.
+
+        Args:
+            dep: The dependency to match
+            other_comp: The component to match against
+            comp: The source component (for parent context)
+
+        Returns:
+            bool: True if there's a match, False otherwise
+        """
+        return (dep == other_comp.name or
+                (dep.startswith(f"{other_comp.file_path}::") and
+                 dep.endswith(other_comp.name)) or
+                (comp.parent and other_comp.parent and
+                 comp.parent == other_comp.parent and
+                 dep == other_comp.name))
+
+    def _add_dependency_relationship(self, source_path: str, target_path: str) -> bool:
+        """
+        Add a dependency relationship if it's valid and doesn't create cycles.
+
+        Args:
+            source_path: Path of the source component
+            target_path: Path of the target component
+
+        Returns:
+            bool: True if the dependency was added, False otherwise
+        """
+        if source_path != target_path and not self._would_create_cycle(source_path, target_path):
+            self.graph_manager.add_component_dependency(source_path, target_path)
+            return True
+        return False
+
+    def _process_dependencies(self, comp: ComponentNode, current_file: str, mode: DependencyMode) -> None:
+        """
+        Process dependency relationships for a component.
+
+        Args:
+            comp: The component to process
+            current_file: The current file being processed
+            mode: The mode of processing - either finding dependencies or dependents
+        """
+        items = comp.dependents if mode == DependencyMode.DEPENDENT else comp.dependencies
+
+        for item in items:
+            if not item:  # Skip empty items
+                continue
+
+            found = False
+            for other_comp in self.graph_manager.component_nodes.values():
+                if self._find_component_match(item, other_comp, comp):
+                    # Set source and target paths based on the processing mode
+                    if mode == DependencyMode.DEPENDENT:
+                        source_path = f"{other_comp.file_path}::{other_comp.name}"
+                        target_path = f"{current_file}::{comp.name}"
+                    else:
+                        source_path = f"{current_file}::{comp.name}"
+                        target_path = f"{other_comp.file_path}::{other_comp.name}"
+
+                    if self._add_dependency_relationship(source_path, target_path):
+                        found = True
+                        break
+
+            if not found:
+                print(f"Warning: Could not resolve {mode.value} '{item}' for component '{comp.name}' in {current_file}")
