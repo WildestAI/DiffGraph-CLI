@@ -273,16 +273,30 @@ class GraphManager:
             mermaid.append(f'    {source_id} --> {target_id}')
 
         # Add style definitions for files (lighter shades)
-        mermaid.append("    classDef file_added fill:#90EE90,stroke:#333,stroke-width:2px")  # Light green
-        mermaid.append("    classDef file_deleted fill:#FFB6C1,stroke:#333,stroke-width:2px")  # Light red
-        mermaid.append("    classDef file_modified fill:#FFD580,stroke:#333,stroke-width:2px")  # Light orange
-        mermaid.append("    classDef file_unchanged fill:#D3D3D3,stroke:#333,stroke-width:2px")  # Light gray
+        mermaid.append("    %% Light mode styles")
+        mermaid.append("    classDef file_added fill:#90EE90,stroke:#333,stroke-width:2px,color:#000")  # Light green
+        mermaid.append("    classDef file_deleted fill:#FFB6C1,stroke:#333,stroke-width:2px,color:#000")  # Light red
+        mermaid.append("    classDef file_modified fill:#FFD580,stroke:#333,stroke-width:2px,color:#000")  # Light orange
+        mermaid.append("    classDef file_unchanged fill:#D3D3D3,stroke:#333,stroke-width:2px,color:#000")  # Light gray
 
         # Add style definitions for components (darker shades)
-        mermaid.append("    classDef component_added fill:#32CD32,stroke:#333,stroke-width:2px")  # Lime green
-        mermaid.append("    classDef component_deleted fill:#DC143C,stroke:#333,stroke-width:2px")  # Crimson
-        mermaid.append("    classDef component_modified fill:#FF8C00,stroke:#333,stroke-width:2px")  # Dark orange
-        mermaid.append("    classDef component_unchanged fill:#808080,stroke:#333,stroke-width:2px")  # Gray
+        mermaid.append("    classDef component_added fill:#32CD32,stroke:#333,stroke-width:2px,color:#fff")  # Lime green
+        mermaid.append("    classDef component_deleted fill:#DC143C,stroke:#333,stroke-width:2px,color:#fff")  # Crimson
+        mermaid.append("    classDef component_modified fill:#FF8C00,stroke:#333,stroke-width:2px,color:#fff")  # Dark orange
+        mermaid.append("    classDef component_unchanged fill:#808080,stroke:#333,stroke-width:2px,color:#fff")  # Gray
+
+        # Add dark mode styles
+        mermaid.append("    %% Dark mode styles")
+        mermaid.append("    classDef dark_file_added fill:#2f855a,stroke:#276749,stroke-width:2px,color:#fff")  # Dark green
+        mermaid.append("    classDef dark_file_deleted fill:#c53030,stroke:#9b2c2c,stroke-width:2px,color:#fff")  # Dark red
+        mermaid.append("    classDef dark_file_modified fill:#744210,stroke:#5c341c,stroke-width:2px,color:#fff")  # Dark amber
+        mermaid.append("    classDef dark_file_unchanged fill:#4a5568,stroke:#2d3748,stroke-width:2px,color:#fff")  # Dark gray
+
+        mermaid.append("    classDef dark_component_added fill:#276749,stroke:#22543d,stroke-width:2px,color:#fff")  # Darker green
+        mermaid.append("    classDef dark_component_deleted fill:#9b2c2c,stroke:#822727,stroke-width:2px,color:#fff")  # Darker red
+        mermaid.append("    classDef dark_component_modified fill:#5c341c,stroke:#4a2c1a,stroke-width:2px,color:#fff")  # Darker amber
+        mermaid.append("    classDef dark_component_unchanged fill:#2d3748,stroke:#1a202c,stroke-width:2px,color:#fff")  # Darker gray
+
         mermaid.append("    classDef hidden fill:none,stroke:none")
 
         return "\n".join(mermaid)
