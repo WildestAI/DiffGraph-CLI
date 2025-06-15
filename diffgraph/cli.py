@@ -2,6 +2,7 @@ import subprocess
 import sys
 from pathlib import Path
 import click
+from click_spinner import spinner
 from typing import List, Dict
 import os
 from .ai_analysis import CodeAnalysisAgent
@@ -168,41 +169,70 @@ def load_file_contents(changed_files: List[Dict[str, str]]) -> List[Dict[str, st
 def main(api_key: str, output: str, no_open: bool):
     """DiffGraph - Visualize code changes with AI."""
     if not is_git_repo():
-        click.echo("Error: Not a git repository", err=True)
+        click.echo("❌ Error: Not a git repository", err=True)
         sys.exit(1)
 
     if is_clean_state():
-        click.echo("No changes to analyze - working directory is clean")
+        click.echo("ℹ️ No changes to analyze - working directory is clean")
         sys.exit(0)
 
+    click.echo("🔍 Scanning for changed files...")
     changed_files = get_changed_files()
 
     if not changed_files:
-        click.echo("No changes to analyze")
+        click.echo("ℹ️ No changes to analyze")
         sys.exit(0)
 
-    # Load contents of changed files
-    files_with_content = load_file_contents(changed_files)
+    click.echo(f"📝 Found {len(changed_files)} changed files")
+
+    # Load contents of changed files with progress bar
+    with click.progressbar(changed_files, label='📖 Loading file contents') as files:
+        files_with_content = load_file_contents(files)
 
     try:
         # Initialize the AI analysis agent
+        click.echo("🤖 Initializing AI analysis...")
         agent = CodeAnalysisAgent(api_key=api_key)
 
-        # Analyze the changes
-        analysis = agent.analyze_changes(files_with_content)
+        # Define progress callback
+        def progress_callback(current_file, total_files, status):
+            if current_file is None:
+                click.echo("📊 Generating final diagram...")
+                return
+
+            file_name = os.path.basename(current_file)
+            current_index = len(agent.graph_manager.processed_files) + 1
+
+            if status == "processing":
+                click.echo(f"🔄 Processing {file_name} ({current_index}/{total_files})...")
+            elif status == "analyzing":
+                click.echo(f"🧠 Analyzing {file_name} with AI ({current_index}/{total_files})...")
+            elif status == "processing_components":
+                click.echo(f"🔍 Processing components in {file_name} ({current_index}/{total_files})...")
+            elif status == "completed":
+                click.echo(f"✅ Completed analysis of {file_name} ({current_index}/{total_files})...")
+            elif status == "error":
+                click.echo(f"❌ Error analyzing {file_name} ({current_index}/{total_files})...")
+
+        # Analyze the changes with progress updates
+        click.echo("🧠 Starting code analysis...")
+        analysis = agent.analyze_changes(files_with_content, progress_callback)
 
         # Create analysis result
+        click.echo("📊 Creating analysis result...")
         analysis_result = AnalysisResult(
             summary=analysis.summary,
             mermaid_diagram=analysis.mermaid_diagram
         )
 
         # Generate HTML report
+        click.echo("🖨️ Generating HTML report...")
         html_path = generate_html_report(analysis_result, output)
-        click.echo(f"\nHTML report generated: {html_path}")
+        click.echo(f"✅ HTML report generated: {html_path}")
 
         # Open the HTML report in the default browser
         if not no_open:
+            click.echo("🌐 Opening report in browser...")
             if sys.platform == 'darwin':  # macOS
                 subprocess.run(['open', html_path])
             elif sys.platform == 'win32':  # Windows
@@ -211,10 +241,10 @@ def main(api_key: str, output: str, no_open: bool):
                 subprocess.run(['xdg-open', html_path])
 
     except ValueError as e:
-        click.echo(f"Error: {e}", err=True)
+        click.echo(f"❌ Error: {e}", err=True)
         sys.exit(1)
     except Exception as e:
-        click.echo(f"Error during analysis: {e}", err=True)
+        click.echo(f"❌ Error during analysis: {e}", err=True)
         sys.exit(1)
 
 if __name__ == "__main__":

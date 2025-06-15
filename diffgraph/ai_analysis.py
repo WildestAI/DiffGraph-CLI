@@ -7,6 +7,8 @@ import time
 import random
 import openai
 import re
+import networkx as nx
+from enum import Enum
 
 class FileChange(BaseModel):
     """Model representing a file change."""
@@ -18,6 +20,28 @@ class DiffAnalysis(BaseModel):
     """Model representing the analysis of code changes."""
     summary: str
     mermaid_diagram: str
+
+class ComponentAnalysis(BaseModel):
+    """Model representing a single component's analysis."""
+    name: str
+    component_type: str  # container (class/interface/trait/module), function, method, etc.
+    change_type: str    # added, deleted, modified
+    summary: str
+    parent: Optional[str] = None  # name of the parent component if this is a nested component
+    dependencies: List[str] = []
+    dependents: List[str] = []
+    nested_components: List[str] = []  # names of components that are nested within this one
+
+class CodeChangeAnalysis(BaseModel):
+    """Model representing the analysis of code changes from the LLM."""
+    summary: str
+    components: List[ComponentAnalysis]
+    impact: str
+
+class DependencyMode(Enum):
+    """Mode for processing dependency relationships."""
+    DEPENDENCY = "dependency"  # Process components that this component depends on
+    DEPENDENT = "dependent"    # Process components that depend on this component
 
 def exponential_backoff_retry(func):
     """Decorator to implement exponential backoff retry logic using API rate limit information."""
@@ -66,30 +90,34 @@ class CodeAnalysisAgent:
             name="Code Analysis Agent",
             instructions="""You are an expert code analyzer. Your task is to:
             1. Analyze the given code changes
-            2. Identify all components (functions, classes, methods) that were:
-               - Added (new code)
-               - Deleted (removed code)
-               - Modified (changed code)
-            3. For each component, identify:
+            2. For each component that was changed, identify:
+               - Its name
+               - Its type (container/function/method)
+               - How it was changed (added, deleted, or modified)
+               - Its parent component (if it's nested within another component)
                - Its dependencies (what it uses)
                - Its dependents (what uses it)
-            4. Generate a clear summary of the changes
+               - Any nested components within it (if it's a container)
 
-            Format your response as:
-            SUMMARY:
-            [Your analysis summary]
+            Important guidelines:
+            - A 'container' is any component that can contain other components (classes, interfaces, traits, modules, namespaces)
+            - A 'function' is any standalone function or procedure
+            - A 'method' is any function that belongs to a container
+            - Always include both container-level and nested component changes
+            - For nested components, specify their parent container
+            - For containers, list any nested components that were changed
+            - Dependencies can be to both container-level and nested components
+            - If a method/function is changed, it should be listed as a separate component with its parent specified
 
-            COMPONENTS:
-            [List of components with their change type and summary]
-            - name: [component name]
-              type: [added/deleted/modified]
-              summary: [brief description of changes]
-              dependencies: [list of component names this depends on]
-              dependents: [list of component names that depend on this]
+            3. Generate a clear summary of the changes
 
-            IMPACT:
-            [Analysis of potential impact of these changes]""",
-            model="gpt-4o"
+            Note: For each component, you must specify:
+            - component_type: what kind of component it is (container/function/method)
+            - change_type: how it was changed (added, deleted, modified)
+            - parent: the name of its parent component if it's nested (e.g., a method within a class)
+            - nested_components: list of any components nested within this one (if it's a container)""",
+            model="gpt-4o",
+            output_type=CodeChangeAnalysis
         )
 
         self.graph_manager = GraphManager()
@@ -109,16 +137,21 @@ class CodeAnalysisAgent:
         result = Runner.run_sync(self.agent, prompt)
         return result.final_output
 
-    def analyze_changes(self, files_with_content: List[Dict[str, str]]) -> DiffAnalysis:
+    def analyze_changes(self, files_with_content: List[Dict[str, str]], progress_callback=None) -> DiffAnalysis:
         """
         Analyze code changes using the OpenAI agent, processing files incrementally.
 
         Args:
             files_with_content: List of dictionaries containing file changes
+            progress_callback: Optional callback function to report progress
+                             Should accept (current_file, total_files, status)
 
         Returns:
             DiffAnalysis object containing summary and mermaid diagram
         """
+        total_files = len(files_with_content)
+        processed_files = 0
+
         # Initialize the graph with all files
         for file_info in files_with_content:
             change_type = self._determine_change_type(file_info['status'])
@@ -133,6 +166,8 @@ class CodeAnalysisAgent:
             try:
                 # Mark file as processing
                 self.graph_manager.mark_processing(current_file)
+                if progress_callback:
+                    progress_callback(current_file, total_files, "processing")
 
                 # Find the file content
                 file_content = next(
@@ -158,111 +193,65 @@ class CodeAnalysisAgent:
                         prompt += f"- {comp.name}: {comp.summary}\n"
 
                 # Run the agent with retry logic
-                response_text = self._run_agent_analysis(prompt)
-
-                print("--------------------------------")
-                print(response_text)
-                print("--------------------------------")
-                # Parse the response
-                summary = ""
-                components = []
-
-                if "SUMMARY:" in response_text:
-                    summary = response_text.split("SUMMARY:")[1].split("COMPONENTS:")[0].strip()
-
-                if "COMPONENTS:" in response_text:
-                    components_section = response_text.split("COMPONENTS:")[1].split("IMPACT:")[0].strip()
-                    current_component = {}
-                    components = []  # Reset components list for each file
-
-                    for line in components_section.split("\n"):
-                        line = line.strip()
-                        if not line:
-                            if current_component and "name" in current_component:  # Only add if we have a name
-                                components.append(current_component)
-                                current_component = {}
-                            continue
-
-                        parts = line.split(":")
-                        if len(parts) > 1:
-                            field_name = re.sub(r'[^a-zA-Z0-9_]', '', parts[0].strip()).lower()
-                            field_value = ":".join(parts[1:]).strip()
-                            if field_name == "name":
-                                if current_component and "name" in current_component:  # Only add if we have a name
-                                    components.append(current_component)
-                                current_component = {"name": field_value}
-                            elif field_name == "type":
-                                current_component["type"] = re.sub(r'[^a-zA-Z0-9_]', '', field_value.strip()).lower()
-                            elif field_name == "summary":
-                                current_component["summary"] = field_value
-                            elif field_name == "dependencies":
-                                current_component["dependencies"] = [d.strip() for d in field_value.split(",") if d.strip()]
-                            elif field_name == "dependents":
-                                current_component["dependents"] = [d.strip() for d in field_value.split(",") if d.strip()]
-
-                    if current_component and "name" in current_component:  # Only add if we have a name
-                        components.append(current_component)
+                if progress_callback:
+                    progress_callback(current_file, total_files, "analyzing")
+                response_data = self._run_agent_analysis(prompt)
+                summary = response_data.summary
+                components = response_data.components
 
                 # Add components to the graph
+                if progress_callback:
+                    progress_callback(current_file, total_files, "processing_components")
                 for comp in components:
-                    if "name" not in comp or "type" not in comp:
-                        print(f"Skipping invalid component: {comp}")
-                        continue
-
                     try:
-                        change_type = ChangeType[comp["type"].upper()]
+                        change_type = ChangeType[comp.change_type.upper()]
                         self.graph_manager.add_component(
-                            comp["name"],
+                            comp.name,
                             current_file,
                             change_type,
-                            summary=comp.get("summary"),
-                            dependencies=comp.get("dependencies", []),
-                            dependents=comp.get("dependents", [])
+                            component_type=comp.component_type,
+                            parent=comp.parent,
+                            summary=comp.summary,
+                            dependencies=comp.dependencies,
+                            dependents=comp.dependents
                         )
 
-                        # Add dependencies
-                        for dep in comp.get("dependencies", []):
-                            if not dep:  # Skip empty dependencies
-                                continue
-                            # Try to find the dependency in other components
-                            for other_comp in self.graph_manager.component_nodes.values():
-                                if (dep.lower() in other_comp.name.lower() or
-                                    other_comp.name.lower() in dep.lower()):
-                                    self.graph_manager.add_component_dependency(
-                                        f"{current_file}::{comp['name']}",
-                                        f"{other_comp.file_path}::{other_comp.name}"
-                                    )
+                        # Process dependencies and dependents
+                        self._process_dependencies(comp, current_file, DependencyMode.DEPENDENCY)  # Process dependencies
+                        self._process_dependencies(comp, current_file, DependencyMode.DEPENDENT)   # Process dependents
 
-                        # Add dependents
-                        for dep in comp.get("dependents", []):
-                            if not dep:  # Skip empty dependents
-                                continue
-                            # Try to find the dependent in other components
-                            for other_comp in self.graph_manager.component_nodes.values():
-                                if (dep.lower() in other_comp.name.lower() or
-                                    other_comp.name.lower() in dep.lower()):
-                                    self.graph_manager.add_component_dependency(
-                                        f"{other_comp.file_path}::{other_comp.name}",
-                                        f"{current_file}::{comp['name']}"
-                                    )
                     except Exception as e:
-                        print(f"Error processing component {comp.get('name', 'unknown')}: {str(e)}")
+                        print(f"Error processing component {comp.name}: {str(e)}")
                         continue
 
                 # Mark file as processed
                 self.graph_manager.mark_processed(current_file, summary, components)
+                processed_files += 1
+                if progress_callback:
+                    progress_callback(current_file, total_files, "completed")
 
             except Exception as e:
                 self.graph_manager.mark_error(current_file, str(e))
+                if progress_callback:
+                    progress_callback(current_file, total_files, "error")
+                processed_files += 1
 
         # Generate the final Mermaid diagram
-        mermaid_diagram = self.graph_manager.get_mermaid_diagram()
+        if progress_callback:
+            progress_callback(None, total_files, "generating_diagram")
+        try:
+            mermaid_diagram = self.graph_manager.get_mermaid_diagram()
+            print(f"Mermaid diagram generated successfully: {mermaid_diagram}")
+        except Exception as e:
+            print(f"Error generating Mermaid diagram: {str(e)}")
+            mermaid_diagram = "Error generating diagram"
 
         # Generate overall summary
         overall_summary = "Analysis Summary:\n\n"
         for file_path, node in self.graph_manager.file_nodes.items():
             if node.status == FileStatus.PROCESSED:
                 overall_summary += f"- {file_path}: {node.summary}\n"
+                print(f"Processed file: {file_path}, Summary: {node.summary}")
             elif node.status == FileStatus.ERROR:
                 overall_summary += f"- {file_path}: Error - {node.error}\n"
 
@@ -270,3 +259,86 @@ class CodeAnalysisAgent:
             summary=overall_summary,
             mermaid_diagram=mermaid_diagram
         )
+
+    def _would_create_cycle(self, source: str, target: str) -> bool:
+        """Check if adding an edge would create a cycle in the component graph."""
+        # Create a temporary copy of the graph
+        temp_graph = self.graph_manager.component_graph.copy()
+
+        # Add the potential edge
+        temp_graph.add_edge(source, target)
+
+        # Check for cycles
+        try:
+            nx.find_cycle(temp_graph)
+            return True
+        except nx.NetworkXNoCycle:
+            return False
+
+    def _find_component_match(self, dep: str, other_comp: ComponentNode, comp: ComponentNode) -> bool:
+        """
+        Check if a dependency matches a component using precise matching rules.
+
+        Args:
+            dep: The dependency to match
+            other_comp: The component to match against
+            comp: The source component (for parent context)
+
+        Returns:
+            bool: True if there's a match, False otherwise
+        """
+        return (dep == other_comp.name or
+                (dep.startswith(f"{other_comp.file_path}::") and
+                 dep.endswith(other_comp.name)) or
+                (comp.parent and other_comp.parent and
+                 comp.parent == other_comp.parent and
+                 dep == other_comp.name))
+
+    def _add_dependency_relationship(self, source_path: str, target_path: str) -> bool:
+        """
+        Add a dependency relationship if it's valid and doesn't create cycles.
+
+        Args:
+            source_path: Path of the source component
+            target_path: Path of the target component
+
+        Returns:
+            bool: True if the dependency was added, False otherwise
+        """
+        if source_path != target_path and not self._would_create_cycle(source_path, target_path):
+            self.graph_manager.add_component_dependency(source_path, target_path)
+            return True
+        return False
+
+    def _process_dependencies(self, comp: ComponentNode, current_file: str, mode: DependencyMode) -> None:
+        """
+        Process dependency relationships for a component.
+
+        Args:
+            comp: The component to process
+            current_file: The current file being processed
+            mode: The mode of processing - either finding dependencies or dependents
+        """
+        items = comp.dependents if mode == DependencyMode.DEPENDENT else comp.dependencies
+
+        for item in items:
+            if not item:  # Skip empty items
+                continue
+
+            found = False
+            for other_comp in self.graph_manager.component_nodes.values():
+                if self._find_component_match(item, other_comp, comp):
+                    # Set source and target paths based on the processing mode
+                    if mode == DependencyMode.DEPENDENT:
+                        source_path = f"{other_comp.file_path}::{other_comp.name}"
+                        target_path = f"{current_file}::{comp.name}"
+                    else:
+                        source_path = f"{current_file}::{comp.name}"
+                        target_path = f"{other_comp.file_path}::{other_comp.name}"
+
+                    if self._add_dependency_relationship(source_path, target_path):
+                        found = True
+                        break
+
+            if not found:
+                print(f"Warning: Could not resolve {mode.value} '{item}' for component '{comp.name}' in {current_file}")
