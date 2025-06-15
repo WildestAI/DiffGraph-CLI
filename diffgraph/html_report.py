@@ -30,17 +30,94 @@ def generate_html_report(analysis: AnalysisResult, output_path: str = "diffgraph
     <script src="https://cdnjs.cloudflare.com/ajax/libs/marked/11.1.1/marked.min.js"></script>
     <style>
         :root {{
-            --bg-primary: #ffffff;
-            --text-primary: #1a202c;
-            --bg-secondary: #f8f9fa;
-            --border-color: #e2e8f0;
+            color-scheme: light dark;
         }}
 
-        [data-theme="dark"] {{
-            --bg-primary: #1a202c;
-            --text-primary: #f7fafc;
-            --bg-secondary: #2d3748;
-            --border-color: #4a5568;
+        @media (prefers-color-scheme: dark) {{
+            :root {{
+                --bg-primary: #1a202c;
+                --text-primary: #f7fafc;
+                --bg-secondary: #2d3748;
+                --border-color: #4a5568;
+                --tooltip-bg: #2d3748;
+                --tooltip-text: #f7fafc;
+                --tooltip-border: #4a5568;
+            }}
+            body {{
+                color-scheme: dark;
+            }}
+            .mermaid .node {{
+                fill: var(--bg-secondary) !important;
+            }}
+            .mermaid .node text {{
+                fill: var(--text-primary) !important;
+            }}
+            .mermaid .edgePath .path {{
+                stroke: var(--border-color) !important;
+            }}
+            .mermaid .edgeLabel {{
+                background-color: var(--bg-secondary) !important;
+                color: var(--text-primary) !important;
+            }}
+            /* Apply dark mode classes */
+            .mermaid .file_added {{
+                fill: #2f855a !important;
+                stroke: #276749 !important;
+                color: #fff !important;
+            }}
+            .mermaid .file_deleted {{
+                fill: #c53030 !important;
+                stroke: #9b2c2c !important;
+                color: #fff !important;
+            }}
+            .mermaid .file_modified {{
+                fill: #744210 !important;
+                stroke: #5c341c !important;
+                color: #fff !important;
+            }}
+            .mermaid .file_unchanged {{
+                fill: #4a5568 !important;
+                stroke: #2d3748 !important;
+                color: #fff !important;
+            }}
+            .mermaid .component_added {{
+                fill: #276749 !important;
+                stroke: #22543d !important;
+                color: #fff !important;
+            }}
+            .mermaid .component_deleted {{
+                fill: #9b2c2c !important;
+                stroke: #822727 !important;
+                color: #fff !important;
+            }}
+            .mermaid .component_modified {{
+                fill: #5c341c !important;
+                stroke: #4a2c1a !important;
+                color: #fff !important;
+            }}
+            .mermaid .component_unchanged {{
+                fill: #2d3748 !important;
+                stroke: #1a202c !important;
+                color: #fff !important;
+            }}
+        }}
+
+        @media (prefers-color-scheme: light) {{
+            :root {{
+                --bg-primary: #ffffff;
+                --text-primary: #1a202c;
+                --bg-secondary: #f8f9fa;
+                --border-color: #e2e8f0;
+                --mermaid-bg: #f8f9fa;
+                --mermaid-text: #1a202c;
+                --mermaid-node-bg: #ffffff;
+                --mermaid-node-border: #e2e8f0;
+                --mermaid-node-text: #1a202c;
+                --mermaid-edge: #4a5568;
+                --tooltip-bg: #ffffff;
+                --tooltip-text: #1a202c;
+                --tooltip-border: #e2e8f0;
+            }}
         }}
 
         body {{
@@ -55,11 +132,33 @@ def generate_html_report(analysis: AnalysisResult, output_path: str = "diffgraph
         }}
 
         .mermaid {{
-            background: var(--bg-secondary);
+            background: var(--mermaid-bg);
             padding: 1.5rem;
             border-radius: 0.75rem;
             margin: 1.5rem 0;
             border: 1px solid var(--border-color);
+        }}
+
+        .mermaid .node rect,
+        .mermaid .node circle,
+        .mermaid .node ellipse,
+        .mermaid .node polygon,
+        .mermaid .node path {{
+            fill: var(--mermaid-node-bg) !important;
+            stroke: var(--mermaid-node-border) !important;
+        }}
+
+        .mermaid .node text {{
+            fill: var(--mermaid-node-text) !important;
+        }}
+
+        .mermaid .edgePath .path {{
+            stroke: var(--mermaid-edge) !important;
+        }}
+
+        .mermaid .edgeLabel {{
+            background-color: var(--mermaid-bg) !important;
+            color: var(--mermaid-text) !important;
         }}
 
         .summary {{
@@ -76,9 +175,6 @@ def generate_html_report(analysis: AnalysisResult, output_path: str = "diffgraph
             font-size: 2.5rem;
             font-weight: 700;
             margin-bottom: 1.5rem;
-            display: flex;
-            justify-content: space-between;
-            align-items: center;
         }}
 
         h2 {{
@@ -98,21 +194,6 @@ def generate_html_report(analysis: AnalysisResult, output_path: str = "diffgraph
 
         code {{
             font-family: 'SFMono-Regular', Consolas, 'Liberation Mono', Menlo, monospace;
-        }}
-
-        .theme-toggle {{
-            background: var(--bg-secondary);
-            border: 1px solid var(--border-color);
-            color: var(--text-primary);
-            padding: 0.5rem 1rem;
-            border-radius: 0.5rem;
-            cursor: pointer;
-            font-size: 0.875rem;
-            transition: all 0.2s;
-        }}
-
-        .theme-toggle:hover {{
-            background: var(--border-color);
         }}
 
         .markdown-content {{
@@ -143,15 +224,15 @@ def generate_html_report(analysis: AnalysisResult, output_path: str = "diffgraph
         /* Tooltip styles */
         .tooltip {{
             position: fixed;
-            background: var(--bg-secondary);
-            border: 1px solid var(--border-color);
+            background: var(--tooltip-bg, #ffffff);
+            border: 1px solid var(--tooltip-border, #e2e8f0);
             border-radius: 0.5rem;
             padding: 1rem;
             max-width: 400px;
             box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
             z-index: 1000;
             display: none;
-            color: var(--text-primary);
+            color: var(--tooltip-text, #1a202c);
         }}
 
         .tooltip.visible {{
@@ -165,20 +246,17 @@ def generate_html_report(analysis: AnalysisResult, output_path: str = "diffgraph
             padding: 2px;
             font-family: 'trebuchet ms', verdana, arial;
             font-size: 12px;
-            background: #ffffde;
-            border: 1px solid #aaaa33;
+            background: var(--tooltip-bg, #ffffff) !important;
+            color: var(--tooltip-text, #1a202c) !important;
+            border: 1px solid var(--tooltip-border, #e2e8f0) !important;
             border-radius: 2px;
             pointer-events: none;
             z-index: 100;
         }}
-
     </style>
 </head>
 <body>
-    <h1>
-        DiffGraph Report
-        <button class="theme-toggle" onclick="toggleTheme()">Toggle Dark Mode</button>
-    </h1>
+    <h1>DiffGraph Report</h1>
 
     <div class="mermaid">
         {mermaid_diagram}
@@ -194,14 +272,38 @@ def generate_html_report(analysis: AnalysisResult, output_path: str = "diffgraph
     </div>
 
     <script>
-        // Initialize Mermaid
+        // Initialize Mermaid with system theme
+        const isDarkMode = window.matchMedia('(prefers-color-scheme: dark)').matches;
         mermaid.initialize({{
             startOnLoad: true,
-            theme: 'default',
+            theme: isDarkMode ? 'dark' : 'default',
             securityLevel: 'loose',
             flowchart: {{
                 useMaxWidth: true,
-                htmlLabels: true
+                htmlLabels: true,
+                curve: 'basis'
+            }},
+            themeVariables: {{
+                darkMode: isDarkMode,
+                fontFamily: '-apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif',
+                fontSize: '16px',
+                primaryColor: isDarkMode ? '#4a5568' : '#e2e8f0',
+                primaryTextColor: isDarkMode ? '#f7fafc' : '#1a202c',
+                primaryBorderColor: isDarkMode ? '#718096' : '#cbd5e0',
+                lineColor: isDarkMode ? '#a0aec0' : '#4a5568',
+                secondaryColor: isDarkMode ? '#2d3748' : '#f8f9fa',
+                tertiaryColor: isDarkMode ? '#1a202c' : '#ffffff',
+                mainBkg: isDarkMode ? '#2d3748' : '#ffffff',
+                mainContrastColor: isDarkMode ? '#f7fafc' : '#1a202c',
+                nodeBkg: isDarkMode ? '#2f855a' : '#9ae6b4',
+                nodeTextColor: isDarkMode ? '#f7fafc' : '#1a202c',
+                nodeBorder: isDarkMode ? '#c53030' : '#feb2b2',
+                clusterBkg: isDarkMode ? '#744210' : '#fbd38d',
+                clusterTextColor: isDarkMode ? '#f7fafc' : '#1a202c',
+                defaultLinkColor: isDarkMode ? '#4a5568' : '#e2e8f0',
+                titleColor: isDarkMode ? '#f7fafc' : '#1a202c',
+                edgeLabelBackground: isDarkMode ? '#2d3748' : '#f8f9fa',
+                edgeLabelColor: isDarkMode ? '#f7fafc' : '#1a202c'
             }}
         }});
 
@@ -217,31 +319,6 @@ def generate_html_report(analysis: AnalysisResult, output_path: str = "diffgraph
             const summaryContent = document.getElementById('summary-content');
             summaryContent.innerHTML = marked.parse(summaryContent.textContent);
         }});
-
-        // Theme toggle functionality
-        function toggleTheme() {{
-            const body = document.body;
-            const currentTheme = body.getAttribute('data-theme');
-            const newTheme = currentTheme === 'dark' ? 'light' : 'dark';
-            body.setAttribute('data-theme', newTheme);
-
-            // Update Mermaid theme
-            mermaid.initialize({{
-                theme: newTheme === 'dark' ? 'dark' : 'default'
-            }});
-
-            // Re-render Mermaid diagrams
-            document.querySelectorAll('.mermaid').forEach(async (el, idx) => {{
-                const content = el.textContent;
-                el.textContent = content;
-                const renderId = `mermaid-${idx}`;
-                const {{ svg, bindFunctions }} = await mermaid.render(renderId, content);
-                el.innerHTML = svg;
-                if (bindFunctions) {{
-                    bindFunctions(el);
-                }}
-            }});
-        }}
 
         // Tooltip handling
         window.showTooltip = function(text) {{
