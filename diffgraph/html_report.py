@@ -71,8 +71,8 @@ def generate_html_report(analysis: AnalysisResult, output_path: str = "diffgraph
                 color: #fff !important;
             }}
             .mermaid .file_modified {{
-                fill: #744210 !important;
-                stroke: #5c341c !important;
+                fill: #2b6cb0 !important;
+                stroke: #2c5282 !important;
                 color: #fff !important;
             }}
             .mermaid .file_unchanged {{
@@ -91,8 +91,8 @@ def generate_html_report(analysis: AnalysisResult, output_path: str = "diffgraph
                 color: #fff !important;
             }}
             .mermaid .component_modified {{
-                fill: #5c341c !important;
-                stroke: #4a2c1a !important;
+                fill: #2c5282 !important;
+                stroke: #2a4365 !important;
                 color: #fff !important;
             }}
             .mermaid .component_unchanged {{
@@ -298,7 +298,7 @@ def generate_html_report(analysis: AnalysisResult, output_path: str = "diffgraph
                 nodeBkg: isDarkMode ? '#2f855a' : '#9ae6b4',
                 nodeTextColor: isDarkMode ? '#f7fafc' : '#1a202c',
                 nodeBorder: isDarkMode ? '#c53030' : '#feb2b2',
-                clusterBkg: isDarkMode ? '#744210' : '#fbd38d',
+                clusterBkg: isDarkMode ? '#2b6cb0' : '#90cdf4',
                 clusterTextColor: isDarkMode ? '#f7fafc' : '#1a202c',
                 defaultLinkColor: isDarkMode ? '#4a5568' : '#e2e8f0',
                 titleColor: isDarkMode ? '#f7fafc' : '#1a202c',
