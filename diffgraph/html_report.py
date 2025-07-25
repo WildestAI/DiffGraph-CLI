@@ -137,28 +137,43 @@ def generate_html_report(analysis: AnalysisResult, output_path: str = "diffgraph
             border-radius: 0.75rem;
             margin: 1.5rem 0;
             border: 1px solid var(--border-color);
-        }}
 
-        .mermaid .node rect,
-        .mermaid .node circle,
-        .mermaid .node ellipse,
-        .mermaid .node polygon,
-        .mermaid .node path {{
-            fill: var(--mermaid-node-bg) !important;
-            stroke: var(--mermaid-node-border) !important;
+            .node, .cluster {{
+                rect,
+                circle,
+                ellipse,
+                polygon,
+                path {{
+                    fill: var(--mermaid-node-bg) !important;
+                    stroke: var(--mermaid-node-border) !important;
+                    rx: 12px !important;
+                    ry: 12px !important;
+                    filter: drop-shadow(0 2px 8px #0002);
+                    stroke-width: 2.5px !important;
+                }}
+            }}
         }}
 
         .mermaid .node text {{
             fill: var(--mermaid-node-text) !important;
+            font-weight: 600;
+            font-size: 1.05em;
+            letter-spacing: 0.01em;
         }}
 
         .mermaid .edgePath .path {{
             stroke: var(--mermaid-edge) !important;
+            stroke-width: 2.2px !important;
+            opacity: 0.92;
         }}
 
         .mermaid .edgeLabel {{
             background-color: var(--mermaid-bg) !important;
             color: var(--mermaid-text) !important;
+            border-radius: 0.5em;
+            padding: 0.1em 0.5em;
+            font-size: 0.98em;
+            box-shadow: 0 1px 4px #0001;
         }}
 
         .summary {{
