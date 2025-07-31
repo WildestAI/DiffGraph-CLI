@@ -5,8 +5,8 @@ import click
 from click_spinner import spinner
 from typing import List, Dict
 import os
-from .ai_analysis import CodeAnalysisAgent
-from .html_report import generate_html_report, AnalysisResult
+from diffgraph.ai_analysis import CodeAnalysisAgent
+from diffgraph.html_report import generate_html_report, AnalysisResult
 from dotenv import load_dotenv
 
 # Load environment variables from .env if present

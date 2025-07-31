@@ -9,7 +9,7 @@ setup(
     ],
     entry_points={
         "console_scripts": [
-            "diffgraph-ai=diffgraph.cli:main",
+            "wild=diffgraph.cli:main",
         ],
     },
     python_requires=">=3.7",
