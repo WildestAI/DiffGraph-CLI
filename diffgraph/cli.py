@@ -7,10 +7,10 @@ from typing import List, Dict
 import os
 from diffgraph.ai_analysis import CodeAnalysisAgent
 from diffgraph.html_report import generate_html_report, AnalysisResult
-from dotenv import load_dotenv
+from diffgraph.env_loader import load_env_file, debug_environment
 
-# Load environment variables from .env if present
-load_dotenv()
+# Load environment variables
+load_env_file()
 
 def is_git_repo() -> bool:
     """Check if current directory is a git repository."""
@@ -166,8 +166,15 @@ def load_file_contents(changed_files: List[Dict[str, str]]) -> List[Dict[str, st
 @click.option('--api-key', envvar='OPENAI_API_KEY', help='OpenAI API key')
 @click.option('--output', '-o', default='diffgraph.html', help='Output HTML file path')
 @click.option('--no-open', is_flag=True, help='Do not open the HTML report automatically')
-def main(api_key: str, output: str, no_open: bool):
+@click.option('--debug-env', is_flag=True, help='Debug environment variable loading')
+def main(api_key: str, output: str, no_open: bool, debug_env: bool):
     """DiffGraph - Visualize code changes with AI."""
+
+    # Debug environment variable loading if requested
+    if debug_env:
+        debug_environment(api_key)
+        return
+
     if not is_git_repo():
         click.echo("❌ Error: Not a git repository", err=True)
         sys.exit(1)

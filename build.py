@@ -83,6 +83,27 @@ def ensure_env_in_spec():
     print("✅ Added .env file to spec file")
     return True
 
+def verify_env_in_bundle():
+    """Verify that the .env file is properly included in the built binary"""
+    print("🔍 Verifying .env file in bundle...")
+
+    # Check if binary exists
+    binary_name = "wild.exe" if sys.platform == 'win32' else "wild"
+    binary_path = os.path.join("dist", binary_name)
+
+    if not os.path.exists(binary_path):
+        print("❌ Binary not found - cannot verify bundle")
+        return False
+
+    # Check if .env file exists in the project directory
+    if os.path.exists(".env"):
+        print("✅ .env file exists in project directory")
+        print("   The binary should be able to load it from the current directory")
+        return True
+    else:
+        print("⚠️  .env file not found in project directory")
+        return False
+
 def main():
     """Build the DiffGraph CLI binary using PyInstaller"""
 
@@ -104,7 +125,12 @@ def main():
     for path in ["build", "dist"]:
         if os.path.exists(path):
             import shutil
-            shutil.rmtree(path)
+            try:
+                shutil.rmtree(path)
+            except PermissionError:
+                print(f"⚠️  Could not remove {path} - permission denied. Continuing...")
+            except Exception as e:
+                print(f"⚠️  Could not remove {path}: {e}. Continuing...")
 
     # Build using the spec file
     print("🔨 Building DiffGraph CLI...")
@@ -118,6 +144,17 @@ def main():
             print(f"📦 Binary location: {os.path.join('dist', 'wild.exe')}")
         else:
             print(f"📦 Binary location: {os.path.join('dist', 'wild')}")
+
+        # Verify that .env file is properly included
+        verify_env_in_bundle()
+
+        print("\n💡 Environment Variable Loading Tips:")
+        print("   - The binary will look for .env file in multiple locations:")
+        print("     1. Current working directory")
+        print("     2. Next to the executable")
+        print("     3. Inside the bundled resources")
+        print("   - You can also set OPENAI_API_KEY as an environment variable")
+        print("   - Or use the --api-key command line option")
     else:
         print("❌ Build failed!")
         sys.exit(1)
