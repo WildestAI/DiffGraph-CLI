@@ -176,6 +176,28 @@ def generate_html_report(analysis: AnalysisResult, output_path: str = "diffgraph
             box-shadow: 0 1px 4px #0001;
         }}
 
+        .mermaid .node rect,
+        .mermaid .node circle,
+        .mermaid .node ellipse,
+        .mermaid .node polygon,
+        .mermaid .node path {{
+            fill: var(--mermaid-node-bg) !important;
+            stroke: var(--mermaid-node-border) !important;
+        }}
+
+        .mermaid .node text {{
+            fill: var(--mermaid-node-text) !important;
+        }}
+
+        .mermaid .edgePath .path {{
+            stroke: var(--mermaid-edge) !important;
+        }}
+
+        .mermaid .edgeLabel {{
+            background-color: var(--mermaid-bg) !important;
+            color: var(--mermaid-text) !important;
+        }}
+
         .summary {{
             background: var(--bg-secondary);
             padding: 1.5rem;
