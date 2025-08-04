@@ -139,6 +139,39 @@ def generate_html_report(analysis: AnalysisResult, output_path: str = "diffgraph
             border-radius: 0.25rem;
             font-size: 0.875em;
         }}
+
+        /* Tooltip styles */
+        .tooltip {{
+            position: fixed;
+            background: var(--bg-secondary);
+            border: 1px solid var(--border-color);
+            border-radius: 0.5rem;
+            padding: 1rem;
+            max-width: 400px;
+            box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
+            z-index: 1000;
+            display: none;
+            color: var(--text-primary);
+        }}
+
+        .tooltip.visible {{
+            display: block;
+        }}
+
+        .mermaidTooltip {{
+            position: absolute;
+            text-align: center;
+            max-width: 200px;
+            padding: 2px;
+            font-family: 'trebuchet ms', verdana, arial;
+            font-size: 12px;
+            background: #ffffde;
+            border: 1px solid #aaaa33;
+            border-radius: 2px;
+            pointer-events: none;
+            z-index: 100;
+        }}
+
     </style>
 </head>
 <body>
@@ -147,15 +180,17 @@ def generate_html_report(analysis: AnalysisResult, output_path: str = "diffgraph
         <button class="theme-toggle" onclick="toggleTheme()">Toggle Dark Mode</button>
     </h1>
 
+    <div class="mermaid">
+        {mermaid_diagram}
+    </div>
+
+    <div id="tooltip" class="tooltip"></div>
+
     <div class="summary">
         <h2>Analysis Summary</h2>
         <div class="markdown-content" id="summary-content">
             {summary}
         </div>
-    </div>
-
-    <div class="mermaid">
-        {mermaid_diagram}
     </div>
 
     <script>
@@ -196,12 +231,44 @@ def generate_html_report(analysis: AnalysisResult, output_path: str = "diffgraph
             }});
 
             // Re-render Mermaid diagrams
-            document.querySelectorAll('.mermaid').forEach((el) => {{
+            document.querySelectorAll('.mermaid').forEach(async (el, idx) => {{
                 const content = el.textContent;
                 el.textContent = content;
-                mermaid.init(undefined, el);
+                const renderId = `mermaid-${idx}`;
+                const {{ svg, bindFunctions }} = await mermaid.render(renderId, content);
+                el.innerHTML = svg;
+                if (bindFunctions) {{
+                    bindFunctions(el);
+                }}
             }});
         }}
+
+        // Tooltip handling
+        window.showTooltip = function(text) {{
+            const tooltip = document.getElementById('tooltip');
+            tooltip.innerHTML = marked.parse(text); // Parse markdown in tooltip
+            tooltip.classList.add('visible');
+        }}
+
+        window.hideTooltip = function() {{
+            const tooltip = document.getElementById('tooltip');
+            tooltip.classList.remove('visible');
+        }}
+
+        // Mermaid click callback
+        window.callback = function(text) {{
+            showTooltip(text);
+        }}
+
+        // Add click handlers for component nodes
+        document.addEventListener('DOMContentLoaded', (event) => {{
+            // Hide tooltip when clicking outside
+            document.addEventListener('click', (e) => {{
+                if (!e.target.closest('.node')) {{
+                    hideTooltip();
+                }}
+            }});
+        }});
     </script>
 </body>
 </html>

@@ -2,6 +2,7 @@ from typing import Dict, List, Set, Optional
 from dataclasses import dataclass
 from enum import Enum
 import networkx as nx
+import json, re
 
 class ChangeType(Enum):
     """Type of change in the code."""
@@ -70,23 +71,42 @@ class GraphManager:
             self.file_graph.add_node(file_path)
             self.processing_queue.append(file_path)
 
-    def add_component(self, name: str, file_path: str, change_type: ChangeType) -> None:
+    def add_component(self, name: str, file_path: str, change_type: ChangeType, summary: str = None, dependencies: list = None, dependents: list = None) -> None:
         """Add a new component to the graph."""
         component_id = f"{file_path}::{name}"
+        # Clean up dependencies and dependents lists
+        dependencies = [d for d in (dependencies or []) if d]
+        dependents = [d for d in (dependents or []) if d]
+
         if component_id not in self.component_nodes:
             self.component_nodes[component_id] = ComponentNode(
                 name=name,
                 file_path=file_path,
-                change_type=change_type
+                change_type=change_type,
+                summary=summary,
+                dependencies=dependencies,
+                dependents=dependents
             )
             self.component_graph.add_node(component_id)
+        else:
+            # Update existing component
+            existing = self.component_nodes[component_id]
+            existing.summary = summary or existing.summary
+            existing.dependencies = dependencies or existing.dependencies
+            existing.dependents = dependents or existing.dependents
 
     def add_component_dependency(self, source: str, target: str) -> None:
         """Add a dependency relationship between components."""
+        if not source or not target or source == target:
+            return
+
         if source in self.component_nodes and target in self.component_nodes:
-            self.component_graph.add_edge(source, target)
-            self.component_nodes[source].dependencies.append(target)
-            self.component_nodes[target].dependents.append(source)
+            if not self.component_graph.has_edge(source, target):
+                self.component_graph.add_edge(source, target)
+                if target not in self.component_nodes[source].dependencies:
+                    self.component_nodes[source].dependencies.append(target)
+                if source not in self.component_nodes[target].dependents:
+                    self.component_nodes[target].dependents.append(source)
 
     def get_next_file(self) -> Optional[str]:
         """Get the next file to process from the queue."""
@@ -142,48 +162,61 @@ class GraphManager:
 
     def get_mermaid_diagram(self) -> str:
         """Generate a Mermaid diagram representation of the graph."""
-        mermaid = ["graph TD"]
+        mermaid = ["graph LR"]
 
-        # Add file nodes with their change type colors
-        for file_path, node in self.file_nodes.items():
-            color = {
-                ChangeType.ADDED: "green",
-                ChangeType.DELETED: "red",
-                ChangeType.MODIFIED: "orange",
-                ChangeType.UNCHANGED: "gray"
-            }[node.change_type]
+        file_classes = []
+        component_classes = []
 
-            label = f"{file_path}"
-            if node.summary:
-                label += f"<br/>{node.summary[:50]}..."
-            if node.error:
-                label += f"<br/>(Error: {node.error})"
-
-            mermaid.append(f'    {file_path.replace("/", "_")}["{label}"]:::change_{node.change_type.value}')
-
-        # Add component nodes
+        # Group components by their file paths
+        file_components = {}
         for component_id, node in self.component_nodes.items():
-            color = {
-                ChangeType.ADDED: "green",
-                ChangeType.DELETED: "red",
-                ChangeType.MODIFIED: "orange",
-                ChangeType.UNCHANGED: "gray"
-            }[node.change_type]
+            if node.file_path not in file_components:
+                file_components[node.file_path] = []
+            file_components[node.file_path].append((component_id, node))
 
-            label = f"{node.name}"
-            if node.summary:
-                label += f"<br/>{node.summary[:50]}..."
-
-            mermaid.append(f'    {component_id.replace("/", "_").replace("::", "_")}["{label}"]:::change_{node.change_type.value}')
+        # Add file nodes as subgraphs with their components inside
+        for file_path, node in self.file_nodes.items():
+            file_id = file_path.replace("/", "_")
+            file_label = file_path
+            if node.error:
+                file_label += f"<br/>(Error: {node.error})"
+            mermaid.append(f'    subgraph {file_id}["{file_label}"]')
+            mermaid.append(f'        direction TB')
+            file_classes.append(f'class {file_id} file_{node.change_type.value}')
+            # Add components within this file
+            if file_path in file_components:
+                for component_id, comp_node in file_components[file_path]:
+                    comp_id = re.sub(r'[^a-zA-Z0-9_]', '_', component_id)
+                    component_label = comp_node.name.replace('"', '\\"').replace('`', '\\`')
+                    if comp_node.summary:
+                        summary_txt = json.dumps(comp_node.summary)
+                        mermaid.append(f'        {comp_id}["{component_label}"]:::component_{comp_node.change_type.value}')
+                        mermaid.append(f'        click {comp_id} call callback("{summary_txt}") "{summary_txt}"')
+                    else:
+                        mermaid.append(f'        {comp_id}["{component_label}"]:::component_{comp_node.change_type.value}')
+            mermaid.append('    end')
 
         # Add edges between components
         for source, target in self.component_graph.edges():
-            mermaid.append(f'    {source.replace("/", "_").replace("::", "_")} --> {target.replace("/", "_").replace("::", "_")}')
+            src_id = re.sub(r'[^a-zA-Z0-9_]', '_', source)
+            tgt_id = re.sub(r'[^a-zA-Z0-9_]', '_', target)
+            mermaid.append(f'    {src_id} --> {tgt_id}')
 
-        # Add style definitions
-        mermaid.append("    classDef change_added fill:green,stroke:#333,stroke-width:2px")
-        mermaid.append("    classDef change_deleted fill:red,stroke:#333,stroke-width:2px")
-        mermaid.append("    classDef change_modified fill:orange,stroke:#333,stroke-width:2px")
-        mermaid.append("    classDef change_unchanged fill:gray,stroke:#333,stroke-width:2px")
+        # Add style definitions for files (lighter shades)
+        mermaid.append("    classDef file_added fill:#90EE90,stroke:#333,stroke-width:2px")  # Light green
+        mermaid.append("    classDef file_deleted fill:#FFB6C1,stroke:#333,stroke-width:2px")  # Light red
+        mermaid.append("    classDef file_modified fill:#FFD580,stroke:#333,stroke-width:2px")  # Light orange
+        mermaid.append("    classDef file_unchanged fill:#D3D3D3,stroke:#333,stroke-width:2px")  # Light gray
+
+        # Add style definitions for components (darker shades)
+        mermaid.append("    classDef component_added fill:#32CD32,stroke:#333,stroke-width:2px")  # Lime green
+        mermaid.append("    classDef component_deleted fill:#DC143C,stroke:#333,stroke-width:2px")  # Crimson
+        mermaid.append("    classDef component_modified fill:#FF8C00,stroke:#333,stroke-width:2px")  # Dark orange
+        mermaid.append("    classDef component_unchanged fill:#808080,stroke:#333,stroke-width:2px")  # Gray
+        mermaid.append("    classDef hidden fill:none,stroke:none")
+
+        # Add explicit class statements for files and components
+        mermaid.extend(file_classes)
+        mermaid.extend(component_classes)
 
         return "\n".join(mermaid)
