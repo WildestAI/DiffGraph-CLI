@@ -258,8 +258,7 @@ class GraphManager:
                             component_label = comp_node.name.replace('"', '\\"').replace('`', '\\`')
                             if comp_node.summary:
                                 mermaid.append(f'        {comp_id}["{component_label}"]:::component_{comp_node.change_type.value}')
-                                sanitized_
-                                = self._sanitize_tooltip(comp_node.summary)
+                                sanitized_summary = self._sanitize_tooltip(comp_node.summary)
                                 mermaid.append(f'        click {comp_id} call callback("{sanitized_summary}") "{sanitized_summary}"')
                             else:
                                 mermaid.append(f'        {comp_id}["{component_label}"]:::component_{comp_node.change_type.value}')
