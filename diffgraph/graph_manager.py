@@ -2,7 +2,7 @@ from typing import Dict, List, Set, Optional
 from dataclasses import dataclass
 from enum import Enum
 import networkx as nx
-import re
+import json, re
 
 class ChangeType(Enum):
     """Type of change in the code."""
@@ -189,15 +189,18 @@ class GraphManager:
                     comp_id = re.sub(r'[^a-zA-Z0-9_]', '_', component_id)
                     component_label = comp_node.name.replace('"', '\\"').replace('`', '\\`')
                     if comp_node.summary:
+                        summary_txt = json.dumps(comp_node.summary)
                         mermaid.append(f'        {comp_id}["{component_label}"]:::component_{comp_node.change_type.value}')
-                        mermaid.append(f'        click {comp_id} call callback("{comp_node.summary.replace('"', '\\"')}") "{comp_node.summary.replace('"', '\\"')}"')
+                        mermaid.append(f'        click {comp_id} call callback("{summary_txt}") "{summary_txt}"')
                     else:
                         mermaid.append(f'        {comp_id}["{component_label}"]:::component_{comp_node.change_type.value}')
             mermaid.append('    end')
 
         # Add edges between components
         for source, target in self.component_graph.edges():
-            mermaid.append(f'    {re.sub(r'[^a-zA-Z0-9_]', '_', source)} --> {re.sub(r'[^a-zA-Z0-9_]', '_', target)}')
+            src_id = re.sub(r'[^a-zA-Z0-9_]', '_', source)
+            tgt_id = re.sub(r'[^a-zA-Z0-9_]', '_', target)
+            mermaid.append(f'    {src_id} --> {tgt_id}')
 
         # Add style definitions for files (lighter shades)
         mermaid.append("    classDef file_added fill:#90EE90,stroke:#333,stroke-width:2px")  # Light green

@@ -231,10 +231,11 @@ def generate_html_report(analysis: AnalysisResult, output_path: str = "diffgraph
             }});
 
             // Re-render Mermaid diagrams
-            document.querySelectorAll('.mermaid').forEach(async (el) => {{
+            document.querySelectorAll('.mermaid').forEach(async (el, idx) => {{
                 const content = el.textContent;
                 el.textContent = content;
-                const {{ svg, bindFunctions }} = await mermaid.render('mermaid', content);
+                const renderId = `mermaid-${idx}`;
+                const {{ svg, bindFunctions }} = await mermaid.render(renderId, content);
                 el.innerHTML = svg;
                 if (bindFunctions) {{
                     bindFunctions(el);
