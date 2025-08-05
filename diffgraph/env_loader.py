@@ -5,7 +5,7 @@ Handles loading .env files in both development and bundled environments.
 
 import os
 import sys
-from typing import List
+from typing import List, Optional
 from dotenv import load_dotenv
 
 
@@ -14,7 +14,7 @@ def is_pyinstaller_bundle() -> bool:
     return getattr(sys, 'frozen', False)
 
 
-def get_bundle_directory() -> str:
+def get_bundle_directory() -> Optional[str]:
     """Get the PyInstaller bundle directory if available."""
     if is_pyinstaller_bundle() and hasattr(sys, '_MEIPASS'):
         return sys._MEIPASS
@@ -24,18 +24,16 @@ def get_bundle_directory() -> str:
 def get_possible_env_paths() -> List[str]:
     """Get all possible paths where .env file might be located."""
     possible_paths = [
-        ".env",  # Current directory (development)
-        os.path.join(os.path.dirname(__file__), "..", ".env"),  # Relative to module
+        os.path.normpath(".env"),  # Current directory (development)
+        os.path.normpath(os.path.join(os.path.dirname(__file__), "..", ".env")),  # Relative to module
     ]
 
-    # Add executable path if available
-    if hasattr(sys, 'executable'):
-        possible_paths.append(os.path.join(os.path.dirname(sys.executable), ".env"))
+    possible_paths.append(os.path.normpath(os.path.join(os.path.dirname(sys.executable), ".env")))
 
     # If running in PyInstaller bundle, try to get the bundled .env file
     bundle_dir = get_bundle_directory()
     if bundle_dir:
-        possible_paths.insert(0, os.path.join(bundle_dir, ".env"))
+        possible_paths.insert(0, os.path.normpath(os.path.join(bundle_dir, ".env")))
 
     return possible_paths
 

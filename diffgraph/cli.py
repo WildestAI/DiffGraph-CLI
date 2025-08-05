@@ -162,7 +162,7 @@ def load_file_contents(changed_files: List[Dict[str, str]]) -> List[Dict[str, st
     return files_with_content
 
 @click.command()
-@click.version_option()
+@click.version_option(package_name='wild')
 @click.option('--api-key', envvar='OPENAI_API_KEY', help='OpenAI API key')
 @click.option('--output', '-o', default='diffgraph.html', help='Output HTML file path')
 @click.option('--no-open', is_flag=True, help='Do not open the HTML report automatically')
