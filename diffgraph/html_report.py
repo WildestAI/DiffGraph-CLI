@@ -71,8 +71,8 @@ def generate_html_report(analysis: AnalysisResult, output_path: str = "diffgraph
                 color: #fff !important;
             }}
             .mermaid .file_modified {{
-                fill: #744210 !important;
-                stroke: #5c341c !important;
+                fill: #2b6cb0 !important;
+                stroke: #2c5282 !important;
                 color: #fff !important;
             }}
             .mermaid .file_unchanged {{
@@ -91,8 +91,8 @@ def generate_html_report(analysis: AnalysisResult, output_path: str = "diffgraph
                 color: #fff !important;
             }}
             .mermaid .component_modified {{
-                fill: #5c341c !important;
-                stroke: #4a2c1a !important;
+                fill: #2c5282 !important;
+                stroke: #2a4365 !important;
                 color: #fff !important;
             }}
             .mermaid .component_unchanged {{
@@ -137,6 +137,43 @@ def generate_html_report(analysis: AnalysisResult, output_path: str = "diffgraph
             border-radius: 0.75rem;
             margin: 1.5rem 0;
             border: 1px solid var(--border-color);
+
+            .node, .cluster {{
+                rect,
+                circle,
+                ellipse,
+                polygon,
+                path {{
+                    fill: var(--mermaid-node-bg) !important;
+                    stroke: var(--mermaid-node-border) !important;
+                    rx: 12px !important;
+                    ry: 12px !important;
+                    filter: drop-shadow(0 2px 8px #0002);
+                    stroke-width: 2.5px !important;
+                }}
+            }}
+        }}
+
+        .mermaid .node text {{
+            fill: var(--mermaid-node-text) !important;
+            font-weight: 600;
+            font-size: 1.05em;
+            letter-spacing: 0.01em;
+        }}
+
+        .mermaid .edgePath .path {{
+            stroke: var(--mermaid-edge) !important;
+            stroke-width: 2.2px !important;
+            opacity: 0.92;
+        }}
+
+        .mermaid .edgeLabel {{
+            background-color: var(--mermaid-bg) !important;
+            color: var(--mermaid-text) !important;
+            border-radius: 0.5em;
+            padding: 0.1em 0.5em;
+            font-size: 0.98em;
+            box-shadow: 0 1px 4px #0001;
         }}
 
         .mermaid .node rect,
@@ -298,7 +335,7 @@ def generate_html_report(analysis: AnalysisResult, output_path: str = "diffgraph
                 nodeBkg: isDarkMode ? '#2f855a' : '#9ae6b4',
                 nodeTextColor: isDarkMode ? '#f7fafc' : '#1a202c',
                 nodeBorder: isDarkMode ? '#c53030' : '#feb2b2',
-                clusterBkg: isDarkMode ? '#744210' : '#fbd38d',
+                clusterBkg: isDarkMode ? '#2b6cb0' : '#90cdf4',
                 clusterTextColor: isDarkMode ? '#f7fafc' : '#1a202c',
                 defaultLinkColor: isDarkMode ? '#4a5568' : '#e2e8f0',
                 titleColor: isDarkMode ? '#f7fafc' : '#1a202c',
