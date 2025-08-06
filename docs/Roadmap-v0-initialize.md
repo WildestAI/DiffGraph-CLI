@@ -1,6 +1,6 @@
-# 📜 Project Roadmap: diffgraph-ai (Hackathon Version)
+# 📜 Project Roadmap: wild (Hackathon Version)
 
-This roadmap outlines the step-by-step implementation of `diffgraph-ai`, a CLI tool that reads current git diffs and untracked files, uses AI to understand code changes and their implications, and renders a shareable HTML diffgraph.
+This roadmap outlines the step-by-step implementation of `wild`, a CLI tool that reads current git diffs and untracked files, uses AI to understand code changes and their implications, and renders a shareable HTML diffgraph.
 
 Each step is:
 
@@ -14,7 +14,7 @@ Each step is:
 
 ### 🌟 Goal:
 
-Create a command-line tool `diffgraph-ai` that accepts input flags and runs `git diff` internally.
+Create a command-line tool `wild` that accepts input flags and runs `git diff` internally.
 
 ### 🧹 Constraints:
 
@@ -30,7 +30,7 @@ Create a command-line tool `diffgraph-ai` that accepts input flags and runs `git
 ### ✅ Test Plan:
 
 ```bash
-$ diffgraph-ai
+$ wild
 # should print raw git diff, or a friendly error message if repo not found
 ```
 
@@ -63,7 +63,7 @@ Detect both:
 
 ```bash
 # Scenario: added a new file but haven't git-added it
-$ diffgraph-ai
+$ wild
 # Should list modified AND untracked files
 ```
 
@@ -95,7 +95,7 @@ Load the full content of all changed files:
 
 ```bash
 # After creating a new file:
-$ diffgraph-ai
+$ wild
 # Output should include full content of the new file
 ```
 
@@ -123,7 +123,7 @@ Send the raw git diff and the changed file contents to an OpenAI agent for analy
 ### ✅ Test Plan:
 
 ```bash
-$ diffgraph-ai
+$ wild
 # Output: Structured response from GPT (summary + mermaid code)
 ```
 
@@ -154,7 +154,7 @@ Create an HTML file (`diffgraph.html`) that contains:
 ### ✅ Test Plan:
 
 ```bash
-$ diffgraph-ai > diffgraph.html && open diffgraph.html
+$ wild > diffgraph.html && open diffgraph.html
 # Should show graph + explanation
 ```
 
@@ -181,7 +181,7 @@ Make sure `diffgraph-ai` exits cleanly when there is no diff (i.e., working dire
 
 ```bash
 # With clean repo:
-$ diffgraph-ai
+$ wild
 # Should print "No changes to analyze"
 ```
 
@@ -238,7 +238,7 @@ Prepare a simple Git repo with a few staged or unstaged changes that can reliabl
 
 ```bash
 $ cd examples/demo1
-$ diffgraph-ai && open diffgraph.html
+$ wild && open diffgraph.html
 ```
 
 ### 📌 Status: `Completed`
@@ -247,7 +247,7 @@ $ diffgraph-ai && open diffgraph.html
 
 ## 🏁 Final Deliverables Checklist
 
-* [x] CLI (`diffgraph-ai`)
+* [x] CLI (`wild`)
 * [x] HTML diffgraph report (Mermaid + Summary)
 * [x] Example repo with demo-ready diff
 * [ ] Optional: OpenAI Agent configuration JSON (for Cursor / Claude etc.)
