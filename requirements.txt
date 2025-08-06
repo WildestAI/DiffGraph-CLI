@@ -3,3 +3,4 @@ openai-agents>=0.0.17
 python-dotenv>=1.0.0
 networkx>=3.5
 click-spinner>=0.1.10
+pyinstaller>=6.14.2

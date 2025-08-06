@@ -44,7 +44,7 @@ Add your OpenAI API key to the .env file
 
 Basic usage:
 ```bash
-diffgraph-ai
+wild
 ```
 
 This will:
@@ -62,7 +62,7 @@ This will:
 
 Example:
 ```bash
-diffgraph-ai --output my-report.html --no-open
+wild --output my-report.html --no-open
 ```
 
 ## 📊 Example Output

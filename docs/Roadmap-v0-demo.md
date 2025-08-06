@@ -1,6 +1,6 @@
-# 📅 Roadmap: Modular Multi-Agent Architecture for diffgraph-ai
+# 📅 Roadmap: Modular Multi-Agent Architecture for wild
 
-This roadmap introduces a modular re-architecture of `diffgraph-ai`, aimed at improving the accuracy, extensibility, and quality of visual diff representations. The goal is to break up the existing monolithic agent prompt into smaller, specialized AI agents using the OpenAI Agents SDK.
+This roadmap introduces a modular re-architecture of `wild`, aimed at improving the accuracy, extensibility, and quality of visual diff representations. The goal is to break up the existing monolithic agent prompt into smaller, specialized AI agents using the OpenAI Agents SDK.
 
 Each step is:
 
