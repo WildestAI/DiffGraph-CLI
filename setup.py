@@ -2,7 +2,7 @@ from setuptools import setup, find_packages
 
 setup(
     name="wild",
-    version="0.1.0",
+    version="1.0.0",
     packages=find_packages(),
     install_requires=[
         "click>=8.1.7",
@@ -13,8 +13,8 @@ setup(
         ],
     },
     python_requires=">=3.7",
-    author="DiffGraph Team",
-    description="A CLI tool for visualizing code changes with AI",
+    author="WildestAI Team",
+    description="AI-powered git-wrapper CLI tool with visualizing diffs",
     long_description=open("README.md").read(),
     long_description_content_type="text/markdown",
     classifiers=[
