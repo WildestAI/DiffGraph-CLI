@@ -66,17 +66,21 @@ def get_all_files_in_directory(directory: str) -> List[str]:
                 all_files.append(rel_path)
     return all_files
 
-def get_changed_files() -> List[Dict[str, str]]:
+def get_changed_files(diff_args: List[str] = None) -> List[Dict[str, str]]:
     """
     Get list of changed and untracked files.
     Returns a list of dicts with 'path' and 'status' keys.
     """
+    if diff_args is None:
+        diff_args = []
+
     changed_files = []
 
     # Get modified/staged files
     try:
+        cmd = ["git", "diff", "--name-only"] + diff_args
         result = subprocess.run(
-            ["git", "diff", "--name-only"],
+            cmd,
             check=True,
             capture_output=True,
             text=True
@@ -91,44 +95,48 @@ def get_changed_files() -> List[Dict[str, str]]:
         click.echo(f"Error getting modified files: {e}", err=True)
         sys.exit(1)
 
-    # Get untracked files and directories
-    try:
-        result = subprocess.run(
-            ["git", "status", "--porcelain"],
-            check=True,
-            capture_output=True,
-            text=True
-        )
-        for line in result.stdout.strip().split('\n'):
-            if line.startswith('??'):  # Untracked files/directories
-                path = line[3:].strip()
+    # Get untracked files and directories (only if no specific diff args provided)
+    if not diff_args:
+        try:
+            result = subprocess.run(
+                ["git", "status", "--porcelain"],
+                check=True,
+                capture_output=True,
+                text=True
+            )
+            for line in result.stdout.strip().split('\n'):
+                if line.startswith('??'):  # Untracked files/directories
+                    path = line[3:].strip()
 
-                if os.path.isdir(path):
-                    # If it's a directory, get all files in it
-                    files_in_dir = get_all_files_in_directory(path)
-                    for file_path in files_in_dir:
+                    if os.path.isdir(path):
+                        # If it's a directory, get all files in it
+                        files_in_dir = get_all_files_in_directory(path)
+                        for file_path in files_in_dir:
+                            changed_files.append({
+                                'path': file_path,
+                                'status': 'untracked'
+                            })
+                    else:
+                        # If it's a file, add it directly
                         changed_files.append({
-                            'path': file_path,
+                            'path': path,
                             'status': 'untracked'
                         })
-                else:
-                    # If it's a file, add it directly
-                    changed_files.append({
-                        'path': path,
-                        'status': 'untracked'
-                    })
-    except subprocess.CalledProcessError as e:
-        click.echo(f"Error getting untracked files: {e}", err=True)
-        sys.exit(1)
+        except subprocess.CalledProcessError as e:
+            click.echo(f"Error getting untracked files: {e}", err=True)
+            sys.exit(1)
 
     return changed_files
 
-def load_file_contents(changed_files: List[Dict[str, str]]) -> List[Dict[str, str]]:
+def load_file_contents(changed_files: List[Dict[str, str]], diff_args: List[str] = None) -> List[Dict[str, str]]:
     """
     Load contents of changed files.
     For modified files, gets the diff content.
     For untracked files, reads the entire file.
     """
+    if diff_args is None:
+        diff_args = []
+
     files_with_content = []
 
     for file_info in changed_files:
@@ -138,8 +146,9 @@ def load_file_contents(changed_files: List[Dict[str, str]]) -> List[Dict[str, st
         try:
             if status == 'modified':
                 # Get diff content for modified files
+                cmd = ["git", "diff"] + diff_args + [file_path]
                 result = subprocess.run(
-                    ["git", "diff", file_path],
+                    cmd,
                     check=True,
                     capture_output=True,
                     text=True
@@ -161,14 +170,21 @@ def load_file_contents(changed_files: List[Dict[str, str]]) -> List[Dict[str, st
 
     return files_with_content
 
-@click.command()
+@click.group(context_settings={"ignore_unknown_options": True, "allow_extra_args": True})
 @click.version_option(package_name='wild')
+def main():
+    """wild - Git wrapper CLI (group entry point)"""
+    pass  # Subcommands will be added here
+
+@main.command(context_settings={"ignore_unknown_options": True})
+@click.argument('args', nargs=-1, type=click.UNPROCESSED)
 @click.option('--api-key', envvar='OPENAI_API_KEY', help='OpenAI API key')
 @click.option('--output', '-o', default='diffgraph.html', help='Output HTML file path')
 @click.option('--no-open', is_flag=True, help='Do not open the HTML report automatically')
 @click.option('--debug-env', is_flag=True, help='Debug environment variable loading')
-def main(api_key: str, output: str, no_open: bool, debug_env: bool):
+def diff(args, api_key: str, output: str, no_open: bool, debug_env: bool):
     """DiffGraph - Visualize code changes with AI."""
+    args = list(args) # convert tuple to list
 
     # Debug environment variable loading if requested
     if debug_env:
@@ -184,7 +200,7 @@ def main(api_key: str, output: str, no_open: bool, debug_env: bool):
         sys.exit(0)
 
     click.echo("🔍 Scanning for changed files...")
-    changed_files = get_changed_files()
+    changed_files = get_changed_files(args)
 
     if not changed_files:
         click.echo("ℹ️ No changes to analyze")
@@ -194,7 +210,7 @@ def main(api_key: str, output: str, no_open: bool, debug_env: bool):
 
     # Load contents of changed files with progress bar
     with click.progressbar(changed_files, label='📖 Loading file contents') as files:
-        files_with_content = load_file_contents(files)
+        files_with_content = load_file_contents(files, args)
 
     try:
         # Initialize the AI analysis agent
