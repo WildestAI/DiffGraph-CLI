@@ -170,105 +170,112 @@ def load_file_contents(changed_files: List[Dict[str, str]], diff_args: List[str]
 
     return files_with_content
 
-@click.group(context_settings={"ignore_unknown_options": True, "allow_extra_args": True})
+@click.command(context_settings={"ignore_unknown_options": True, "allow_extra_args": True})
 @click.version_option(package_name='wild')
-def main():
-    """wild - Git wrapper CLI (group entry point)"""
-    pass  # Subcommands will be added here
-
-@main.command(context_settings={"ignore_unknown_options": True})
 @click.argument('args', nargs=-1, type=click.UNPROCESSED)
 @click.option('--api-key', envvar='OPENAI_API_KEY', help='OpenAI API key')
 @click.option('--output', '-o', default='diffgraph.html', help='Output HTML file path')
 @click.option('--no-open', is_flag=True, help='Do not open the HTML report automatically')
 @click.option('--debug-env', is_flag=True, help='Debug environment variable loading')
-def diff(args, api_key: str, output: str, no_open: bool, debug_env: bool):
-    """DiffGraph - Visualize code changes with AI."""
-    args = list(args) # convert tuple to list
+def main(args, api_key: str, output: str, no_open: bool, debug_env: bool):
+    """wild - Git wrapper CLI with DiffGraph for diff commands."""
 
-    # Debug environment variable loading if requested
-    if debug_env:
-        debug_environment(api_key)
-        return
+    # Check if this is a diff command
+    if args and args[0] == 'diff':
+        # Handle diff command with custom logic
+        diff_args = list(args[1:])  # Skip 'diff' and pass remaining args
 
-    if not is_git_repo():
-        click.echo("❌ Error: Not a git repository", err=True)
-        sys.exit(1)
+        # Debug environment variable loading if requested
+        if debug_env:
+            debug_environment(api_key)
+            return
 
-    if is_clean_state():
-        click.echo("ℹ️ No changes to analyze - working directory is clean")
-        sys.exit(0)
+        if not is_git_repo():
+            click.echo("❌ Error: Not a git repository", err=True)
+            sys.exit(1)
 
-    click.echo("🔍 Scanning for changed files...")
-    changed_files = get_changed_files(args)
+        if is_clean_state():
+            click.echo("ℹ️ No changes to analyze - working directory is clean")
+            sys.exit(0)
 
-    if not changed_files:
-        click.echo("ℹ️ No changes to analyze")
-        sys.exit(0)
+        click.echo("🔍 Scanning for changed files...")
+        changed_files = get_changed_files(diff_args)
 
-    click.echo(f"📝 Found {len(changed_files)} changed files")
+        if not changed_files:
+            click.echo("ℹ️ No changes to analyze")
+            sys.exit(0)
 
-    # Load contents of changed files with progress bar
-    with click.progressbar(changed_files, label='📖 Loading file contents') as files:
-        files_with_content = load_file_contents(files, args)
+        click.echo(f"📝 Found {len(changed_files)} changed files")
 
-    try:
-        # Initialize the AI analysis agent
-        click.echo("🤖 Initializing AI analysis...")
-        agent = CodeAnalysisAgent(api_key=api_key)
+        # Load contents of changed files with progress bar
+        with click.progressbar(changed_files, label='📖 Loading file contents') as files:
+            files_with_content = load_file_contents(files, diff_args)
 
-        # Define progress callback
-        def progress_callback(current_file, total_files, status):
-            if current_file is None:
-                click.echo("📊 Generating final diagram...")
-                return
+        try:
+            # Initialize the AI analysis agent
+            click.echo("🤖 Initializing AI analysis...")
+            agent = CodeAnalysisAgent(api_key=api_key)
 
-            file_name = os.path.basename(current_file)
-            current_index = len(agent.graph_manager.processed_files) + 1
+            # Define progress callback
+            def progress_callback(current_file, total_files, status):
+                if current_file is None:
+                    click.echo("📊 Generating final diagram...")
+                    return
 
-            if status == "processing":
-                click.echo(f"🔄 Processing {file_name} ({current_index}/{total_files})...")
-            elif status == "analyzing":
-                click.echo(f"🧠 Analyzing {file_name} with AI ({current_index}/{total_files})...")
-            elif status == "processing_components":
-                click.echo(f"🔍 Processing components in {file_name} ({current_index}/{total_files})...")
-            elif status == "completed":
-                click.echo(f"✅ Completed analysis of {file_name} ({current_index}/{total_files})...")
-            elif status == "error":
-                click.echo(f"❌ Error analyzing {file_name} ({current_index}/{total_files})...")
+                file_name = os.path.basename(current_file)
+                current_index = len(agent.graph_manager.processed_files) + 1
 
-        # Analyze the changes with progress updates
-        click.echo("🧠 Starting code analysis...")
-        analysis = agent.analyze_changes(files_with_content, progress_callback)
+                if status == "processing":
+                    click.echo(f"🔄 Processing {file_name} ({current_index}/{total_files})...")
+                elif status == "analyzing":
+                    click.echo(f"🧠 Analyzing {file_name} with AI ({current_index}/{total_files})...")
+                elif status == "processing_components":
+                    click.echo(f"🔍 Processing components in {file_name} ({current_index}/{total_files})...")
+                elif status == "completed":
+                    click.echo(f"✅ Completed analysis of {file_name} ({current_index}/{total_files})...")
+                elif status == "error":
+                    click.echo(f"❌ Error analyzing {file_name} ({current_index}/{total_files})...")
 
-        # Create analysis result
-        click.echo("📊 Creating analysis result...")
-        analysis_result = AnalysisResult(
-            summary=analysis.summary,
-            mermaid_diagram=analysis.mermaid_diagram
-        )
+            # Analyze the changes with progress updates
+            click.echo("🧠 Starting code analysis...")
+            analysis = agent.analyze_changes(files_with_content, progress_callback)
 
-        # Generate HTML report
-        click.echo("🖨️ Generating HTML report...")
-        html_path = generate_html_report(analysis_result, output)
-        click.echo(f"✅ HTML report generated: {html_path}")
+            # Create analysis result
+            click.echo("📊 Creating analysis result...")
+            analysis_result = AnalysisResult(
+                summary=analysis.summary,
+                mermaid_diagram=analysis.mermaid_diagram
+            )
 
-        # Open the HTML report in the default browser
-        if not no_open:
-            click.echo("🌐 Opening report in browser...")
-            if sys.platform == 'darwin':  # macOS
-                subprocess.run(['open', html_path])
-            elif sys.platform == 'win32':  # Windows
-                os.startfile(html_path)
-            else:  # Linux
-                subprocess.run(['xdg-open', html_path])
+            # Generate HTML report
+            click.echo("🖨️ Generating HTML report...")
+            html_path = generate_html_report(analysis_result, output)
+            click.echo(f"✅ HTML report generated: {html_path}")
 
-    except ValueError as e:
-        click.echo(f"❌ Error: {e}", err=True)
-        sys.exit(1)
-    except Exception as e:
-        click.echo(f"❌ Error during analysis: {e}", err=True)
-        sys.exit(1)
+            # Open the HTML report in the default browser
+            if not no_open:
+                click.echo("🌐 Opening report in browser...")
+                if sys.platform == 'darwin':  # macOS
+                    subprocess.run(['open', html_path])
+                elif sys.platform == 'win32':  # Windows
+                    os.startfile(html_path)
+                else:  # Linux
+                    subprocess.run(['xdg-open', html_path])
+
+        except ValueError as e:
+            click.echo(f"❌ Error: {e}", err=True)
+            sys.exit(1)
+        except Exception as e:
+            click.echo(f"❌ Error during analysis: {e}", err=True)
+            sys.exit(1)
+    else:
+        # Pass through to git for all other commands
+        try:
+            result = subprocess.run(["git"] + list(args))
+            sys.exit(result.returncode)
+        except Exception as e:
+            click.secho(f"❌ Error running git command: {e}", fg="red", err=True)
+            sys.exit(1)
 
 if __name__ == "__main__":
     main()
