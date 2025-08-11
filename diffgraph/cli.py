@@ -25,27 +25,7 @@ def is_git_repo() -> bool:
     except subprocess.CalledProcessError:
         return False
 
-def is_clean_state() -> bool:
-    """Check if the working directory is clean (no changes)."""
-    try:
-        # Check for any changes in tracked files
-        diff_result = subprocess.run(
-            ["git", "diff", "--quiet"],
-            capture_output=True
-        )
 
-        # Check for any untracked files
-        status_result = subprocess.run(
-            ["git", "status", "--porcelain"],
-            check=True,
-            capture_output=True,
-            text=True
-        )
-
-        # If diff returns 0 (no changes) and status is empty (no untracked files)
-        return diff_result.returncode == 0 and not status_result.stdout.strip()
-    except subprocess.CalledProcessError:
-        return False
 
 def get_all_files_in_directory(directory: str) -> List[str]:
     """
@@ -193,10 +173,6 @@ def main(args, api_key: str, output: str, no_open: bool, debug_env: bool):
         if not is_git_repo():
             click.echo("❌ Error: Not a git repository", err=True)
             sys.exit(1)
-
-        if is_clean_state():
-            click.echo("ℹ️ No changes to analyze - working directory is clean")
-            sys.exit(0)
 
         click.echo("🔍 Scanning for changed files...")
         changed_files = get_changed_files(diff_args)
