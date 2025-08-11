@@ -32,7 +32,7 @@ def sanitize_diff_args(diff_args: List[str]) -> Tuple[List[str], List[str]]:
         '-U', '--unified', '-R', '--reverse', '-B', '--break-rewrites',
         '-M', '--find-renames', '-C', '--find-copies', '--find-copies-harder',
         '-D', '--irreversible-delete', '-l', '--max-count', '-S', '--find-object',
-        '-G', '--pickaxe-regex', '--pickaxe-all', '--pickaxe-regex',
+        '-G', '--pickaxe-regex', '--pickaxe-all',
         '--relative', '--no-relative', '--text', '--ignore-space-at-eol',
         '--ignore-space-change', '--ignore-all-space', '--ignore-blank-lines',
         '--indent-heuristic', '--patience', '--histogram', '--minimal',

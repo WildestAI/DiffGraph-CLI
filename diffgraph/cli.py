@@ -26,11 +26,14 @@ def is_git_repo() -> bool:
     except subprocess.CalledProcessError:
         return False
 
-def get_changed_files(diff_args: List[str] = []) -> List[Dict[str, str]]:
+def get_changed_files(diff_args: List[str] = None) -> List[Dict[str, str]]:
     """
     Get list of changed and untracked files.
     Returns a list of dicts with 'path' and 'status' keys.
     """
+    if diff_args is None:
+        diff_args = []
+
     changed_files = []
 
     # Get modified/staged files
@@ -81,12 +84,15 @@ def get_changed_files(diff_args: List[str] = []) -> List[Dict[str, str]]:
 
     return changed_files
 
-def load_file_contents(changed_files: List[Dict[str, str]], diff_args: List[str] = []) -> List[Dict[str, str]]:
+def load_file_contents(changed_files: List[Dict[str, str]], diff_args: List[str] = None) -> List[Dict[str, str]]:
     """
     Load contents of changed files.
     For modified files, gets the diff content.
     For untracked files, reads the entire file.
     """
+    if diff_args is None:
+        diff_args = []
+
     files_with_content = []
 
     for file_info in changed_files:
