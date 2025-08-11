@@ -58,7 +58,8 @@ def get_changed_files(diff_args: List[str] = None) -> List[Dict[str, str]]:
 
     # Get modified/staged files
     try:
-        cmd = ["git", "diff", "--name-only"] + diff_args
+        sanitized_args = sanitize_diff_args(diff_args)
+        cmd = ["git", "diff", "--name-only"] + sanitized_args
         result = subprocess.run(
             cmd,
             check=True,
@@ -108,6 +109,79 @@ def get_changed_files(diff_args: List[str] = None) -> List[Dict[str, str]]:
 
     return changed_files
 
+def sanitize_diff_args(diff_args: List[str]) -> List[str]:
+    """
+    Sanitize diff arguments to prevent command injection and ensure safe execution.
+
+    Args:
+        diff_args: List of diff arguments to sanitize
+
+    Returns:
+        List of sanitized, safe diff arguments
+    """
+    if not diff_args:
+        return []
+
+    # Dangerous flags that could cause issues or suppress patch content
+    dangerous_flags = {
+        '--name', '--name-only', '--name-status', '--pretty', '--numstat',
+        '--format', '--exec', '--output-format', '--color',
+        '--no-color', '--color=always', '--color=auto', '--color=never'
+    }
+
+    # Safe flags that are commonly needed
+    safe_flags = {
+        '-U', '--unified', '-R', '--reverse', '-B', '--break-rewrites',
+        '-M', '--find-renames', '-C', '--find-copies', '--find-copies-harder',
+        '-D', '--irreversible-delete', '-l', '--max-count', '-S', '--find-object',
+        '-G', '--pickaxe-regex', '--pickaxe-all', '--pickaxe-regex',
+        '--relative', '--no-relative', '--text', '--ignore-space-at-eol',
+        '--ignore-space-change', '--ignore-all-space', '--ignore-blank-lines',
+        '--indent-heuristic', '--patience', '--histogram', '--minimal',
+        '--anchored', '--word-diff', '--word-diff-regex', '--color-words',
+        '--no-renames', '--check', '--ws-error-highlight', '--full-index',
+        '--binary', '--abbrev', '--src-prefix', '--dst-prefix', '--no-prefix'
+    }
+
+    sanitized = []
+    blocked_flags = []
+
+    for arg in diff_args:
+        # Block clearly dangerous flags with clear communication
+        if arg in dangerous_flags:
+            blocked_flags.append(arg)
+            continue
+
+        # Allow safe flags
+        if arg in safe_flags:
+            sanitized.append(arg)
+            continue
+
+        # Allow commit references (SHA, branch names, etc.)
+        if not arg.startswith('-'):
+            sanitized.append(arg)
+            continue
+
+        # Allow numeric values for context lines
+        if arg.startswith('-') and arg[1:].isdigit():
+            sanitized.append(arg)
+            continue
+
+        # For unknown flags, trust the user but warn them
+        click.secho(f"⚠️  Warning: Unknown diff argument '{arg}' - allowing but use with caution", fg="yellow")
+        sanitized.append(arg)
+
+    # Always add --no-color for consistent, parseable output
+    if '--no-color' not in sanitized:
+        sanitized.append('--no-color')
+
+    # Report any blocked dangerous flags
+    if blocked_flags:
+        click.secho(f"🚫 Blocked dangerous diff arguments: {', '.join(blocked_flags)}", fg="red")
+        click.secho("   These flags could cause security issues or suppress patch content", fg="red")
+
+    return sanitized
+
 def load_file_contents(changed_files: List[Dict[str, str]], diff_args: List[str] = None) -> List[Dict[str, str]]:
     """
     Load contents of changed files.
@@ -125,8 +199,9 @@ def load_file_contents(changed_files: List[Dict[str, str]], diff_args: List[str]
 
         try:
             if status == 'modified':
-                # Get diff content for modified files
-                cmd = ["git", "diff"] + diff_args + [file_path]
+                # Get diff content for modified files with sanitized args and proper separator
+                sanitized_args = sanitize_diff_args(diff_args)
+                cmd = ["git", "diff"] + sanitized_args + ["--", file_path]
                 result = subprocess.run(
                     cmd,
                     check=True,
