@@ -8,7 +8,7 @@ import os
 from diffgraph.ai_analysis import CodeAnalysisAgent
 from diffgraph.html_report import generate_html_report, AnalysisResult
 from diffgraph.env_loader import load_env_file, debug_environment
-from diffgraph.utils import sanitize_diff_args
+from diffgraph.utils import sanitize_diff_args, involves_working_tree
 
 # Load environment variables
 load_env_file()
@@ -53,8 +53,8 @@ def get_changed_files(diff_args: List[str] = []) -> List[Dict[str, str]]:
         click.echo(f"Error getting modified files: {e}", err=True)
         sys.exit(1)
 
-    # Get untracked files (only if no specific diff args provided)
-    if not diff_args:
+    # Decide if we should include untracked files
+    if involves_working_tree(diff_args):
         try:
             # Use git ls-files for native untracked file detection
             # --others: show untracked files

@@ -5,7 +5,7 @@ Git utility functions for safe command execution and argument sanitization.
 import click
 import os
 from typing import List, Tuple
-
+import re
 
 def sanitize_diff_args(diff_args: List[str]) -> Tuple[List[str], List[str]]:
     """
@@ -18,7 +18,7 @@ def sanitize_diff_args(diff_args: List[str]) -> Tuple[List[str], List[str]]:
         List of sanitized, safe diff arguments
     """
     if not diff_args:
-        return []
+        return [], []
 
     # Dangerous flags that could cause issues or suppress patch content
     dangerous_flags = {
@@ -86,3 +86,21 @@ def sanitize_diff_args(diff_args: List[str]) -> Tuple[List[str], List[str]]:
 
 def is_pathspec(arg: str) -> bool:
     return os.path.sep in arg or arg.startswith('.') or os.path.exists(arg)
+
+def involves_working_tree(diff_args: List[str]) -> bool:
+    """
+    Determines if the git diff is against the working tree, meaning
+    we should include untracked files in the results.
+    """
+    if not diff_args:
+        return True
+
+    non_flag_args = [a for a in diff_args if not a.startswith('-')]
+
+    if len(non_flag_args) == 1:
+        # Check for commit range like a..b or a...b
+        if re.match(r"^[^.]+\.{2,3}[^.]+$", non_flag_args[0]):
+            return False
+        return True
+
+    return False
