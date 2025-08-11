@@ -3,10 +3,11 @@ Git utility functions for safe command execution and argument sanitization.
 """
 
 import click
-from typing import List
+import os
+from typing import List, Tuple
 
 
-def sanitize_diff_args(diff_args: List[str]) -> List[str]:
+def sanitize_diff_args(diff_args: List[str]) -> Tuple[List[str], List[str]]:
     """
     Sanitize diff arguments to prevent command injection and ensure safe execution.
 
@@ -40,7 +41,8 @@ def sanitize_diff_args(diff_args: List[str]) -> List[str]:
         '--binary', '--abbrev', '--src-prefix', '--dst-prefix', '--no-prefix'
     }
 
-    sanitized = []
+    sanitized_args = []
+    pathspecs = []
     blocked_flags = []
 
     for arg in diff_args:
@@ -51,30 +53,36 @@ def sanitize_diff_args(diff_args: List[str]) -> List[str]:
 
         # Allow safe flags
         if arg in safe_flags:
-            sanitized.append(arg)
+            sanitized_args.append(arg)
             continue
 
         # Allow commit references (SHA, branch names, etc.)
         if not arg.startswith('-'):
-            sanitized.append(arg)
+            if is_pathspec(arg):
+                pathspecs.append(arg)
+            else:
+                sanitized_args.append(arg)
             continue
 
         # Allow numeric values for context lines
         if arg.startswith('-') and arg[1:].isdigit():
-            sanitized.append(arg)
+            sanitized_args.append(arg)
             continue
 
         # For unknown flags, trust the user but warn them
         click.secho(f"⚠️  Warning: Unknown diff argument '{arg}' - allowing but use with caution", fg="yellow")
-        sanitized.append(arg)
+        sanitized_args.append(arg)
 
     # Always add --no-color for consistent, parseable output
-    if '--no-color' not in sanitized:
-        sanitized.append('--no-color')
+    if '--no-color' not in sanitized_args:
+        sanitized_args.append('--no-color')
 
     # Report any blocked dangerous flags
     if blocked_flags:
         click.secho(f"🚫 Blocked dangerous diff arguments: {', '.join(blocked_flags)}", fg="red")
         click.secho("   These flags could cause security issues or suppress patch content", fg="red")
 
-    return sanitized
+    return sanitized_args, pathspecs
+
+def is_pathspec(arg: str) -> bool:
+    return os.path.sep in arg or arg.startswith('.') or os.path.exists(arg)
