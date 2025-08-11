@@ -39,7 +39,9 @@ def get_changed_files(diff_args: List[str] = None) -> List[Dict[str, str]]:
     # Get modified/staged files
     try:
         sanitized_args, pathspecs = sanitize_diff_args(diff_args)
-        cmd = ["git", "diff", "--name-only"] + sanitized_args + pathspecs
+        cmd = ["git", "diff", "--name-only"] + sanitized_args
+        if pathspecs:
+            cmd += ["--"] + pathspecs
         result = subprocess.run(
             cmd,
             check=True,
