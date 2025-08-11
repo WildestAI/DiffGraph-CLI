@@ -156,7 +156,7 @@ def load_file_contents(changed_files: List[Dict[str, str]], diff_args: List[str]
                 content = result.stdout
             else:  # untracked
                 # Read entire file for untracked files
-                with open(file_path, 'r', encoding='utf-8') as f:
+                with open(file_path, 'r', encoding='utf-8', errors='replace') as f:
                     content = f.read()
 
             files_with_content.append({
