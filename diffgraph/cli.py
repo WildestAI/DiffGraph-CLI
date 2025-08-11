@@ -26,27 +26,6 @@ def is_git_repo() -> bool:
     except subprocess.CalledProcessError:
         return False
 
-
-
-def get_all_files_in_directory(directory: str) -> List[str]:
-    """
-    Recursively get all files in a directory.
-    Excludes .git directory and other hidden files/folders.
-    """
-    all_files = []
-    for root, dirs, files in os.walk(directory):
-        # Skip .git directory and other hidden directories
-        dirs[:] = [d for d in dirs if not d.startswith('.')]
-
-        for file in files:
-            # Skip hidden files
-            if not file.startswith('.'):
-                full_path = os.path.join(root, file)
-                # Convert to relative path
-                rel_path = os.path.relpath(full_path, os.getcwd())
-                all_files.append(rel_path)
-    return all_files
-
 def get_changed_files(diff_args: List[str] = None) -> List[Dict[str, str]]:
     """
     Get list of changed and untracked files.
@@ -77,33 +56,28 @@ def get_changed_files(diff_args: List[str] = None) -> List[Dict[str, str]]:
         click.echo(f"Error getting modified files: {e}", err=True)
         sys.exit(1)
 
-    # Get untracked files and directories (only if no specific diff args provided)
+    # Get untracked files (only if no specific diff args provided)
     if not diff_args:
         try:
+            # Use git ls-files for native untracked file detection
+            # --others: show untracked files
+            # --exclude-standard: respect .gitignore patterns
+            # -z: null-byte separated output for reliable parsing
             result = subprocess.run(
-                ["git", "status", "--porcelain"],
+                ["git", "ls-files", "--others", "--exclude-standard", "-z"],
                 check=True,
                 capture_output=True,
                 text=True
             )
-            for line in result.stdout.strip().split('\n'):
-                if line.startswith('??'):  # Untracked files/directories
-                    path = line[3:].strip()
 
-                    if os.path.isdir(path):
-                        # If it's a directory, get all files in it
-                        files_in_dir = get_all_files_in_directory(path)
-                        for file_path in files_in_dir:
-                            changed_files.append({
-                                'path': file_path,
-                                'status': 'untracked'
-                            })
-                    else:
-                        # If it's a file, add it directly
-                        changed_files.append({
-                            'path': path,
-                            'status': 'untracked'
-                        })
+            # Split on null byte and filter out empty strings
+            untracked_files = [path for path in result.stdout.split('\0') if path.strip()]
+
+            for file_path in untracked_files:
+                changed_files.append({
+                    'path': file_path,
+                    'status': 'untracked'
+                })
         except subprocess.CalledProcessError as e:
             click.echo(f"Error getting untracked files: {e}", err=True)
             sys.exit(1)
