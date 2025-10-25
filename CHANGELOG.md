@@ -5,6 +5,35 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.2.0] - 2025-10-24
+
+### Added
+- **Structured JSON Output Format (Phase 1)**: Integration-friendly JSON format optimized for VSCode extensions and UIs
+  - New `diffgraph/structured_export.py` module for structured data transformation
+  - Automatic file categorization: `auto_generated`, `documentation`, `configuration`, `source_code`
+  - Rich metadata including git diff stats (additions/deletions per file)
+  - Impact radius calculation from dependency graphs
+  - Clean separation of files and components with explicit graph structure
+  - Complete graph validation (all edge targets exist as nodes)
+  - Pattern-based classification with 40+ common patterns
+- Comprehensive test suite (`test_structured_export.py`) for structured export
+- Design documentation in `docs/planning/` for future enhancements
+
+### Changed
+- **JSON format now uses structured output by default** (breaking change for JSON, but backwards compatible overall)
+  - `--format graph --graph-format json`: Now outputs structured format
+  - `--format graph --graph-format pickle`: Still uses NetworkX format
+  - `--format graph --graph-format graphml`: Still uses NetworkX format
+- Updated README with structured JSON examples and usage patterns
+- Enhanced documentation to explain categorization and structure
+
+### Technical Details
+- Phase 1 implementation uses existing analysis data
+- Advanced fields (complexity, line numbers, parameters) reserved for Phase 2
+- External dependency nodes reserved for Phase 2
+- Advanced relationship detection (REST/RPC/pub-sub) reserved for Phase 2
+- Structure designed for iterative enhancement without breaking changes
+
 ## [1.1.0] - 2025-10-24
 
 ### Added

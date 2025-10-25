@@ -89,45 +89,98 @@ The generated HTML report includes:
 - Responsive design for all screen sizes
 
 ### Graph Data Export
-When using `--format graph`, the tool exports the complete networkx graph data structure, allowing other programs to programmatically analyze the code changes:
+When using `--format graph`, the tool exports graph data, allowing other programs to programmatically analyze the code changes:
 
 **Supported formats:**
-- **JSON** (default): Human-readable, widely compatible format
-- **Pickle**: Python-specific format that preserves exact data structures
+- **JSON** (default): Structured, integration-friendly format optimized for VSCode extensions and UIs
+- **Pickle**: Python-specific NetworkX format that preserves exact data structures
 - **GraphML**: Standard graph format compatible with many graph analysis tools
 
-**Exported data includes:**
-- File-level dependency graph with metadata (status, change type, summary)
-- Component-level dependency graph (functions, classes, methods)
-- Complete analysis results for each file and component
-- Relationships between components (dependencies and dependents)
+#### Structured JSON Format (Default)
 
-**Example: Loading and using exported graph data**
+The JSON export provides a clean, categorized structure ideal for integrations:
+
+**File Categorization:**
+- **auto_generated**: Lock files, build artifacts (excluded from review)
+- **documentation**: Markdown, docs with cross-references to code
+- **configuration**: Config files with structured change tracking
+- **source_code**: Source files with full dependency graphs
+
+**Exported data includes:**
+- File-level dependency graph with additions/deletions
+- Component-level dependency graph (functions, classes, methods)
+- Change types for all nodes and edges
+- Impact radius (number of dependent components)
+- Git diff statistics per file
+- Comprehensive metadata
+
+**Example JSON structure:**
+```json
+{
+  "version": "2.0",
+  "metadata": {
+    "analyzed_at": "2025-10-24T23:00:00Z",
+    "total_files_changed": 12,
+    "total_additions": 1296,
+    "total_deletions": 28
+  },
+  "auto_generated": [...],
+  "documentation": {...},
+  "configuration": {...},
+  "source_code": {
+    "files": {
+      "nodes": [{"path": "...", "additions": 10, ...}],
+      "edges": [{"source": "...", "target": "...", "relationship": "imports"}]
+    },
+    "components": {
+      "nodes": [{"id": "...", "name": "...", "impact_radius": 5, ...}],
+      "edges": [{"source": "...", "target": "...", "relationship": "calls"}]
+    }
+  }
+}
+```
+
+**Using structured JSON data:**
 ```python
-from diffgraph.graph_export import load_graph_from_json
+import json
+
+# Load the structured JSON
+with open('diffgraph.json', 'r') as f:
+    data = json.load(f)
+
+# Access categorized files
+print(f"Source files: {len(data['source_code']['files']['nodes'])}")
+print(f"Documentation: {len(data['documentation'])}")
+print(f"Auto-generated: {len(data['auto_generated'])}")
+
+# Access components
+for component in data['source_code']['components']['nodes']:
+    print(f"{component['name']} ({component['component_type']})")
+    print(f"  Impact radius: {component['impact_radius']}")
+    print(f"  Change type: {component['change_type']}")
+
+# Access dependencies
+for edge in data['source_code']['components']['edges']:
+    print(f"{edge['source']} -> {edge['target']} ({edge['relationship']})")
+```
+
+#### NetworkX Format (Pickle/GraphML)
+
+For advanced analysis or Python-specific use cases:
+
+```python
+from diffgraph.graph_export import load_graph_from_pickle
 import networkx as nx
 
-# Load the exported graph data
-graph_manager = load_graph_from_json('diffgraph.json')
+# Load NetworkX format
+graph_manager = load_graph_from_pickle('diffgraph.pkl')
 
-# Access file nodes
-for file_path, file_node in graph_manager.file_nodes.items():
-    print(f"File: {file_path}")
-    print(f"  Status: {file_node.status.value}")
-    print(f"  Change Type: {file_node.change_type.value}")
-    print(f"  Summary: {file_node.summary}")
-
-# Access component nodes
-for component_id, component_node in graph_manager.component_nodes.items():
-    print(f"Component: {component_node.name}")
-    print(f"  Type: {component_node.component_type}")
-    print(f"  Dependencies: {component_node.dependencies}")
-
-# Use networkx to analyze the graphs
-print(f"Total files: {graph_manager.file_graph.number_of_nodes()}")
+# Use NetworkX algorithms
 print(f"Total components: {graph_manager.component_graph.number_of_nodes()}")
 print(f"Component dependencies: {graph_manager.component_graph.number_of_edges()}")
 ```
+
+**See also**: [Structured Output Design](docs/planning/STRUCTURED_OUTPUT_DESIGN.md) for complete schema specification
 
 ## 🤝 Contributing
 

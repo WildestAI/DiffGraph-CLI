@@ -8,6 +8,7 @@ import os
 from diffgraph.ai_analysis import CodeAnalysisAgent
 from diffgraph.html_report import generate_html_report, AnalysisResult
 from diffgraph.graph_export import export_graph
+from diffgraph.structured_export import export_structured_json
 from diffgraph.env_loader import load_env_file, debug_environment
 from diffgraph.utils import sanitize_diff_args, involves_working_tree
 
@@ -210,7 +211,12 @@ def main(args, api_key: str, output: str, format: str, graph_format: str, no_ope
             if format == 'graph':
                 # Export graph data
                 click.echo(f"💾 Exporting graph data in {graph_format} format...")
-                graph_path = export_graph(agent.graph_manager, output, graph_format)
+                if graph_format == 'json':
+                    # Use structured format for JSON
+                    graph_path = export_structured_json(agent.graph_manager, output, diff_args)
+                else:
+                    # Use NetworkX format for pickle/graphml
+                    graph_path = export_graph(agent.graph_manager, output, graph_format)
                 click.echo(f"✅ Graph data exported: {graph_path}")
             else:
                 # Create analysis result
