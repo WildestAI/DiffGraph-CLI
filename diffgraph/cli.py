@@ -5,10 +5,10 @@ import click
 from click_spinner import spinner
 from typing import List, Dict
 import os
-from diffgraph.ai_analysis import CodeAnalysisAgent
 from diffgraph.html_report import generate_html_report, AnalysisResult
 from diffgraph.env_loader import load_env_file, debug_environment
 from diffgraph.utils import sanitize_diff_args, involves_working_tree
+from diffgraph.processing_modes import get_processor, list_available_modes
 
 # Load environment variables
 load_env_file()
@@ -136,8 +136,20 @@ def load_file_contents(changed_files: List[Dict[str, str]], diff_args: List[str]
 @click.option('--output', '-o', default='diffgraph.html', help='Output HTML file path')
 @click.option('--no-open', is_flag=True, help='Do not open the HTML report automatically')
 @click.option('--debug-env', is_flag=True, help='Debug environment variable loading')
-def main(args, api_key: str, output: str, no_open: bool, debug_env: bool):
+@click.option('--mode', '-m', default='openai-agents-dependency-graph', 
+              help='Processing mode for diffgraph generation (default: openai-agents-dependency-graph)')
+@click.option('--list-modes', is_flag=True, help='List available processing modes and exit')
+def main(args, api_key: str, output: str, no_open: bool, debug_env: bool, mode: str, list_modes: bool):
     """wild - Git wrapper CLI with DiffGraph for diff commands."""
+
+    # Handle --list-modes flag
+    if list_modes:
+        click.echo("Available processing modes:\n")
+        modes = list_available_modes()
+        for mode_name, description in modes.items():
+            click.echo(f"  • {mode_name}")
+            click.echo(f"    {description}\n")
+        return
 
     # Check if this is a diff command
     if args and args[0] == 'diff':
@@ -167,9 +179,14 @@ def main(args, api_key: str, output: str, no_open: bool, debug_env: bool):
             files_with_content = load_file_contents(files, diff_args)
 
         try:
-            # Initialize the AI analysis agent
-            click.echo("🤖 Initializing AI analysis...")
-            agent = CodeAnalysisAgent(api_key=api_key)
+            # Initialize the processor based on selected mode
+            click.echo(f"🤖 Initializing {mode} processor...")
+            try:
+                processor = get_processor(mode, api_key=api_key)
+            except ValueError as e:
+                click.echo(f"❌ Error: {e}", err=True)
+                click.echo("\nUse --list-modes to see available processing modes.", err=True)
+                sys.exit(1)
 
             # Define progress callback
             def progress_callback(current_file, total_files, status):
@@ -178,7 +195,7 @@ def main(args, api_key: str, output: str, no_open: bool, debug_env: bool):
                     return
 
                 file_name = os.path.basename(current_file)
-                current_index = len(agent.graph_manager.processed_files) + 1
+                current_index = len(processor.graph_manager.processed_files) + 1
 
                 if status == "processing":
                     click.echo(f"🔄 Processing {file_name} ({current_index}/{total_files})...")
@@ -193,7 +210,7 @@ def main(args, api_key: str, output: str, no_open: bool, debug_env: bool):
 
             # Analyze the changes with progress updates
             click.echo("🧠 Starting code analysis...")
-            analysis = agent.analyze_changes(files_with_content, progress_callback)
+            analysis = processor.analyze_changes(files_with_content, progress_callback)
 
             # Create analysis result
             click.echo("📊 Creating analysis result...")
