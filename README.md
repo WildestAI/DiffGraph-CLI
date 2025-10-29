@@ -6,6 +6,7 @@ DiffGraph-CLI is a powerful command-line tool that visualizes code changes using
 
 - 📊 Visualizes code changes as a dependency graph
 - 🤖 AI-powered analysis of code changes
+- 💾 Export graph data in multiple formats (JSON, Pickle, GraphML)
 - 🌙 Dark mode support
 - 📝 Markdown-formatted summaries
 - 🔍 Syntax highlighting for code blocks
@@ -56,7 +57,9 @@ This will:
 ### Command-line Options
 
 - `--api-key`: Specify your OpenAI API key (defaults to OPENAI_API_KEY environment variable)
-- `--output` or `-o`: Specify the output HTML file path (default: diffgraph.html)
+- `--output` or `-o`: Specify the output file path (default: diffgraph.html for HTML, diffgraph.json for graph)
+- `--format` or `-f`: Output format: `html` (default) or `graph`
+- `--graph-format`: Graph serialization format when using `--format graph`: `json` (default), `pickle`, or `graphml`
 - `--no-open`: Don't automatically open the HTML report in browser
 - `--mode` or `-m`: Select processing mode for diffgraph generation (default: openai-agents-dependency-graph)
 - `--list-modes`: List all available processing modes
@@ -64,7 +67,7 @@ This will:
 
 Examples:
 ```bash
-# Generate report with default mode
+# Generate HTML report with default mode
 wild diff
 
 # Generate report with custom output path
@@ -75,6 +78,18 @@ wild diff --list-modes
 
 # Use a specific processing mode
 wild diff --mode openai-agents-dependency-graph
+
+# Export graph data as JSON (structured format)
+wild diff --format graph --output graph-data.json
+
+# Export graph data as pickle
+wild diff --format graph --graph-format pickle --output graph-data.pkl
+
+# Export graph data as GraphML
+wild diff --format graph --graph-format graphml --output graph-data.graphml
+
+# Combine mode selection with graph export
+wild diff --mode openai-agents-dependency-graph --format graph
 ```
 
 ## 🔧 Processing Modes
@@ -105,14 +120,109 @@ Developers can extend DiffGraph by creating custom processing modes. See the `di
 2. Implement the `analyze_changes()` method
 3. Register itself using the `@register_processor` decorator
 
-## 📊 Example Output
+## 📊 Output Formats
 
+### HTML Report (default)
 The generated HTML report includes:
 - A summary of code changes
 - A Mermaid.js dependency graph
 - Syntax-highlighted code blocks
 - Dark mode support
 - Responsive design for all screen sizes
+
+### Graph Data Export
+When using `--format graph`, the tool exports graph data, allowing other programs to programmatically analyze the code changes:
+
+**Supported formats:**
+- **JSON** (default): Structured, integration-friendly format optimized for VSCode extensions and UIs
+- **Pickle**: Python-specific NetworkX format that preserves exact data structures
+- **GraphML**: Standard graph format compatible with many graph analysis tools
+
+#### Structured JSON Format (Default)
+
+The JSON export provides a clean, categorized structure ideal for integrations:
+
+**File Categorization:**
+- **auto_generated**: Lock files, build artifacts (excluded from review)
+- **documentation**: Markdown, docs with cross-references to code
+- **configuration**: Config files with structured change tracking
+- **source_code**: Source files with full dependency graphs
+
+**Exported data includes:**
+- File-level dependency graph with additions/deletions
+- Component-level dependency graph (functions, classes, methods)
+- Change types for all nodes and edges
+- Impact radius (number of dependent components)
+- Git diff statistics per file
+- Comprehensive metadata
+
+**Example JSON structure:**
+```json
+{
+  "version": "2.0",
+  "metadata": {
+    "analyzed_at": "2025-10-24T23:00:00Z",
+    "total_files_changed": 12,
+    "total_additions": 1296,
+    "total_deletions": 28
+  },
+  "auto_generated": [...],
+  "documentation": {...},
+  "configuration": {...},
+  "source_code": {
+    "files": {
+      "nodes": [{"path": "...", "additions": 10, ...}],
+      "edges": [{"source": "...", "target": "...", "relationship": "imports"}]
+    },
+    "components": {
+      "nodes": [{"id": "...", "name": "...", "impact_radius": 5, ...}],
+      "edges": [{"source": "...", "target": "...", "relationship": "calls"}]
+    }
+  }
+}
+```
+
+**Using structured JSON data:**
+```python
+import json
+
+# Load the structured JSON
+with open('diffgraph.json', 'r') as f:
+    data = json.load(f)
+
+# Access categorized files
+print(f"Source files: {len(data['source_code']['files']['nodes'])}")
+print(f"Documentation: {len(data['documentation'])}")
+print(f"Auto-generated: {len(data['auto_generated'])}")
+
+# Access components
+for component in data['source_code']['components']['nodes']:
+    print(f"{component['name']} ({component['component_type']})")
+    print(f"  Impact radius: {component['impact_radius']}")
+    print(f"  Change type: {component['change_type']}")
+
+# Access dependencies
+for edge in data['source_code']['components']['edges']:
+    print(f"{edge['source']} -> {edge['target']} ({edge['relationship']})")
+```
+
+#### NetworkX Format (Pickle/GraphML)
+
+For advanced analysis or Python-specific use cases:
+
+```python
+from diffgraph.graph_export import load_graph_from_pickle
+import networkx as nx
+
+# Load NetworkX format
+graph_manager = load_graph_from_pickle('diffgraph.pkl')
+
+# Use NetworkX algorithms
+print(f"Total components: {graph_manager.component_graph.number_of_nodes()}")
+print(f"Component dependencies: {graph_manager.component_graph.number_of_edges()}")
+```
+
+**See also**: [Structured Output Design](docs/planning/STRUCTURED_OUTPUT_DESIGN.md) for complete schema specification
 
 ## 🤝 Contributing
 
