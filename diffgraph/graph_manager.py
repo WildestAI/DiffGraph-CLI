@@ -301,3 +301,60 @@ class GraphManager:
         mermaid.append("    classDef hidden fill:none,stroke:none")
 
         return "\n".join(mermaid)
+
+    def export_to_dict(self) -> dict:
+        """
+        Export the graph manager state to a dictionary.
+        This is useful for serialization and can be passed to graph_export functions.
+        
+        Returns:
+            Dictionary containing all graph data and metadata
+        """
+        from networkx.readwrite import json_graph
+        
+        # Convert file nodes to serializable format
+        file_nodes_data = {}
+        for file_path, node in self.file_nodes.items():
+            file_nodes_data[file_path] = {
+                'path': node.path,
+                'status': node.status.value,
+                'change_type': node.change_type.value,
+                'summary': node.summary,
+                'error': node.error,
+                'components': [
+                    {
+                        'name': c.name if hasattr(c, 'name') else str(c),
+                        'change_type': c.change_type if hasattr(c, 'change_type') else 'unknown',
+                        'summary': c.summary if hasattr(c, 'summary') else None
+                    } if hasattr(c, '__dict__') else str(c)
+                    for c in (node.components or [])
+                ]
+            }
+        
+        # Convert component nodes to serializable format
+        component_nodes_data = {}
+        for component_id, node in self.component_nodes.items():
+            component_nodes_data[component_id] = {
+                'name': node.name,
+                'file_path': node.file_path,
+                'change_type': node.change_type.value,
+                'component_type': node.component_type,
+                'parent': node.parent,
+                'summary': node.summary,
+                'dependencies': node.dependencies,
+                'dependents': node.dependents
+            }
+        
+        # Convert graphs to node-link format
+        file_graph_data = json_graph.node_link_data(self.file_graph, edges="links")
+        component_graph_data = json_graph.node_link_data(self.component_graph, edges="links")
+        
+        # Combine all data
+        return {
+            'version': '1.0',
+            'file_nodes': file_nodes_data,
+            'component_nodes': component_nodes_data,
+            'file_graph': file_graph_data,
+            'component_graph': component_graph_data,
+            'processed_files': list(self.processed_files)
+        }
