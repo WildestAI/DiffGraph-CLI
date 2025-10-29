@@ -1,14 +1,24 @@
-from typing import List, Dict, Optional, Tuple
+"""
+OpenAI Agents SDK processor for dependency graph generation.
+
+This processor uses OpenAI's Agents SDK to analyze code changes and generate
+dependency graphs at the component level.
+"""
+
+from typing import List, Dict, Optional, Tuple, Callable
 from agents import Agent, Runner
 import os
 from pydantic import BaseModel
-from .graph_manager import GraphManager, FileStatus, ChangeType, ComponentNode
+from ..graph_manager import GraphManager, FileStatus, ChangeType, ComponentNode
 import time
 import random
 import openai
-import re
 import networkx as nx
 from enum import Enum
+
+from .base import BaseProcessor, DiffAnalysis
+from . import register_processor
+
 
 class FileChange(BaseModel):
     """Model representing a file change."""
@@ -16,10 +26,6 @@ class FileChange(BaseModel):
     status: str
     content: str
 
-class DiffAnalysis(BaseModel):
-    """Model representing the analysis of code changes."""
-    summary: str
-    mermaid_diagram: str
 
 class ComponentAnalysis(BaseModel):
     """Model representing a single component's analysis."""
@@ -32,16 +38,19 @@ class ComponentAnalysis(BaseModel):
     dependents: List[str] = []
     nested_components: List[str] = []  # names of components that are nested within this one
 
+
 class CodeChangeAnalysis(BaseModel):
     """Model representing the analysis of code changes from the LLM."""
     summary: str
     components: List[ComponentAnalysis]
     impact: str
 
+
 class DependencyMode(Enum):
     """Mode for processing dependency relationships."""
     DEPENDENCY = "dependency"  # Process components that this component depends on
     DEPENDENT = "dependent"    # Process components that depend on this component
+
 
 def exponential_backoff_retry(func):
     """Decorator to implement exponential backoff retry logic using API rate limit information."""
@@ -76,11 +85,19 @@ def exponential_backoff_retry(func):
                 raise  # Re-raise other exceptions immediately
     return wrapper
 
-class CodeAnalysisAgent:
-    """Agent for analyzing code changes using OpenAI's Agents SDK."""
 
-    def __init__(self, api_key: Optional[str] = None):
-        """Initialize the agent with OpenAI API key."""
+@register_processor("openai-agents-dependency-graph")
+class OpenAIAgentsProcessor(BaseProcessor):
+    """
+    Processor using OpenAI Agents SDK for dependency graph generation.
+    
+    This processor analyzes code changes at the component level (classes, functions, methods)
+    and builds a dependency graph showing relationships between components.
+    """
+
+    def __init__(self, api_key: Optional[str] = None, **kwargs):
+        """Initialize the processor with OpenAI API key."""
+        super().__init__(**kwargs)
         self.api_key = api_key or os.getenv("OPENAI_API_KEY")
         if not self.api_key:
             raise ValueError("OpenAI API key is required. Set OPENAI_API_KEY environment variable.")
@@ -122,6 +139,21 @@ class CodeAnalysisAgent:
 
         self.graph_manager = GraphManager()
 
+    @property
+    def name(self) -> str:
+        """Return the name of this processing mode."""
+        return "openai-agents-dependency-graph"
+
+    @property
+    def description(self) -> str:
+        """Return a description of this processing mode."""
+        return "Uses OpenAI Agents SDK to analyze code and generate component-level dependency graphs"
+
+    @classmethod
+    def get_required_config(cls) -> List[str]:
+        """Return required configuration parameters."""
+        return ["api_key"]
+
     def _determine_change_type(self, status: str) -> ChangeType:
         """Convert git status to ChangeType."""
         if status == "untracked":
@@ -137,7 +169,11 @@ class CodeAnalysisAgent:
         result = Runner.run_sync(self.agent, prompt)
         return result.final_output
 
-    def analyze_changes(self, files_with_content: List[Dict[str, str]], progress_callback=None) -> DiffAnalysis:
+    def analyze_changes(
+        self, 
+        files_with_content: List[Dict[str, str]], 
+        progress_callback: Optional[Callable] = None
+    ) -> DiffAnalysis:
         """
         Analyze code changes using the OpenAI agent, processing files incrementally.
 

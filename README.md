@@ -58,12 +58,52 @@ This will:
 - `--api-key`: Specify your OpenAI API key (defaults to OPENAI_API_KEY environment variable)
 - `--output` or `-o`: Specify the output HTML file path (default: diffgraph.html)
 - `--no-open`: Don't automatically open the HTML report in browser
+- `--mode` or `-m`: Select processing mode for diffgraph generation (default: openai-agents-dependency-graph)
+- `--list-modes`: List all available processing modes
 - `--version`: Show version information
 
-Example:
+Examples:
 ```bash
-wild --output my-report.html --no-open
+# Generate report with default mode
+wild diff
+
+# Generate report with custom output path
+wild diff --output my-report.html --no-open
+
+# List available processing modes
+wild diff --list-modes
+
+# Use a specific processing mode
+wild diff --mode openai-agents-dependency-graph
 ```
+
+## 🔧 Processing Modes
+
+DiffGraph supports multiple processing modes for analyzing code changes. Each mode provides a different perspective on your code:
+
+### Available Modes
+
+#### `openai-agents-dependency-graph` (default)
+Uses OpenAI Agents SDK to analyze code and generate component-level dependency graphs. This mode:
+- Identifies classes, functions, and methods in your changes
+- Analyzes dependencies between components
+- Generates a visual dependency graph showing how components relate to each other
+- Best for understanding architectural changes and component interactions
+
+### Future Modes
+
+The architecture is designed to support additional processing modes:
+- **tree-sitter-dependency-graph**: AST-based analysis using Tree-sitter
+- **data-flow-analysis**: Focus on data flow and transformations
+- **user-context-analysis**: Analyze changes from a user interaction perspective
+- **architecture-analysis**: System-level architectural insights
+
+### Adding Custom Processing Modes
+
+Developers can extend DiffGraph by creating custom processing modes. See the `diffgraph/processing_modes/` directory for examples. Each processor must:
+1. Inherit from `BaseProcessor`
+2. Implement the `analyze_changes()` method
+3. Register itself using the `@register_processor` decorator
 
 ## 📊 Example Output
 
