@@ -5,6 +5,21 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+- **Tree-sitter Dependency Extraction (Phase 1)**: Static AST-based analysis mode
+  - New `tree-sitter-dependency-graph` processing mode
+  - Multi-language support framework for Python, TypeScript, JavaScript, Go, Rust, Java, Swift
+  - Python extraction fully implemented: classes, functions, methods, imports
+  - Component relationship extraction from static analysis
+  - Uses tree-sitter-language-pack for fast, accurate parsing
+  - No AI/API calls required - pure static analysis
+
+### Changed
+- Added `tree-sitter-language-pack>=0.10.0` dependency to setup.py
+- Made tree-sitter processor optional (graceful fallback if not installed)
+
 ## [1.3.0] - 2025-10-28
 
 ### Added
@@ -20,6 +35,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - Added `--mode` / `-m` option to select processing mode
   - Added `--list-modes` flag to display available processing modes
   - Default mode: `openai-agents-dependency-graph` (backward compatible)
+- **Graph Export Integration**: Merged graph export features from v1.2.0
+  - `--format` option to export graph data (JSON, pickle, GraphML)
+  - Structured JSON output format optimized for integrations
 - **Documentation**:
   - Added comprehensive developer guide: `docs/ADDING_PROCESSING_MODES.md`
   - Updated README.md with processing modes information

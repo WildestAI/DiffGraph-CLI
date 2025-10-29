@@ -89,6 +89,13 @@ def list_available_modes() -> Dict[str, str]:
 # This will be populated as we add more processors
 from . import openai_agents_dependency  # noqa: F401, E402
 
+# Import optional processors
+try:
+    from . import tree_sitter_dependency  # noqa: F401, E402
+except ImportError:
+    # tree-sitter-languages not installed, skip this processor
+    pass
+
 
 __all__ = [
     "BaseProcessor",

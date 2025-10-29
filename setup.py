@@ -6,6 +6,7 @@ setup(
     packages=find_packages(),
     install_requires=[
         "click>=8.1.7",
+        "tree-sitter-language-pack>=0.10.0",
     ],
     entry_points={
         "console_scripts": [

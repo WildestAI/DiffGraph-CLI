@@ -104,11 +104,32 @@ Uses OpenAI Agents SDK to analyze code and generate component-level dependency g
 - Analyzes dependencies between components
 - Generates a visual dependency graph showing how components relate to each other
 - Best for understanding architectural changes and component interactions
+- **Requires**: OpenAI API key
+
+#### `tree-sitter-dependency-graph` (NEW in Phase 1)
+Static AST-based dependency extraction using tree-sitter. This mode:
+- Parses source files using tree-sitter for accurate syntax analysis
+- Extracts components (classes, functions, methods) from AST
+- Identifies import statements and function calls
+- Supports multiple programming languages:
+  - **Python** (fully supported)
+  - TypeScript, JavaScript, Go, Rust, Java, Swift (in progress)
+- No API calls required - pure static analysis
+- Fast and deterministic results
+- Best for quick analysis without AI costs
+
+Example usage:
+```bash
+# Use tree-sitter mode for Python analysis
+wild diff --mode tree-sitter-dependency-graph
+
+# Export tree-sitter analysis as JSON
+wild diff --mode tree-sitter-dependency-graph --format graph
+```
 
 ### Future Modes
 
 The architecture is designed to support additional processing modes:
-- **tree-sitter-dependency-graph**: AST-based analysis using Tree-sitter
 - **data-flow-analysis**: Focus on data flow and transformations
 - **user-context-analysis**: Analyze changes from a user interaction perspective
 - **architecture-analysis**: System-level architectural insights
