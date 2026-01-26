@@ -1,0 +1,273 @@
+manifest:
+  version: "0.1.2"
+  schema: https://a2as.org/cert/schema
+  subject:
+    name: wildestai/diffgraph-cli
+    source: https://github.com/wildestai/diffgraph-cli
+    branch: main
+    commit: "a43abac1"
+    scope: [diffgraph/graph_manager.py, diffgraph/cli.py, diffgraph/ai_analysis.py]
+  issued:
+    by: A2AS.org
+    at: '2026-01-26T16:14:45Z'
+  signatures:
+    digest: sha256:Wv8_AJ5iVHCdwnHFeCfXSiFojSLPKA7PRcx_9qRWz68
+    key: ed25519:EvlDNDdKn86Swdp-JnTIu7LF1CGKEiHlL2l0n5BWsTw
+    sig: ed25519:1yXq6p7-VywCKc5L_WB8G5QjypQbEyylafcFdD118Gw-8wrOHuqzSvpVjliD-IhyhrqfBpjWYJ4ZH_mA0DmnAw
+
+agents:
+  agent:
+    type: instance
+    models: [gpt-4o]
+    params:
+      class: CodeAnalysisAgent
+      name: Code Analysis Agent
+      output_type: CodeChangeAnalysis
+      instructions: ['You are an expert code analyzer. Your task is to:', 1. Analyze the given code changes, '2. For each
+          component that was changed, identify:', '- Its name', '- Its type (container/function/method)', '- How it was changed
+          (added, deleted, or modified)', '- Its parent component (if it''s nested within another component)', '- Its dependencies
+          (what it uses)', '- Its dependents (what uses it)', '- Any nested components within it (if it''s a container)',
+        'Important guidelines:', '- A ''container'' is any component that can contain other components (classes, interfaces,
+          traits, modules, namespaces)', '- A ''function'' is any standalone function or procedure', '- A ''method'' is any
+          function that belongs to a container', '- Always include both container-level and nested component changes', '-
+          For nested components, specify their parent container', '- For containers, list any nested components that were
+          changed', '- Dependencies can be to both container-level and nested components', '- If a method/function is changed,
+          it should be listed as a separate component with its parent specified', 3. Generate a clear summary of the changes,
+        'Note: For each component, you must specify:', '- component_type: what kind of component it is (container/function/method)',
+        '- change_type: how it was changed (added, deleted, modified)', '- parent: the name of its parent component if it''s
+          nested (e.g., a method within a class)', '- nested_components: list of any components nested within this one (if
+          it''s a container)']
+
+models:
+  gpt-4o:
+    type: literal
+    agents: [agent]
+
+imports:
+  Agent: agents.Agent
+  AnalysisResult: diffgraph.html_report.AnalysisResult
+  BaseModel: pydantic.BaseModel
+  ChangeType: graph_manager.ChangeType
+  click: click
+  CodeAnalysisAgent: diffgraph.ai_analysis.CodeAnalysisAgent
+  ComponentNode: graph_manager.ComponentNode
+  dataclass: dataclasses.dataclass
+  debug_environment: diffgraph.env_loader.debug_environment
+  Dict: typing.Dict
+  Enum: enum.Enum
+  FileStatus: graph_manager.FileStatus
+  generate_html_report: diffgraph.html_report.generate_html_report
+  GraphManager: graph_manager.GraphManager
+  html: html
+  involves_working_tree: diffgraph.utils.involves_working_tree
+  List: typing.List
+  load_env_file: diffgraph.env_loader.load_env_file
+  nx: networkx
+  openai: openai
+  Optional: typing.Optional
+  os: os
+  Path: pathlib.Path
+  random: random
+  re: re
+  Runner: agents.Runner
+  sanitize_diff_args: diffgraph.utils.sanitize_diff_args
+  Set: typing.Set
+  spinner: click_spinner.spinner
+  subprocess: subprocess
+  sys: sys
+  time: time
+  Tuple: typing.Tuple
+
+functions:
+  __init__:
+    type: sync
+    module: diffgraph.ai_analysis
+    args: [self, api_key]
+  __post_init__:
+    type: sync
+    module: diffgraph.graph_manager
+    args: [self]
+  _add_dependency_relationship:
+    type: sync
+    module: diffgraph.ai_analysis
+    args: [self, source_path, target_path]
+    params:
+      returns: bool
+  _determine_change_type:
+    type: sync
+    module: diffgraph.ai_analysis
+    args: [self, status]
+    params:
+      returns: ChangeType
+  _find_component_match:
+    type: sync
+    module: diffgraph.ai_analysis
+    args: [self, dep, other_comp, comp]
+    params:
+      returns: bool
+  _process_dependencies:
+    type: sync
+    module: diffgraph.ai_analysis
+    args: [self, comp, current_file, mode]
+    params:
+      returns: None
+  _run_agent_analysis:
+    type: sync
+    module: diffgraph.ai_analysis
+    args: [self, prompt]
+    params:
+      returns: str
+  _sanitize_tooltip:
+    type: sync
+    module: diffgraph.graph_manager
+    args: [self, text]
+    params:
+      returns: str
+  _would_create_cycle:
+    type: sync
+    module: diffgraph.ai_analysis
+    args: [self, source, target]
+    params:
+      returns: bool
+  add_component:
+    type: sync
+    module: diffgraph.graph_manager
+    args: [self, name, file_path, change_type, component_type, parent, summary, dependencies, dependents]
+    params:
+      returns: None
+  add_component_dependency:
+    type: sync
+    module: diffgraph.graph_manager
+    args: [self, source, target]
+    params:
+      returns: None
+  add_file:
+    type: sync
+    module: diffgraph.graph_manager
+    args: [self, file_path, change_type]
+    params:
+      returns: None
+  analyze_changes:
+    type: sync
+    module: diffgraph.ai_analysis
+    args: [self, files_with_content, progress_callback]
+    params:
+      returns: DiffAnalysis
+  exponential_backoff_retry:
+    type: sync
+    module: diffgraph.ai_analysis
+    args: [func]
+  get_changed_files:
+    type: sync
+    module: diffgraph.cli
+    args: [diff_args]
+    params:
+      returns: List[Dict]
+  get_connected_components:
+    type: sync
+    module: diffgraph.graph_manager
+    args: [self, start_component, max_depth]
+    params:
+      returns: Set[str]
+  get_mermaid_diagram:
+    type: sync
+    module: diffgraph.graph_manager
+    args: [self]
+    params:
+      returns: str
+  get_next_file:
+    type: sync
+    module: diffgraph.graph_manager
+    args: [self]
+    params:
+      returns: Optional[str]
+  is_git_repo:
+    type: sync
+    module: diffgraph.cli
+    params:
+      returns: bool
+  load_file_contents:
+    type: sync
+    module: diffgraph.cli
+    args: [changed_files, diff_args]
+    params:
+      returns: List[Dict]
+  main:
+    type: sync
+    module: diffgraph.cli
+    args: [args, api_key, output, no_open, debug_env]
+  mark_error:
+    type: sync
+    module: diffgraph.graph_manager
+    args: [self, file_path, error]
+    params:
+      returns: None
+  mark_processed:
+    type: sync
+    module: diffgraph.graph_manager
+    args: [self, file_path, summary, components]
+    params:
+      returns: None
+  mark_processing:
+    type: sync
+    module: diffgraph.graph_manager
+    args: [self, file_path]
+    params:
+      returns: None
+  progress_callback:
+    type: sync
+    module: diffgraph.cli
+    args: [current_file, total_files, status]
+  wrapper:
+    type: sync
+    module: diffgraph.ai_analysis
+
+variables:
+  OPENAI_API_KEY:
+    type: env
+    params:
+      caller: [os.getenv]
+      path: [diffgraph.ai_analysis]
+
+files:
+  current_file:
+    type: variable
+    actions: [read]
+    params:
+      caller: [os.path.basename]
+  file_path:
+    type: variable
+    actions: [read]
+    params:
+      caller: [open]
+      alias: [f]
+
+processes:
+  git:
+    type: shell
+    actions: [exec]
+    args: [[rev-parse, --is-inside-work-tree], [ls-files, --others, --exclude-standard, -z]]
+    params:
+      caller: [subprocess.run]
+      shell: ["False", "False"]
+  open:
+    type: shell
+    actions: [exec]
+    args: [[html_path]]
+    params:
+      caller: [subprocess.run]
+      shell: ["False"]
+  os.startfile:
+    type: shell
+    actions: [exec]
+    args: [[html_path]]
+    params:
+      caller: [os.startfile]
+      shell: ["False"]
+  xdg-open:
+    type: shell
+    actions: [exec]
+    args: [[html_path]]
+    params:
+      caller: [subprocess.run]
+      shell: ["False"]
