@@ -117,8 +117,8 @@
           ]
         },
         "file": { "type": "string", "description": "Relevant for ast_parse, import_statement, call_site." },
-        "line_start": { "type": "integer", "minimum": 0, "description": "1-indexed line number." },
-        "line_end": { "type": "integer", "minimum": 0 },
+        "line_start": { "type": "integer", "minimum": 1, "description": "1-indexed line number." },
+        "line_end": { "type": "integer", "minimum": 1 },
         "snippet": { "type": "string", "description": "Short source excerpt (signature line or import statement)." },
         "pattern": { "type": "string", "description": "Glob/regex pattern (kind=path_pattern)." },
         "detail": { "type": "string", "description": "Free-text detail (kind=git_diff_stat/name_status)." },
@@ -253,8 +253,8 @@
               "additionalProperties": false,
               "properties": {
                 "file": { "type": "string" },
-                "line_start": { "type": "integer", "minimum": 0 },
-                "line_end": { "type": "integer", "minimum": 0 }
+                "line_start": { "type": "integer", "minimum": 1, "description": "1-indexed line number." },
+                "line_end": { "type": "integer", "minimum": 1, "description": "1-indexed line number (inclusive)." }
               }
             },
             { "type": "null" }
@@ -340,7 +340,7 @@
 
     "SummaryEntry": {
       "type": "object",
-      "required": ["text", "analysis_source"],
+      "required": ["text", "analysis_source", "evidence"],
       "additionalProperties": false,
       "properties": {
         "text": {
@@ -360,6 +360,20 @@
         "evidence": {
           "type": "array",
           "items": { "$ref": "#/$defs/Evidence" },
+          "allOf": [
+            {
+              "contains": {
+                "properties": { "kind": { "const": "llm_inference" } },
+                "required": ["kind"]
+              }
+            },
+            {
+              "contains": {
+                "properties": { "kind": { "const": "structural_basis" } },
+                "required": ["kind"]
+              }
+            }
+          ],
           "description": "Must include at least one llm_inference entry and one structural_basis entry."
         }
       }
