@@ -75,7 +75,15 @@ def run_wild_diff(
 
     cmd = ["wild", "diff", "--no-open"]
     if output_file:
-        cmd += ["--output", output_file]
+        # Sanitize output_file — must resolve inside the repo directory
+        resolved_output = (repo / output_file).resolve()
+        if not resolved_output.is_relative_to(repo):
+            return {
+                "success": False,
+                "error": f"output_file must be inside the repository directory: {repo}",
+            }
+        resolved_output.parent.mkdir(parents=True, exist_ok=True)
+        cmd += ["--output", str(resolved_output)]
     if args:
         cmd += args.split()
 
@@ -183,14 +191,14 @@ def get_docs(name: str) -> dict:
     if name in slug_map:
         target = slug_map[name]
     else:
-        # Try as relative path from repo root
+        # Try as relative path from repo root — guard against path traversal
         candidate = (REPO_ROOT / name).resolve()
-        if candidate.exists():
+        if candidate.is_relative_to(REPO_ROOT.resolve()) and candidate.exists():
             target = candidate
         else:
             # Try docs subdir
             candidate2 = (DOCS_DIR / name).resolve()
-            if candidate2.exists():
+            if DOCS_DIR.exists() and candidate2.is_relative_to(DOCS_DIR.resolve()) and candidate2.exists():
                 target = candidate2
 
     if target is None or not target.exists():

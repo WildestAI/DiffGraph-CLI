@@ -66,7 +66,7 @@ python mcp_server.py
 ```
 
 The MCP server exposes tools:
-- `run_wild_diff(repo_path, args)` — run wild diff and return structured analysis
+- `run_wild_diff(repo_path, args, output_file)` — run wild diff and return structured analysis; `output_file` is optional (defaults to `<repo_path>/diffgraph.html`)
 - `get_docs(page)` — retrieve a documentation page
 - `list_docs()` — list available documentation pages
 - `search_docs(query)` — search across docs
@@ -79,7 +79,7 @@ Environment variables:
 
 ## Notes
 
-- Works with Python 3.8+
+- Works with Python 3.7+
 - Tested on macOS and Linux
 - The CLI wraps `git` — it must be run inside a git repository
 - Large diffs may be slow; consider scoping with file paths or commit ranges
