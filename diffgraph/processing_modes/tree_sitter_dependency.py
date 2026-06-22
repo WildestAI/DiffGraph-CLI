@@ -8,6 +8,7 @@ through static analysis of the AST, supporting multiple programming languages.
 from typing import List, Dict, Optional, Set, Tuple, Callable
 import subprocess
 import re
+import time
 from pathlib import Path
 from dataclasses import dataclass
 
@@ -24,6 +25,11 @@ except ImportError:
 
 from ..graph_manager import GraphManager, ChangeType, ComponentNode
 from .base import BaseProcessor, DiffAnalysis
+from .schema_v2_adapter import (
+    compute_symbol_diff,
+    build_schema_v2_output,
+    build_import_relationship,
+)
 from . import register_processor
 
 
@@ -788,6 +794,195 @@ class TreeSitterProcessor(BaseProcessor):
         traverse(tree.root_node)
         return calls
     
+    # ------------------------------------------------------------------
+    # Pre/post content helpers (Gap 7 from PR-13-REVIEW.md)
+    # ------------------------------------------------------------------
+
+    def _get_pre_change_content(self, file_path: str, staged: bool = False) -> Optional[str]:
+        """
+        Fetch the pre-change version of a file.
+
+        - For unstaged diffs:    ``git show HEAD:<file>``
+        - For staged diffs:      ``git show HEAD:<file>``  (same — HEAD is the base)
+        - New / untracked files: returns None (no pre-change version exists)
+        """
+        try:
+            result = subprocess.run(
+                ["git", "show", f"HEAD:{file_path}"],
+                capture_output=True, text=True, check=True,
+            )
+            return result.stdout
+        except subprocess.CalledProcessError:
+            return None  # File is new — no pre-change version
+
+    def _get_post_change_content(self, file_path: str, staged: bool = False) -> Optional[str]:
+        """
+        Fetch the post-change version of a file.
+
+        - For unstaged diffs:    read from the working tree filesystem
+        - For staged diffs:      ``git show :0:<file>`` (index / staging area)
+        - Deleted files:         returns None
+        """
+        if staged:
+            try:
+                result = subprocess.run(
+                    ["git", "show", f":0:{file_path}"],
+                    capture_output=True, text=True, check=True,
+                )
+                return result.stdout
+            except subprocess.CalledProcessError:
+                return None  # Deleted in staging area
+        else:
+            try:
+                with open(file_path, "r", encoding="utf-8", errors="replace") as f:
+                    return f.read()
+            except OSError:
+                return None  # File deleted or unreadable
+
+    # ------------------------------------------------------------------
+    # Schema v2 entry point (Gap 1–7 from PR-13-REVIEW.md)
+    # ------------------------------------------------------------------
+
+    def analyze_changes_v2(
+        self,
+        files_with_content: List[Dict[str, str]],
+        diff_ref: Optional[Dict] = None,
+        wild_version: str = "2.0.0-dev",
+        staged: bool = False,
+        progress_callback: Optional[Callable] = None,
+    ) -> Dict:
+        """
+        Analyse code changes and return a DiffGraph v2.0-compliant dict.
+
+        Differences from analyze_changes():
+        - Compares pre/post AST snapshots to compute ``change_kind`` per symbol.
+        - Emits ``symbols[]`` + ``relationships[]`` with ``analysis_source``.
+        - No GraphManager, no Mermaid, no LLM — purely structural.
+        - ``metadata.privacy_tier`` is always ``"local"``.
+
+        Args:
+            files_with_content: Same format as analyze_changes().
+            diff_ref:  Optional diff provenance dict. Defaults to
+                       {"from": "HEAD", "to": "working_tree", "kind": "unstaged"}.
+            wild_version: Semver string for the schema ``wild_version`` field.
+            staged:    True when analysing staged changes (``wild diff --staged``).
+            progress_callback: Optional (file, total, status) callback.
+
+        Returns:
+            A dict that validates against diffgraph-v2.schema.json.
+        """
+        if diff_ref is None:
+            diff_ref = {
+                "from": "HEAD",
+                "to": "index" if staged else "working_tree",
+                "kind": "staged" if staged else "unstaged",
+            }
+
+        start_time = time.time()
+        total_files = len(files_with_content)
+
+        all_symbol_changes = []
+        all_import_relationships = []
+        file_change_list = []
+        languages_seen: set = set()
+
+        for idx, file_data in enumerate(files_with_content):
+            file_path = file_data["path"]
+            status = file_data.get("status", "modified")
+
+            if progress_callback:
+                progress_callback(file_path, total_files, "processing")
+
+            # Map status → schema v2 change_kind for the file entry
+            file_change_kind_map = {
+                "untracked": "added",
+                "added": "added",
+                "deleted": "deleted",
+                "renamed": "renamed",
+                "modified": "modified",
+            }
+            file_change_kind = file_change_kind_map.get(status, "modified")
+            file_change_list.append({"path": file_path, "change_kind": file_change_kind})
+
+            # Determine language — skip unsupported files
+            language = get_language_from_file(file_path)
+            if not language:
+                if progress_callback:
+                    progress_callback(file_path, total_files, "skipped")
+                continue
+            languages_seen.add(language)
+
+            # Fetch pre/post content
+            is_new = status in ("untracked", "added")
+            is_deleted = status == "deleted"
+
+            pre_content: Optional[str] = None if is_new else self._get_pre_change_content(file_path, staged)
+            post_content: Optional[str] = None if is_deleted else self._get_post_change_content(file_path, staged)
+
+            # Parse pre snapshot
+            pre_components = []
+            if pre_content:
+                try:
+                    parser = self._get_parser(language)
+                    pre_tree = parser.parse(pre_content.encode("utf-8"))
+                    pre_components = self._extract_components(
+                        language, pre_tree, pre_content.encode("utf-8"), file_path
+                    )
+                except Exception as e:
+                    pass  # Treat parse failure as empty pre-snapshot
+
+            # Parse post snapshot
+            post_components = []
+            post_imports: List[str] = []
+            if post_content:
+                try:
+                    parser = self._get_parser(language)
+                    post_tree = parser.parse(post_content.encode("utf-8"))
+                    post_source_bytes = post_content.encode("utf-8")
+                    post_components = self._extract_components(
+                        language, post_tree, post_source_bytes, file_path
+                    )
+                    # Extract imports from post-change version only
+                    if language == "python":
+                        post_imports = self._extract_imports_python(
+                            post_tree, post_source_bytes
+                        )
+                except Exception as e:
+                    pass  # Treat parse failure as empty post-snapshot
+
+            # Compute symbol-level diff
+            symbol_changes = compute_symbol_diff(
+                pre_components=pre_components,
+                post_components=post_components,
+                pre_content=pre_content,
+                post_content=post_content,
+            )
+            all_symbol_changes.extend(symbol_changes)
+
+            # Build import relationships (structural, from post-change)
+            for imported_module in post_imports:
+                all_import_relationships.append(
+                    build_import_relationship(
+                        source_file=file_path,
+                        imported_module=imported_module,
+                    )
+                )
+
+            if progress_callback:
+                progress_callback(file_path, total_files, "completed")
+
+        duration_ms = int((time.time() - start_time) * 1000)
+
+        return build_schema_v2_output(
+            symbol_changes=all_symbol_changes,
+            import_relationships=all_import_relationships,
+            file_changes=file_change_list,
+            diff_ref=diff_ref,
+            wild_version=wild_version,
+            analysis_duration_ms=duration_ms,
+            languages_detected=sorted(languages_seen),
+        )
+
     def analyze_changes(
         self, 
         files_with_content: List[Dict[str, str]], 
