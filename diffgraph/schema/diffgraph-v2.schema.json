@@ -1,0 +1,450 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://wildestai.com/schemas/diffgraph/v2.0/schema.json",
+  "title": "DiffGraph v2.0",
+  "description": "Canonical output schema for the `wild diff` CLI. Every claim carries its analysis_source (structural | inferred | derived) and an evidence pointer. Consumers MUST reject unknown major schema_version values.",
+  "type": "object",
+  "required": ["schema_version", "generated_at", "wild_version", "diff_ref", "files", "symbols", "relationships", "metadata"],
+  "additionalProperties": false,
+
+  "properties": {
+
+    "schema_version": {
+      "type": "string",
+      "description": "Semver-style MAJOR.MINOR. Consumers MUST reject unknown MAJOR. MINOR bumps are additive only.",
+      "pattern": "^\\d+\\.\\d+$",
+      "examples": ["2.0"]
+    },
+
+    "generated_at": {
+      "type": "string",
+      "format": "date-time",
+      "description": "ISO 8601 UTC timestamp of the analysis run."
+    },
+
+    "wild_version": {
+      "type": "string",
+      "description": "Semver of the `wild` CLI that produced this artifact.",
+      "examples": ["2.0.0", "2.1.0-dev"]
+    },
+
+    "diff_ref": {
+      "type": "object",
+      "description": "Describes what was diffed.",
+      "required": ["kind"],
+      "additionalProperties": false,
+      "properties": {
+        "kind": {
+          "type": "string",
+          "enum": ["unstaged", "staged", "commit_range", "file_scope"],
+          "description": "Maps directly to the `wild diff` variant used."
+        },
+        "base_ref": {
+          "type": ["string", "null"],
+          "description": "Commit SHA or ref for the base side. null for working-tree diffs."
+        },
+        "head_ref": {
+          "type": ["string", "null"],
+          "description": "Commit SHA or ref for the head side. null for working-tree diffs."
+        },
+        "pathspecs": {
+          "type": "array",
+          "items": { "type": "string" },
+          "description": "File or glob filters passed to `wild diff`. Empty = all files."
+        },
+        "repo_root": {
+          "type": "string",
+          "description": "Absolute path to the git repo root. Used to resolve relative file paths."
+        }
+      }
+    },
+
+    "files": {
+      "type": "array",
+      "description": "One entry per file that appeared in the diff.",
+      "items": { "$ref": "#/$defs/FileEntry" }
+    },
+
+    "symbols": {
+      "type": "array",
+      "description": "Named code entities in changed files. Extracted by static analysis (structural) or LLM (inferred).",
+      "items": { "$ref": "#/$defs/SymbolEntry" }
+    },
+
+    "relationships": {
+      "type": "array",
+      "description": "Edges between symbols or files. analysis_source is mandatory on every edge.",
+      "items": { "$ref": "#/$defs/RelationshipEntry" }
+    },
+
+    "summary": {
+      "oneOf": [
+        { "$ref": "#/$defs/SummaryEntry" },
+        { "type": "null" }
+      ],
+      "description": "Top-level LLM summary of the change. null when running in local-only mode."
+    },
+
+    "metadata": {
+      "$ref": "#/$defs/Metadata"
+    }
+  },
+
+  "$defs": {
+
+    "AnalysisSource": {
+      "type": "string",
+      "enum": ["structural", "inferred", "derived"],
+      "description": "structural = deterministic static analysis; inferred = LLM interpretation; derived = aggregated from structural + inferred."
+    },
+
+    "Evidence": {
+      "type": "object",
+      "description": "Pointer to what produced a claim. kind determines which fields are present.",
+      "required": ["kind"],
+      "properties": {
+        "kind": {
+          "type": "string",
+          "enum": [
+            "git_diff_stat",
+            "git_diff_name_status",
+            "path_pattern",
+            "ast_parse",
+            "import_statement",
+            "call_site",
+            "llm_inference",
+            "structural_basis"
+          ]
+        },
+        "file": { "type": "string", "description": "Relevant for ast_parse, import_statement, call_site." },
+        "line_start": { "type": "integer", "minimum": 1, "description": "1-indexed line number." },
+        "line_end": { "type": "integer", "minimum": 1 },
+        "snippet": { "type": "string", "description": "Short source excerpt (signature line or import statement)." },
+        "pattern": { "type": "string", "description": "Glob/regex pattern (kind=path_pattern)." },
+        "detail": { "type": "string", "description": "Free-text detail (kind=git_diff_stat/name_status)." },
+        "model": { "type": "string", "description": "LLM model id (kind=llm_inference)." },
+        "prompt_ref": { "type": "string", "description": "Internal prompt template reference (kind=llm_inference)." },
+        "temperature": { "type": "number", "minimum": 0, "maximum": 2, "description": "(kind=llm_inference)." },
+        "symbol_ids": {
+          "type": "array",
+          "items": { "type": "string" },
+          "description": "Symbol IDs that grounded this inferred claim (kind=structural_basis)."
+        },
+        "file_ids": {
+          "type": "array",
+          "items": { "type": "string" },
+          "description": "File IDs that grounded this inferred claim (kind=structural_basis)."
+        }
+      }
+    },
+
+    "Classification": {
+      "type": "object",
+      "required": ["is_test", "analysis_source"],
+      "additionalProperties": false,
+      "properties": {
+        "is_test": { "type": "boolean" },
+        "analysis_source": { "$ref": "#/$defs/AnalysisSource" },
+        "evidence": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/Evidence" }
+        }
+      }
+    },
+
+    "FileEntry": {
+      "type": "object",
+      "required": ["id", "path", "change_kind", "analysis_source"],
+      "additionalProperties": false,
+      "properties": {
+        "id": {
+          "type": "string",
+          "description": "Stable ID: 'file::<path>' (normalized, forward slashes, relative to repo_root).",
+          "pattern": "^file::.+"
+        },
+        "path": {
+          "type": "string",
+          "description": "Current path relative to repo root."
+        },
+        "old_path": {
+          "type": ["string", "null"],
+          "description": "Pre-rename path. null if not a rename."
+        },
+        "language": {
+          "type": ["string", "null"],
+          "description": "Detected language. null = unknown (static analysis not available for this file)."
+        },
+        "change_kind": {
+          "type": "string",
+          "enum": ["added", "modified", "deleted", "renamed", "renamed_modified"]
+        },
+        "lines_added": {
+          "type": ["integer", "null"],
+          "minimum": 0
+        },
+        "lines_removed": {
+          "type": ["integer", "null"],
+          "minimum": 0
+        },
+        "analysis_source": {
+          "type": "string",
+          "const": "structural",
+          "description": "File entries are always structural (git metadata)."
+        },
+        "evidence": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/Evidence" }
+        },
+        "classification": {
+          "oneOf": [
+            { "$ref": "#/$defs/Classification" },
+            { "type": "null" }
+          ]
+        }
+      }
+    },
+
+    "SymbolEntry": {
+      "type": "object",
+      "required": ["id", "name", "file_id", "kind", "change_kind", "analysis_source"],
+      "additionalProperties": false,
+      "properties": {
+        "id": {
+          "type": "string",
+          "description": "Stable ID: 'sym::<file_path>::<qualified_name>'. Deterministic for the same diff + repo state.",
+          "pattern": "^sym::.+::.+"
+        },
+        "name": {
+          "type": "string",
+          "description": "Short name as it appears in source."
+        },
+        "qualified_name": {
+          "type": ["string", "null"],
+          "description": "Dotted path where resolvable (e.g. 'auth.validator.validate_token'). null if cannot determine."
+        },
+        "file_id": {
+          "type": "string",
+          "description": "Refers to files[].id.",
+          "pattern": "^file::.+"
+        },
+        "kind": {
+          "type": "string",
+          "enum": ["function", "class", "method", "import", "constant", "type_alias", "module"],
+          "description": "Symbol category."
+        },
+        "parent_id": {
+          "type": ["string", "null"],
+          "description": "Symbol ID of containing class/function. null for top-level symbols.",
+          "pattern": "^sym::.+::.+"
+        },
+        "change_kind": {
+          "type": "string",
+          "enum": ["added", "modified", "deleted", "unchanged"],
+          "description": "Derived by diffing tree-sitter AST outputs pre- and post-change."
+        },
+        "analysis_source": {
+          "$ref": "#/$defs/AnalysisSource"
+        },
+        "location": {
+          "oneOf": [
+            {
+              "type": "object",
+              "required": ["file", "line_start", "line_end"],
+              "additionalProperties": false,
+              "properties": {
+                "file": { "type": "string" },
+                "line_start": { "type": "integer", "minimum": 1, "description": "1-indexed line number." },
+                "line_end": { "type": "integer", "minimum": 1, "description": "1-indexed line number (inclusive)." }
+              }
+            },
+            { "type": "null" }
+          ],
+          "description": "Line range in post-change file. null for deleted symbols."
+        },
+        "evidence": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/Evidence" },
+          "description": "Required for inferred; strongly recommended for structural. Structural symbols should include at least one ast_parse entry."
+        }
+      },
+      "if": {
+        "properties": { "analysis_source": { "const": "inferred" } },
+        "required": ["analysis_source"]
+      },
+      "then": {
+        "required": ["evidence"],
+        "properties": {
+          "evidence": { "minItems": 1 }
+        }
+      }
+    },
+
+    "RelationshipEntry": {
+      "type": "object",
+      "required": ["id", "kind", "source_id", "target_id", "analysis_source"],
+      "additionalProperties": false,
+      "properties": {
+        "id": {
+          "type": "string",
+          "description": "Stable ID: 'rel::<source_id>-><target_id>'. Append '#N' for multi-edges.",
+          "pattern": "^rel::.+->.+"
+        },
+        "kind": {
+          "type": "string",
+          "enum": ["imports", "calls", "inherits", "implements", "defines", "contains", "semantic_related", "co_changed"],
+          "description": "See design/JSON-SCHEMA.md for semantics and allowed analysis_source per kind."
+        },
+        "source_id": {
+          "type": "string",
+          "description": "symbols[].id or files[].id."
+        },
+        "target_id": {
+          "type": "string",
+          "description": "symbols[].id or files[].id."
+        },
+        "analysis_source": {
+          "$ref": "#/$defs/AnalysisSource"
+        },
+        "confidence": {
+          "type": ["number", "null"],
+          "minimum": 0,
+          "maximum": 1,
+          "description": "Required when analysis_source == 'inferred'. null for structural relationships."
+        },
+        "resolution_method": {
+          "type": ["string", "null"],
+          "enum": ["import_grounded", "resolved", "heuristic", null],
+          "description": "For 'calls' relationships: how the target was resolved. 'import_grounded' = explicit import + call site, not full project indexing."
+        },
+        "evidence": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/Evidence" }
+        },
+        "label": {
+          "type": ["string", "null"],
+          "description": "Human-readable edge description. From LLM for inferred edges."
+        }
+      },
+      "if": {
+        "properties": { "analysis_source": { "const": "inferred" } },
+        "required": ["analysis_source"]
+      },
+      "then": {
+        "required": ["confidence", "evidence"],
+        "properties": {
+          "evidence": { "minItems": 1 },
+          "confidence": { "type": "number" }
+        }
+      }
+    },
+
+    "SummaryEntry": {
+      "type": "object",
+      "required": ["text", "analysis_source", "evidence"],
+      "additionalProperties": false,
+      "properties": {
+        "text": {
+          "type": "string",
+          "description": "Human-readable summary of the change."
+        },
+        "analysis_source": {
+          "type": "string",
+          "const": "inferred",
+          "description": "Summaries are always inferred (require LLM interpretation)."
+        },
+        "confidence": {
+          "type": ["number", "null"],
+          "minimum": 0,
+          "maximum": 1
+        },
+        "evidence": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/Evidence" },
+          "allOf": [
+            {
+              "contains": {
+                "properties": { "kind": { "const": "llm_inference" } },
+                "required": ["kind"]
+              }
+            },
+            {
+              "contains": {
+                "properties": { "kind": { "const": "structural_basis" } },
+                "required": ["kind"]
+              }
+            }
+          ],
+          "description": "Must include at least one llm_inference entry and one structural_basis entry."
+        }
+      }
+    },
+
+    "Warning": {
+      "type": "object",
+      "required": ["code"],
+      "additionalProperties": false,
+      "properties": {
+        "code": {
+          "type": "string",
+          "enum": ["PARSE_FAILURE", "UNSUPPORTED_LANGUAGE", "PARTIAL_ANALYSIS", "LLM_TIMEOUT", "LLM_ERROR", "UNKNOWN"],
+          "description": "Machine-readable warning code. Consumers can surface these to the user."
+        },
+        "file": { "type": "string" },
+        "detail": { "type": "string" }
+      }
+    },
+
+    "Metadata": {
+      "type": "object",
+      "required": ["privacy_tier"],
+      "additionalProperties": false,
+      "properties": {
+        "privacy_tier": {
+          "type": "string",
+          "enum": ["local", "cloud_llm", "cloud_backend"],
+          "description": "local = no data left the machine; cloud_llm = diff sent to LLM API; cloud_backend = data sent to WildestAI backend."
+        },
+        "cloud_providers_used": {
+          "type": "array",
+          "items": { "type": "string" },
+          "description": "LLM provider IDs used (e.g. 'openai', 'anthropic'). Empty for local-only runs."
+        },
+        "analysis_duration_ms": {
+          "type": ["integer", "null"],
+          "minimum": 0
+        },
+        "languages_detected": {
+          "type": "array",
+          "items": { "type": "string" },
+          "description": "Languages found in the diffed files."
+        },
+        "files_analyzed": {
+          "type": ["integer", "null"],
+          "minimum": 0
+        },
+        "files_skipped": {
+          "type": ["integer", "null"],
+          "minimum": 0
+        },
+        "llm_calls": {
+          "type": ["integer", "null"],
+          "minimum": 0,
+          "description": "Number of LLM API calls made. 0 for local-only runs."
+        },
+        "llm_model": {
+          "type": ["string", "null"],
+          "description": "Primary LLM model used, if any."
+        },
+        "tiers_used": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/AnalysisSource" },
+          "description": "Which analysis tiers contributed to this output."
+        },
+        "warnings": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/Warning" }
+        }
+      }
+    }
+  }
+}
