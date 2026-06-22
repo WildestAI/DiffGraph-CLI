@@ -1,0 +1,37 @@
+# DiffGraph-CLI (WildestAI)
+
+> `wild diff` — AI-powered semantic analysis of git diffs.
+
+## What it does
+
+Wraps `git` and adds an AI-powered `wild diff` command that analyses your git diff
+and produces a dependency graph HTML report showing what changed, how components
+relate, and what needs attention.
+
+## Quick start
+
+```bash
+pip install wildest-ai
+export OPENAI_API_KEY=sk-...
+wild diff          # analyse current unstaged changes
+wild diff --staged # analyse staged changes
+```
+
+All other `wild <cmd>` commands pass through to `git` transparently.
+
+## Agent usage
+
+See `skill.md` in this repo for the full agent skill.
+
+For programmatic MCP access, run:
+```bash
+python mcp_server.py
+```
+
+MCP tools: `run_wild_diff`, `list_docs`, `get_docs`, `search_docs`
+
+## Links
+
+- GitHub: https://github.com/WildestAI/DiffGraph-CLI
+- Website: https://wildest.ai
+- Full context: https://wildest.ai/llms-full.txt

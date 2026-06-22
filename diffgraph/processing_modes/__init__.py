@@ -87,7 +87,11 @@ def list_available_modes() -> Dict[str, str]:
 
 # Import processors to trigger registration
 # This will be populated as we add more processors
-from . import openai_agents_dependency  # noqa: F401, E402
+try:
+    from . import openai_agents_dependency  # noqa: F401, E402
+except ImportError:
+    # openai-agents not installed, skip this processor
+    pass
 
 # Import optional processors
 try:
