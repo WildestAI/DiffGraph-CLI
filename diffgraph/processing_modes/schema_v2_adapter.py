@@ -62,6 +62,36 @@ def symbol_id(file_path: str, qname: str) -> str:
     return f"sym::{file_path}::{qname}"
 
 
+def file_id(file_path: str) -> str:
+    """Schema v2 file ID. Format: ``file::<path>``"""
+    return f"file::{file_path}"
+
+
+def relationship_id(source_id: str, target_id: str, index: int = 0) -> str:
+    """
+    Stable deterministic ID for a relationship entry.
+
+    Schema v2 format: ``rel::<source_id>-><target_id>``.
+    Append ``#N`` for multi-edges (same source/target, different kind).
+    """
+    base = f"rel::{source_id}->{target_id}"
+    return base if index == 0 else f"{base}#{index}"
+
+
+def _component_type_to_kind(component_type: str) -> str:
+    """
+    Map internal component_type strings to schema v2 ``SymbolEntry.kind`` enum.
+
+    Schema enum: function | class | method | import | constant | type_alias | module
+    """
+    mapping = {
+        "function": "function",
+        "method": "method",
+        "container": "class",
+    }
+    return mapping.get(component_type, "function")
+
+
 def file_symbol_id(file_path: str) -> str:
     """Synthetic ID for a file-scope import source (schema v2 D1)."""
     return f"sym::file::{file_path}"
@@ -163,25 +193,51 @@ def compute_symbol_diff(
 # ---------------------------------------------------------------------------
 
 def build_symbol_entry(sc: SymbolChange) -> Dict:
-    """Convert a SymbolChange into a schema v2 ``symbols[]`` entry."""
-    return {
-        "id": symbol_id(sc.file_path, sc.qualified_name),
-        "qualified_name": sc.qualified_name,
+    """
+    Convert a SymbolChange into a schema v2 ``symbols[]`` entry.
+
+    Schema v2 required fields: id, name, file_id, kind, change_kind, analysis_source.
+    Evidence is strongly recommended for structural symbols (ast_parse entry).
+    """
+    # ``name`` is the unqualified symbol name (e.g. ``check`` for ``RateLimiter.check``)
+    unqualified_name = sc.qualified_name.split(".")[-1]
+    # ``parent_id`` is the symbol ID of the containing class, or null for top-level symbols
+    parent_id: Optional[str] = (
+        symbol_id(sc.file_path, sc.parent)
+        if sc.parent
+        else None
+    )
+    # Evidence: flat fields directly on the entry (not nested under "location")
+    evidence_entry: Dict = {
+        "kind": "ast_parse",
         "file": sc.file_path,
+        # Schema v2 line numbers are 1-indexed
+        "line_start": sc.start_line + 1,
+        "line_end": sc.end_line + 1,
+    }
+    # location: required fields are file, line_start, line_end
+    location: Optional[Dict] = (
+        {
+            "file": sc.file_path,
+            "line_start": sc.start_line + 1,
+            "line_end": sc.end_line + 1,
+        }
+        if sc.change_kind != "deleted"
+        else None
+    )
+    entry: Dict = {
+        "id": symbol_id(sc.file_path, sc.qualified_name),
+        "name": unqualified_name,
+        "qualified_name": sc.qualified_name,
+        "file_id": file_id(sc.file_path),
+        "kind": _component_type_to_kind(sc.component_type),
+        "parent_id": parent_id,
         "change_kind": sc.change_kind,
         "analysis_source": "structural",
-        "evidence": [
-            {
-                "kind": "ast_parse",
-                "location": {
-                    "file": sc.file_path,
-                    # Schema v2 line numbers are 1-indexed
-                    "line_start": sc.start_line + 1,
-                    "line_end": sc.end_line + 1,
-                },
-            }
-        ],
+        "location": location,
+        "evidence": [evidence_entry],
     }
+    return entry
 
 
 def build_import_relationship(
@@ -192,24 +248,82 @@ def build_import_relationship(
     """
     Build a schema v2 ``relationships[]`` entry for an import statement.
 
-    The ``from`` side uses a file-scope synthetic symbol ID (schema v2 D1) to
+    The ``source_id`` is a file-scope synthetic symbol ID (schema v2 D1) to
     represent the module-level import, not a specific function.
+    The ``target_id`` is a synthetic module ID (``module::<name>``) — the
+    target may not resolve to a known file within this analysis run.
     """
-    entry: Dict = {
-        "from": file_symbol_id(source_file),
-        "to": imported_module,
-        "kind": "imports",
-        "analysis_source": "structural",
-        "evidence": [
-            {
-                "kind": "import_statement",
-                "location": {"file": source_file},
-            }
-        ],
+    src_id = file_symbol_id(source_file)
+    # Synthetic target: module name may not resolve to a file in the diff;
+    # use a stable namespaced ID so consumers can correlate across runs.
+    tgt_id = f"module::{imported_module}"
+    evidence_entry: Dict = {
+        "kind": "import_statement",
+        "file": source_file,
     }
     if source_line is not None:
-        entry["evidence"][0]["location"]["line_start"] = source_line + 1
-    return entry
+        evidence_entry["line_start"] = source_line + 1
+    return {
+        "id": relationship_id(src_id, tgt_id),
+        "kind": "imports",
+        "source_id": src_id,
+        "target_id": tgt_id,
+        "analysis_source": "structural",
+        "evidence": [evidence_entry],
+    }
+
+
+def _build_diff_ref(raw_diff_ref: Dict) -> Dict:
+    """
+    Convert the internal diff_ref format to the schema v2 format.
+
+    Internal format (from analyze_changes_v2)::
+        {"from": "HEAD", "to": "working_tree", "kind": "unstaged"}
+
+    Schema v2 format (additionalProperties: false)::
+        {"kind": "unstaged", "base_ref": "HEAD", "head_ref": null}
+
+    Only ``kind`` is required. ``base_ref`` and ``head_ref`` are optional.
+    """
+    kind = raw_diff_ref.get("kind", "unstaged")
+    result: Dict = {"kind": kind}
+
+    # Map internal "from" → "base_ref", "to" → "head_ref"
+    # For working-tree / staged diffs the head side is not a commit SHA.
+    base = raw_diff_ref.get("from") or raw_diff_ref.get("base_ref")
+    head = raw_diff_ref.get("to") or raw_diff_ref.get("head_ref")
+
+    # Only include if it looks like a real ref (not "working_tree" / "index")
+    _working_sentinels = {"working_tree", "index", "staged", None}
+    if base and base not in _working_sentinels:
+        result["base_ref"] = base
+    if head and head not in _working_sentinels:
+        result["head_ref"] = head
+
+    if "pathspecs" in raw_diff_ref:
+        result["pathspecs"] = raw_diff_ref["pathspecs"]
+    if "repo_root" in raw_diff_ref:
+        result["repo_root"] = raw_diff_ref["repo_root"]
+
+    return result
+
+
+def _build_file_entry(fc: Dict) -> Dict:
+    """
+    Build a schema v2 ``FileEntry`` dict from an internal file-change dict.
+
+    Internal format::
+        {"path": str, "change_kind": str}
+
+    Schema v2 required fields: id, path, change_kind, analysis_source.
+    """
+    path = fc["path"]
+    return {
+        "id": file_id(path),
+        "path": path,
+        "change_kind": fc["change_kind"],
+        "analysis_source": "structural",
+    }
 
 
 def build_schema_v2_output(
@@ -217,7 +331,7 @@ def build_schema_v2_output(
     symbol_changes: List[SymbolChange],
     import_relationships: List[Dict],          # already-built relationship dicts
     file_changes: List[Dict],                  # [{"path": str, "change_kind": str}]
-    diff_ref: Dict,                            # {from, to, kind}
+    diff_ref: Dict,                            # {from|base_ref, to|head_ref, kind}
     wild_version: str,
     analysis_duration_ms: int,
     languages_detected: List[str],
@@ -227,7 +341,7 @@ def build_schema_v2_output(
 
     Invariants enforced here:
     - ``summary: null``  (no LLM → D2 from JSON-SCHEMA.md)
-    - ``warnings: []``   (always present → D4)
+    - ``metadata.warnings: []``  (always present → D4; lives in metadata not top-level)
     - ``metadata.privacy_tier: "local"``  (no network calls)
     - ``metadata.cloud_providers_used: []``
 
@@ -235,7 +349,7 @@ def build_schema_v2_output(
         symbol_changes:        Output of compute_symbol_diff().
         import_relationships:  Output of build_import_relationship() calls.
         file_changes:          List of dicts with "path" and "change_kind".
-        diff_ref:              {"from": str, "to": str, "kind": str}
+        diff_ref:              Internal diff ref dict; converted to schema v2 by this function.
         wild_version:          Semver string, e.g. "2.0.0".
         analysis_duration_ms:  Wall-clock ms for the full analysis run.
         languages_detected:    List of language slugs, e.g. ["python"].
@@ -247,16 +361,16 @@ def build_schema_v2_output(
         "schema_version": "2.0",
         "generated_at": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
         "wild_version": wild_version,
-        "diff_ref": diff_ref,
-        "files": file_changes,
+        "diff_ref": _build_diff_ref(diff_ref),
+        "files": [_build_file_entry(fc) for fc in file_changes],
         "symbols": [build_symbol_entry(sc) for sc in symbol_changes],
         "relationships": import_relationships,
         "summary": None,           # D2: null when no LLM
-        "warnings": [],            # D4: always present
         "metadata": {
             "privacy_tier": "local",
             "cloud_providers_used": [],
             "analysis_duration_ms": analysis_duration_ms,
             "languages_detected": sorted(languages_detected),
+            "warnings": [],        # D4: always present; in metadata not top-level
         },
     }

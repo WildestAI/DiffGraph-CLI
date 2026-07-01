@@ -129,13 +129,28 @@ class TreeSitterProcessor(BaseProcessor):
         return ("Static AST-based dependency extraction using tree-sitter. "
                 "Supports Python, TypeScript, JavaScript, Go, Rust, Java, Swift. "
                 "Extracts imports, function calls, and inheritance relationships.")
+
+    @property
+    def privacy_tier(self) -> str:
+        """No data leaves the machine — purely local static analysis."""
+        return "local"
     
     def _get_parser(self, language: str):
-        """Get or create a parser for the given language."""
+        """
+        Get or create a parser for the given language.
+
+        Uses ``ts.Parser(tslp.get_language(...))`` so that the returned parser
+        uses the standard tree-sitter API (``node.type``, ``node.start_point``,
+        ``node.children``, etc.), NOT the tslp-native parser which has a
+        different interface.
+        """
         if language not in self.parsers:
             try:
                 ts_lang = LANGUAGE_CONFIGS[language]['ts_language']
-                parser = tslp.get_parser(ts_lang)
+                # tslp.get_language() returns a tree_sitter.Language object
+                # compatible with ts.Parser, ts.Query, and ts.QueryCursor.
+                ts_language = tslp.get_language(ts_lang)
+                parser = ts.Parser(ts_language)
                 self.parsers[language] = parser
             except Exception as e:
                 raise ValueError(f"Failed to initialize parser for {language}: {e}")
@@ -916,8 +931,18 @@ class TreeSitterProcessor(BaseProcessor):
             is_new = status in ("untracked", "added")
             is_deleted = status == "deleted"
 
+            # file_data may carry explicit content (e.g. in tests or when the
+            # caller already has the file bytes).  Use it as a fallback so the
+            # processor works correctly outside a live git working tree.
+            supplied_content: Optional[str] = file_data.get("content")
+
             pre_content: Optional[str] = None if is_new else self._get_pre_change_content(file_path, staged)
-            post_content: Optional[str] = None if is_deleted else self._get_post_change_content(file_path, staged)
+            if not is_deleted:
+                post_content = self._get_post_change_content(file_path, staged)
+                if post_content is None and supplied_content is not None:
+                    post_content = supplied_content
+            else:
+                post_content = None
 
             # Parse pre snapshot
             pre_components = []
@@ -984,20 +1009,43 @@ class TreeSitterProcessor(BaseProcessor):
         )
 
     def analyze_changes(
-        self, 
-        files_with_content: List[Dict[str, str]], 
-        progress_callback: Optional[Callable] = None
-    ) -> DiffAnalysis:
+        self,
+        files_with_content: List[Dict[str, str]],
+        progress_callback: Optional[Callable] = None,
+    ) -> Dict:
         """
         Analyze code changes using tree-sitter AST parsing.
-        
+
+        Returns a schema v2 DiffGraph dict (``diffgraph-v2.schema.json``).
+        This is a thin wrapper around ``analyze_changes_v2()`` that satisfies
+        the ``BaseProcessor`` interface.  All substantive logic lives in
+        ``analyze_changes_v2()``.
+
         Args:
             files_with_content: List of files with their content/diffs
             progress_callback: Optional callback for progress updates
-        
+
         Returns:
-            DiffAnalysis with summary and mermaid diagram
+            dict conforming to diffgraph-v2.schema.json
         """
+        return self.analyze_changes_v2(
+            files_with_content=files_with_content,
+            progress_callback=progress_callback,
+        )
+
+    def _analyze_changes_legacy(
+        self,
+        files_with_content: List[Dict[str, str]],
+        progress_callback: Optional[Callable] = None,
+    ) -> "DiffAnalysis":
+        """
+        **Deprecated** — kept for reference only.  Do not call directly.
+
+        Original GraphManager-based implementation that returned a
+        ``DiffAnalysis(summary, mermaid_diagram)`` object.  Superseded by
+        ``analyze_changes_v2()`` / ``analyze_changes()``.
+        """
+        # fmt: off
         total_files = len(files_with_content)
         
         # Process each file
@@ -1134,3 +1182,4 @@ class TreeSitterProcessor(BaseProcessor):
             summary=summary,
             mermaid_diagram=mermaid_diagram
         )
+        # fmt: on
