@@ -217,15 +217,20 @@ class TestBuildSymbolEntry:
         entry = build_symbol_entry(sc)
 
         assert entry["id"] == f"sym::{FILE}::validate_token"
+        # Schema v2: name (unqualified) + qualified_name (full)
+        assert entry["name"] == "validate_token"
         assert entry["qualified_name"] == "validate_token"
-        assert entry["file"] == FILE
+        # Schema v2: file_id not file
+        assert entry["file_id"] == f"file::{FILE}"
+        assert entry["kind"] == "function"
         assert entry["change_kind"] == "modified"
         assert entry["analysis_source"] == "structural"
         assert len(entry["evidence"]) >= 1
         ev = entry["evidence"][0]
         assert ev["kind"] == "ast_parse"
-        assert ev["location"]["line_start"] == 1   # 0-indexed → 1-indexed
-        assert ev["location"]["line_end"] == 4     # 3 → 4
+        # Evidence fields are flat (not nested under "location")
+        assert ev["line_start"] == 1   # 0-indexed → 1-indexed
+        assert ev["line_end"] == 4     # 3 → 4
 
     def test_structural_source_always_set(self):
         from diffgraph.processing_modes.schema_v2_adapter import SymbolChange
@@ -241,10 +246,14 @@ class TestBuildImportRelationship:
 
     def test_basic_import(self):
         rel = build_import_relationship("api/routes.py", "auth.validator")
-        assert rel["from"] == "sym::file::api/routes.py"
-        assert rel["to"] == "auth.validator"
+        # Schema v2: source_id / target_id (not from / to)
+        assert rel["source_id"] == "sym::file::api/routes.py"
+        assert rel["target_id"] == "module::auth.validator"
         assert rel["kind"] == "imports"
         assert rel["analysis_source"] == "structural"
+        # id must match pattern ^rel::.+->.+
+        assert rel["id"].startswith("rel::")
+        assert "->" in rel["id"]
         assert rel["evidence"][0]["kind"] == "import_statement"
 
 
@@ -283,10 +292,11 @@ class TestBuildSchemaV2Output:
         assert out["summary"] is None
 
     def test_warnings_always_present(self):
-        """schema v2 D4: warnings must always be present."""
+        """schema v2 D4: warnings must always be present (in metadata, not top-level)."""
         out = self._minimal_output()
-        assert "warnings" in out
-        assert out["warnings"] == []
+        # warnings lives in metadata (not at the top level)
+        assert "warnings" in out["metadata"]
+        assert out["metadata"]["warnings"] == []
 
     def test_no_network_calls(self):
         """

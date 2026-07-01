@@ -1,5 +1,8 @@
 """
-Basic test for tree-sitter processor functionality.
+Basic smoke test for tree-sitter processor functionality.
+
+Updated for schema v2 output (dict-based, not DiffAnalysis object).
+The processor now returns a dict conforming to diffgraph-v2.schema.json.
 """
 
 import tempfile
@@ -32,7 +35,7 @@ def another_function():
 '''
 
 def test_tree_sitter_python():
-    """Test tree-sitter processor with a Python file."""
+    """Test tree-sitter processor with a Python file — schema v2 output."""
     
     # Create temp file
     with tempfile.NamedTemporaryFile(mode='w', suffix='.py', delete=False) as f:
@@ -43,29 +46,42 @@ def test_tree_sitter_python():
         # Create processor
         processor = get_processor("tree-sitter-dependency-graph")
         
-        # Prepare file data
+        # Prepare file data — pass content directly for test isolation
         files_with_content = [{
             'path': temp_file,
             'status': 'untracked',
             'content': python_code
         }]
         
-        # Analyze
+        # Analyze — result is now a schema v2 dict
         print("🔍 Analyzing Python code with tree-sitter...")
         result = processor.analyze_changes(files_with_content)
         
-        print("\n📊 Analysis Summary:")
-        print(result.summary)
+        # Schema v2: result is a dict, not a DiffAnalysis object
+        assert isinstance(result, dict), f"Expected dict, got {type(result)}"
+        assert result.get("schema_version") == "2.0"
         
-        print("\n📈 Mermaid Diagram:")
-        print(result.mermaid_diagram[:500] + "..." if len(result.mermaid_diagram) > 500 else result.mermaid_diagram)
+        symbols = result.get("symbols", [])
+        relationships = result.get("relationships", [])
         
-        # Verify components were extracted
-        assert len(processor.graph_manager.component_nodes) > 0, "No components extracted"
+        print(f"\n📊 Analysis Summary:")
+        print(f"  schema_version: {result['schema_version']}")
+        print(f"  symbols: {len(symbols)}")
+        print(f"  relationships: {len(relationships)}")
+        print(f"  privacy_tier: {result['metadata']['privacy_tier']}")
         
-        print("\n✅ Test passed! Found components:")
-        for comp_id, comp in processor.graph_manager.component_nodes.items():
-            print(f"  - {comp.name} ({comp.component_type})")
+        # Verify symbols were extracted (MyClass, __init__, increment, standalone_function, another_function)
+        assert len(symbols) > 0, "No symbols extracted"
+        
+        print("\n✅ Test passed! Found symbols:")
+        for sym in symbols:
+            print(f"  - {sym['name']} ({sym['kind']}) change={sym['change_kind']}")
+        
+        # Verify os/sys imports were captured
+        import_rels = [r for r in relationships if r.get("kind") == "imports"]
+        print(f"\n  Import relationships: {len(import_rels)}")
+        for r in import_rels:
+            print(f"    {r['source_id']} → {r['target_id']}")
         
     finally:
         # Cleanup
