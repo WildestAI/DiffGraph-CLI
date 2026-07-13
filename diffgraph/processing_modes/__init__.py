@@ -6,7 +6,7 @@ functions to create processor instances.
 """
 
 from typing import Dict, Type, Optional
-from .base import BaseProcessor, DiffAnalysis
+from .base import BaseProcessor
 
 # Registry of available processing modes
 _PROCESSOR_REGISTRY: Dict[str, Type[BaseProcessor]] = {}
@@ -57,42 +57,24 @@ def get_processor(mode_name: str, **kwargs) -> BaseProcessor:
 
 def list_available_modes() -> Dict[str, str]:
     """
-    Get a dictionary of available processing modes and their descriptions.
-    
-    Returns:
-        Dictionary mapping mode names to descriptions
+    Return a dict of {mode_name: description} for all registered processors.
+
+    Uses the class-level ``description`` attribute so no instantiation is
+    required (avoids unsafe ``__new__`` and missing-arg errors).
     """
-    modes = {}
-    for mode_name, processor_class in _PROCESSOR_REGISTRY.items():
-        # Get description by creating a minimal instance
-        try:
-            # Try to create instance without required parameters to get description
-            # Most processors should allow getting description without full initialization
-            temp_instance = processor_class.__new__(processor_class)
-            if hasattr(temp_instance, 'description'):
-                desc = temp_instance.description
-                if isinstance(desc, property):
-                    # For property descriptors, we need to access via class
-                    description = processor_class.description.fget(temp_instance)
-                else:
-                    description = desc
-            else:
-                description = "No description available"
-        except Exception as e:
-            # Fallback: try to get from docstring or use default
-            description = processor_class.__doc__.split('\n')[0] if processor_class.__doc__ else "No description available"
-        modes[mode_name] = description
-    return modes
+    return {
+        name: cls.description
+        for name, cls in _PROCESSOR_REGISTRY.items()
+    }
 
 
 # Import processors to trigger registration
-# This will be populated as we add more processors
 from . import openai_agents_dependency  # noqa: F401, E402
+from . import local_structural           # noqa: F401, E402
 
 
 __all__ = [
     "BaseProcessor",
-    "DiffAnalysis",
     "register_processor",
     "get_processor",
     "list_available_modes",

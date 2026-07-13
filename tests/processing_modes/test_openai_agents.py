@@ -1,8 +1,17 @@
 """
 Tests for OpenAI Agents processor.
+
+Tests that require the OpenAI Agents SDK are skipped automatically when the
+'agents' package is not installed (e.g. in CI or local-only environments).
 """
 import pytest
 from diffgraph.processing_modes import get_processor
+from diffgraph.processing_modes.openai_agents_dependency import _AGENTS_SDK_AVAILABLE
+
+pytestmark = pytest.mark.skipif(
+    not _AGENTS_SDK_AVAILABLE,
+    reason="openai-agents SDK not installed",
+)
 
 
 def test_openai_processor_initialization():

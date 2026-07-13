@@ -5,19 +5,36 @@ This processor uses OpenAI's Agents SDK to analyze code changes and generate
 dependency graphs at the component level.
 """
 
-from typing import List, Dict, Optional, Tuple, Callable
-from agents import Agent, Runner
-import os
-from pydantic import BaseModel
-from ..graph_manager import GraphManager, FileStatus, ChangeType, ComponentNode
-import time
-import random
-import openai
-import networkx as nx
-from enum import Enum
+from __future__ import annotations
 
-from .base import BaseProcessor, DiffAnalysis
+import os
+import random
+import time
+from enum import Enum
+from typing import TYPE_CHECKING, Callable, Dict, List, Optional, Tuple
+
+import networkx as nx
+from pydantic import BaseModel
+
+from ..graph_manager import ChangeType, ComponentNode, FileStatus, GraphManager
 from . import register_processor
+from .base import BaseProcessor
+
+# The OpenAI Agents SDK is an optional dependency.  Import lazily so that
+# `wild diff --mode local-structural` (the default) works even when the SDK
+# is not installed.
+try:
+    from agents import Agent, Runner  # type: ignore[import-untyped]
+    _AGENTS_SDK_AVAILABLE = True
+except ImportError:  # pragma: no cover
+    Agent = None  # type: ignore[assignment,misc]
+    Runner = None  # type: ignore[assignment,misc]
+    _AGENTS_SDK_AVAILABLE = False
+
+try:
+    import openai as _openai_module
+except ImportError:  # pragma: no cover
+    _openai_module = None  # type: ignore[assignment]
 
 
 class FileChange(BaseModel):
@@ -62,7 +79,7 @@ def exponential_backoff_retry(func):
         for attempt in range(max_retries):
             try:
                 return func(*args, **kwargs)
-            except openai.RateLimitError as e:
+            except (_openai_module.RateLimitError if _openai_module else Exception) as e:
                 if attempt == max_retries - 1:  # Last attempt
                     raise  # Re-raise the exception if all retries failed
 
@@ -98,6 +115,13 @@ class OpenAIAgentsProcessor(BaseProcessor):
     def __init__(self, api_key: Optional[str] = None, **kwargs):
         """Initialize the processor with OpenAI API key."""
         super().__init__(**kwargs)
+        if not _AGENTS_SDK_AVAILABLE:
+            raise ImportError(
+                "The OpenAI Agents SDK ('agents' package) is not installed.\n"
+                "Install it with: pip install openai-agents\n"
+                "Or use the local mode (no cloud needed): wild diff"
+            )
+
         self.api_key = api_key or os.getenv("OPENAI_API_KEY")
         if not self.api_key:
             raise ValueError("OpenAI API key is required. Set OPENAI_API_KEY environment variable.")
@@ -139,15 +163,21 @@ class OpenAIAgentsProcessor(BaseProcessor):
 
         self.graph_manager = GraphManager()
 
+    # Class-level description (read by list_available_modes without instantiation).
+    description: str = (
+        "Cloud LLM: OpenAI Agents SDK — component-level dependency graph analysis.  "
+        "Sends diff to OpenAI API; requires consent on first use."
+    )
+
     @property
     def name(self) -> str:
         """Return the name of this processing mode."""
         return "openai-agents-dependency-graph"
 
     @property
-    def description(self) -> str:
-        """Return a description of this processing mode."""
-        return "Uses OpenAI Agents SDK to analyze code and generate component-level dependency graphs"
+    def privacy_tier(self) -> str:
+        """Sends diff to OpenAI API — requires user consent on first use."""
+        return "cloud_llm"
 
     @classmethod
     def get_required_config(cls) -> List[str]:

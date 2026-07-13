@@ -9,6 +9,7 @@ from diffgraph.html_report import generate_html_report, AnalysisResult
 from diffgraph.env_loader import load_env_file, debug_environment
 from diffgraph.utils import sanitize_diff_args, involves_working_tree
 from diffgraph.processing_modes import get_processor, list_available_modes
+from diffgraph.consent import ensure_consent
 
 # Load environment variables
 load_env_file()
@@ -136,8 +137,8 @@ def load_file_contents(changed_files: List[Dict[str, str]], diff_args: List[str]
 @click.option('--output', '-o', default='diffgraph.html', help='Output HTML file path')
 @click.option('--no-open', is_flag=True, help='Do not open the HTML report automatically')
 @click.option('--debug-env', is_flag=True, help='Debug environment variable loading')
-@click.option('--mode', '-m', default='openai-agents-dependency-graph', 
-              help='Processing mode for diffgraph generation (default: openai-agents-dependency-graph)')
+@click.option('--mode', '-m', default='local-structural',
+              help='Processing mode for diffgraph generation (default: local-structural)')
 @click.option('--list-modes', is_flag=True, help='List available processing modes and exit')
 def main(args, api_key: str, output: str, no_open: bool, debug_env: bool, mode: str, list_modes: bool):
     """wild - Git wrapper CLI with DiffGraph for diff commands."""
@@ -187,6 +188,9 @@ def main(args, api_key: str, output: str, no_open: bool, debug_env: bool, mode: 
                 click.echo(f"❌ Error: {e}", err=True)
                 click.echo("\nUse --list-modes to see available processing modes.", err=True)
                 sys.exit(1)
+
+            # Consent check — exits cleanly if user declines cloud tier.
+            ensure_consent(processor.privacy_tier, processor.name)
 
             # Define progress callback
             def progress_callback(current_file, total_files, status):
