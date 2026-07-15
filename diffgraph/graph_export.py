@@ -1,3 +1,16 @@
+"""
+DEPRECATED — this module is superseded by ``structured_export.export_diffgraph_v2``
+which produces schema-v2 output (symbols[]/relationships[]).
+This file will be removed in v2.0.0.
+"""
+import warnings
+warnings.warn(
+    "diffgraph.graph_export is deprecated and will be removed in v2.0.0. "
+    "Use diffgraph.structured_export.export_diffgraph_v2 instead.",
+    DeprecationWarning,
+    stacklevel=2,
+)
+
 import json
 import pickle
 from pathlib import Path

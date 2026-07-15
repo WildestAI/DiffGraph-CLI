@@ -7,8 +7,7 @@ from typing import List, Dict
 import os
 from diffgraph.ai_analysis import CodeAnalysisAgent
 from diffgraph.html_report import generate_html_report, AnalysisResult
-from diffgraph.graph_export import export_graph
-from diffgraph.structured_export import export_structured_json
+from diffgraph.structured_export import export_diffgraph_v2
 from diffgraph.env_loader import load_env_file, debug_environment
 from diffgraph.utils import sanitize_diff_args, involves_working_tree
 
@@ -135,21 +134,19 @@ def load_file_contents(changed_files: List[Dict[str, str]], diff_args: List[str]
 @click.version_option(package_name='wild')
 @click.argument('args', nargs=-1, type=click.UNPROCESSED)
 @click.option('--api-key', envvar='OPENAI_API_KEY', help='OpenAI API key')
-@click.option('--output', '-o', help='Output file path (default: diffgraph.html for HTML, diffgraph.json for graph)')
-@click.option('--format', '-f', type=click.Choice(['html', 'graph'], case_sensitive=False), default='html', help='Output format: html or graph (default: html)')
-@click.option('--graph-format', type=click.Choice(['json', 'pickle', 'graphml'], case_sensitive=False), default='json', help='Graph serialization format when using --format graph (default: json)')
+@click.option('--output', '-o', help='Output file path (default: diffgraph.html for HTML, diffgraph.json for JSON)')
+@click.option('--format', '-f',
+              type=click.Choice(['html', 'json'], case_sensitive=False),
+              default='html',
+              help='Output format: html (default) or json (schema v2 artifact)')
 @click.option('--no-open', is_flag=True, help='Do not open the HTML report automatically')
 @click.option('--debug-env', is_flag=True, help='Debug environment variable loading')
-def main(args, api_key: str, output: str, format: str, graph_format: str, no_open: bool, debug_env: bool):
+def main(args, api_key: str, output: str, format: str, no_open: bool, debug_env: bool):
     """wild - Git wrapper CLI with DiffGraph for diff commands."""
-    
+
     # Set default output path based on format if not specified
     if not output:
-        if format == 'graph':
-            extension_map = {'json': '.json', 'pickle': '.pkl', 'graphml': '.graphml'}
-            output = f'diffgraph{extension_map.get(graph_format, ".json")}'
-        else:
-            output = 'diffgraph.html'
+        output = 'diffgraph.json' if format == 'json' else 'diffgraph.html'
 
     # Check if this is a diff command
     if args and args[0] == 'diff':
@@ -208,16 +205,15 @@ def main(args, api_key: str, output: str, format: str, graph_format: str, no_ope
             analysis = agent.analyze_changes(files_with_content, progress_callback)
 
             # Generate output based on format
-            if format == 'graph':
-                # Export graph data
-                click.echo(f"💾 Exporting graph data in {graph_format} format...")
-                if graph_format == 'json':
-                    # Use structured format for JSON
-                    graph_path = export_structured_json(agent.graph_manager, output, diff_args)
-                else:
-                    # Use NetworkX format for pickle/graphml
-                    graph_path = export_graph(agent.graph_manager, output, graph_format)
-                click.echo(f"✅ Graph data exported: {graph_path}")
+            if format == 'json':
+                click.echo('💾 Exporting DiffGraph v2 JSON artifact...')
+                json_path = export_diffgraph_v2(
+                    agent.graph_manager,
+                    output,
+                    diff_args=diff_args,
+                    privacy_tier='cloud_llm',
+                )
+                click.echo(f'✅ DiffGraph v2 artifact written: {json_path}')
             else:
                 # Create analysis result
                 click.echo("📊 Creating analysis result...")

@@ -1,20 +1,382 @@
 """
 Structured export module for generating integration-friendly JSON output.
 
-This module transforms the internal NetworkX graph representation into a
-structured format optimized for consumption by VSCode extensions, web UIs,
-and other integrations.
+This module provides two output paths:
 
-Phase 1: Uses existing analysis data, leaves advanced fields as null.
-Phase 2+: Will add full codebase analysis, external dependencies, etc.
+* ``transform_to_structured_format`` / ``export_structured_json`` — DEPRECATED.
+  Produces the old nodes[]/edges[] graph model from pre-v2 releases.  Kept for
+  backwards compatibility only; do not use in new code.
+
+* ``transform_to_diffgraph_v2`` / ``export_diffgraph_v2`` — CURRENT.
+  Produces schema v2 (symbols[]/relationships[]) validated against
+  ``diffgraph/schema/diffgraph-v2.schema.json``.
 """
 
 import json
+import re
 import subprocess
 from pathlib import Path
 from typing import Dict, List, Any, Optional, Tuple
 from datetime import datetime, timezone
 from .graph_manager import GraphManager, FileNode, ComponentNode, ChangeType
+
+# ---------------------------------------------------------------------------
+# Schema v2 helpers
+# ---------------------------------------------------------------------------
+
+_SCHEMA_PATH = Path(__file__).parent / 'schema' / 'diffgraph-v2.schema.json'
+
+
+def _diff_ref_from_args(diff_args: List[str]) -> Dict[str, Any]:
+    """Derive a schema-v2 diff_ref block from raw CLI diff_args."""
+    non_flag = [a for a in diff_args if not a.startswith('-')]
+    staged = '--staged' in diff_args or '--cached' in diff_args
+
+    if staged:
+        kind = 'staged'
+        base_ref = 'HEAD'
+        head_ref = None
+    elif len(non_flag) >= 2:
+        kind = 'commit_range'
+        base_ref = non_flag[0]
+        head_ref = non_flag[1]
+    elif len(non_flag) == 1 and re.match(r'^[^.]+\.{2,3}[^.]+$', non_flag[0]):
+        # e.g. main..HEAD  or  main...HEAD
+        parts = re.split(r'\.{2,3}', non_flag[0], maxsplit=1)
+        kind = 'commit_range'
+        base_ref = parts[0]
+        head_ref = parts[1]
+    else:
+        kind = 'unstaged'
+        base_ref = None
+        head_ref = None
+
+    # repo_root
+    try:
+        result = subprocess.run(
+            ['git', 'rev-parse', '--show-toplevel'],
+            capture_output=True, text=True, check=True
+        )
+        repo_root = result.stdout.strip()
+    except Exception:
+        repo_root = '.'
+
+    # pathspecs (non-flag args that look like paths)
+    pathspecs = [
+        a for a in non_flag
+        if Path(a).exists() or '/' in a or a.startswith('.')
+    ]
+
+    return {
+        'kind': kind,
+        'base_ref': base_ref,
+        'head_ref': head_ref,
+        'pathspecs': pathspecs,
+        'repo_root': repo_root,
+    }
+
+
+def _file_id(path: str) -> str:
+    """Stable file ID: 'file::<forward-slash path>'."""
+    return f"file::{path.replace(chr(92), '/')}"
+
+
+def _sym_id(file_path: str, qualified_name: str) -> str:
+    """Stable symbol ID: 'sym::<file_path>::<qualified_name>'."""
+    return f"sym::{file_path}::{qualified_name}"
+
+
+def _rel_id(source_id: str, target_id: str, n: int = 0) -> str:
+    """Stable relationship ID. Append '#N' for multi-edges."""
+    base = f"rel::{source_id}->{target_id}"
+    return base if n == 0 else f"{base}#{n}"
+
+
+_CHANGE_KIND_MAP = {
+    'added': 'added',
+    'deleted': 'deleted',
+    'modified': 'modified',
+    'unchanged': 'unchanged',
+}
+
+
+# Map GraphManager relationship types to schema v2 RelationshipEntry.kind enum.
+_REL_KIND_MAP = {
+    'calls': 'calls',
+    'extends': 'inherits',     # schema v2 uses 'inherits'
+    'implements': 'implements',
+    'member_of': 'contains',   # schema v2 uses 'contains'
+    'imports': 'imports',
+}
+
+
+_LLM_INFERENCE_EVIDENCE = [
+    {
+        'kind': 'llm_inference',
+    }
+]
+
+
+def _build_file_entries(
+    graph_manager: GraphManager,
+    diff_args: List[str],
+) -> List[Dict[str, Any]]:
+    """Build schema-v2 files[] from GraphManager.file_nodes."""
+    entries = []
+    for file_path, file_node in graph_manager.file_nodes.items():
+        stats = get_file_stats(file_path, diff_args)
+        language = get_language_from_extension(file_path)
+        change_kind = _CHANGE_KIND_MAP.get(
+            file_node.change_type.value, 'modified'
+        )
+        is_test = 'test' in file_path.lower()
+        entry: Dict[str, Any] = {
+            'id': _file_id(file_path),
+            'path': file_path,
+            'old_path': None,
+            'language': language,
+            'change_kind': change_kind,
+            'lines_added': stats['additions'],
+            'lines_removed': stats['deletions'],
+            # File entries are always structural — sourced from git metadata,
+            # not LLM interpretation (schema const: 'structural').
+            'analysis_source': 'structural',
+            'classification': {
+                'is_test': is_test,
+                # Path-pattern classification is deterministic → structural.
+                'analysis_source': 'structural',
+            },
+        }
+        entries.append(entry)
+    return entries
+
+
+def _build_symbol_entries(
+    graph_manager: GraphManager,
+) -> List[Dict[str, Any]]:
+    """Build schema-v2 symbols[] from GraphManager.component_nodes."""
+    entries = []
+    for comp_id, comp in graph_manager.component_nodes.items():
+        # Use component name as qualified_name; parent gives dotted path when available
+        if comp.parent:
+            parent_comp = graph_manager.component_nodes.get(comp.parent)
+            parent_name = parent_comp.name if parent_comp else comp.parent
+            qualified_name = f"{parent_name}.{comp.name}"
+        else:
+            qualified_name = comp.name
+
+        change_kind = _CHANGE_KIND_MAP.get(
+            comp.change_type.value, 'modified'
+        )
+        file_id = _file_id(comp.file_path)
+        sym_id = _sym_id(comp.file_path, qualified_name)
+
+        # Map component_type to schema v2 SymbolEntry.kind.
+        # Allowed: function, method, class, interface, variable, module, other
+        kind_map = {
+            'function': 'function',
+            'method': 'method',
+            'class': 'class',
+            'interface': 'interface',
+            'variable': 'variable',
+            'module': 'module',
+        }
+        kind = kind_map.get(comp.component_type, 'other')
+
+        entry: Dict[str, Any] = {
+            'id': sym_id,
+            'name': comp.name,
+            'qualified_name': qualified_name,
+            'file_id': file_id,
+            'kind': kind,
+            'parent_id': _sym_id(comp.file_path, comp.parent) if comp.parent else None,
+            'change_kind': change_kind,
+            'analysis_source': 'inferred',
+            'location': None,
+            'evidence': _LLM_INFERENCE_EVIDENCE,
+        }
+        entries.append(entry)
+    return entries
+
+
+def _build_relationship_entries(
+    graph_manager: GraphManager,
+) -> List[Dict[str, Any]]:
+    """Build schema-v2 relationships[] from GraphManager graph edges."""
+    entries = []
+    seen_ids: Dict[str, int] = {}
+
+    # File-level import relationships
+    for source_path, target_path in graph_manager.file_graph.edges():
+        source_id = _file_id(source_path)
+        target_id = _file_id(target_path)
+        base_id = f"rel::{source_id}->{target_id}"
+        n = seen_ids.get(base_id, 0)
+        seen_ids[base_id] = n + 1
+        rel_id = base_id if n == 0 else f"{base_id}#{n}"
+
+        entries.append({
+            'id': rel_id,
+            'kind': 'imports',
+            'source_id': source_id,
+            'target_id': target_id,
+            'analysis_source': 'inferred',
+            'evidence': _LLM_INFERENCE_EVIDENCE,
+        })
+
+    # Component-level relationships
+    for source_comp_id, target_comp_id in graph_manager.component_graph.edges():
+        source_comp = graph_manager.component_nodes.get(source_comp_id)
+        target_comp = graph_manager.component_nodes.get(target_comp_id)
+        if not source_comp or not target_comp:
+            continue
+
+        raw_rel = determine_relationship_type(
+            source_comp_id, target_comp_id, graph_manager
+        )
+        kind = _REL_KIND_MAP.get(raw_rel, 'semantic_related')
+
+        # Build symbol IDs consistent with _build_symbol_entries
+        def _qname(comp_id: str) -> str:
+            c = graph_manager.component_nodes.get(comp_id)
+            if not c:
+                return comp_id
+            if c.parent:
+                p = graph_manager.component_nodes.get(c.parent)
+                pname = p.name if p else c.parent
+                return f"{pname}.{c.name}"
+            return c.name
+
+        source_sym_id = _sym_id(source_comp.file_path, _qname(source_comp_id))
+        target_sym_id = _sym_id(target_comp.file_path, _qname(target_comp_id))
+
+        base_id = f"rel::{source_sym_id}->{target_sym_id}"
+        n = seen_ids.get(base_id, 0)
+        seen_ids[base_id] = n + 1
+        rel_id = base_id if n == 0 else f"{base_id}#{n}"
+
+        entries.append({
+            'id': rel_id,
+            'kind': kind,
+            'source_id': source_sym_id,
+            'target_id': target_sym_id,
+            'analysis_source': 'inferred',
+            'evidence': _LLM_INFERENCE_EVIDENCE,
+        })
+
+    return entries
+
+
+def transform_to_diffgraph_v2(
+    graph_manager: GraphManager,
+    diff_args: List[str],
+    privacy_tier: str = 'cloud_llm',
+    wild_version: str = '1.2.0',
+    analysis_duration_ms: Optional[int] = None,
+) -> Dict[str, Any]:
+    """
+    Transform a GraphManager into a schema-v2 DiffGraph artifact.
+
+    The returned dict validates against
+    ``diffgraph/schema/diffgraph-v2.schema.json``.
+
+    Args:
+        graph_manager:        Populated GraphManager from OpenAIAgentsProcessor.
+        diff_args:            Raw CLI diff arguments (used to derive diff_ref).
+        privacy_tier:         One of 'local', 'cloud_llm', 'cloud_backend'.
+                              'cloud_llm' is correct when OpenAI was called.
+        wild_version:         Semver of the running CLI (default 1.2.0).
+        analysis_duration_ms: Optional wall-clock time for the analysis run.
+
+    Returns:
+        Dict conforming to schema v2.
+    """
+    # Detect languages from changed files
+    languages: List[str] = []
+    for file_path in graph_manager.file_nodes:
+        lang = get_language_from_extension(file_path)
+        if lang and lang not in languages:
+            languages.append(lang)
+
+    return {
+        'schema_version': '2.0',
+        'generated_at': datetime.now(timezone.utc).isoformat(),
+        'wild_version': wild_version,
+        'diff_ref': _diff_ref_from_args(diff_args),
+        'files': _build_file_entries(graph_manager, diff_args),
+        'symbols': _build_symbol_entries(graph_manager),
+        'relationships': _build_relationship_entries(graph_manager),
+        'summary': None,   # null for non-summarising (LLM-summary-free) modes
+        'metadata': {
+            'privacy_tier': privacy_tier,
+            'cloud_providers_used': ['openai'] if privacy_tier == 'cloud_llm' else [],
+            'analysis_duration_ms': analysis_duration_ms,
+            'languages_detected': languages,
+            'files_analyzed': len(graph_manager.file_nodes),
+            'files_skipped': 0,
+            'warnings': [],
+        },
+    }
+
+
+def export_diffgraph_v2(
+    graph_manager: GraphManager,
+    output_path: str,
+    diff_args: Optional[List[str]] = None,
+    privacy_tier: str = 'cloud_llm',
+    wild_version: str = '1.2.0',
+    analysis_duration_ms: Optional[int] = None,
+    validate: bool = True,
+) -> str:
+    """
+    Write a schema-v2 DiffGraph JSON artifact to *output_path*.
+
+    Args:
+        graph_manager:        Populated GraphManager.
+        output_path:          Destination file path.
+        diff_args:            Raw CLI diff arguments.
+        privacy_tier:         'local' | 'cloud_llm' | 'cloud_backend'.
+        wild_version:         CLI semver string.
+        analysis_duration_ms: Optional analysis wall-clock time.
+        validate:             Validate against JSON Schema before writing.
+                              Requires ``jsonschema`` to be installed;
+                              validation is skipped gracefully if absent.
+
+    Returns:
+        Absolute path of the written file.
+    """
+    if diff_args is None:
+        diff_args = []
+
+    artifact = transform_to_diffgraph_v2(
+        graph_manager,
+        diff_args,
+        privacy_tier=privacy_tier,
+        wild_version=wild_version,
+        analysis_duration_ms=analysis_duration_ms,
+    )
+
+    if validate and _SCHEMA_PATH.exists():
+        try:
+            import jsonschema  # type: ignore
+            with open(_SCHEMA_PATH) as f:
+                schema = json.load(f)
+            jsonschema.validate(artifact, schema)
+        except ImportError:
+            pass  # jsonschema not installed — skip silently
+        except jsonschema.ValidationError as exc:
+            import warnings
+            warnings.warn(
+                f"DiffGraph v2 output failed schema validation: {exc.message}",
+                stacklevel=2,
+            )
+
+    out = Path(output_path)
+    out.parent.mkdir(parents=True, exist_ok=True)
+    with open(out, 'w', encoding='utf-8') as fh:
+        json.dump(artifact, fh, indent=2, ensure_ascii=False)
+
+    return str(out.absolute())
 
 
 # File classification patterns
