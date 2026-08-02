@@ -29,6 +29,7 @@ from .schema_v2_adapter import (
     compute_symbol_diff,
     build_schema_v2_output,
     build_import_relationship,
+    build_import_symbol_entry,
 )
 from . import register_processor
 
@@ -760,8 +761,8 @@ class TreeSitterProcessor(BaseProcessor):
         else:
             return []
     
-    def _extract_imports_python(self, tree, source_bytes: bytes) -> List[str]:
-        """Extract import statements from Python."""
+    def _extract_imports_python(self, tree, source_bytes: bytes) -> List[Tuple[str, int]]:
+        """Extract imported module names and their zero-based source lines."""
         imports = []
         root = tree.root_node
         
@@ -784,7 +785,7 @@ class TreeSitterProcessor(BaseProcessor):
             import_nodes = captures_dict.get("import_name", [])
             for node in import_nodes:
                 import_name = source_bytes[node.start_byte:node.end_byte].decode('utf-8')
-                imports.append(import_name)
+                imports.append((import_name, node.start_point[0]))
         except Exception as e:
             print(f"Warning: Error extracting Python imports: {e}")
         
@@ -897,6 +898,7 @@ class TreeSitterProcessor(BaseProcessor):
         total_files = len(files_with_content)
 
         all_symbol_changes = []
+        import_symbols: Dict[Tuple[str, str], Dict] = {}
         all_import_relationships = []
         file_change_list = []
         languages_seen: set = set()
@@ -972,7 +974,7 @@ class TreeSitterProcessor(BaseProcessor):
 
             # Parse post snapshot
             post_components = []
-            post_imports: List[str] = []
+            post_imports: List[Tuple[str, int]] = []
             if post_content:
                 try:
                     parser = self._get_parser(language)
@@ -1003,11 +1005,25 @@ class TreeSitterProcessor(BaseProcessor):
             all_symbol_changes.extend(symbol_changes)
 
             # Build import relationships (structural, from post-change)
-            for imported_module in post_imports:
+            import_occurrences: Dict[str, int] = {}
+            for imported_module, source_line in post_imports:
+                occurrence = import_occurrences.get(imported_module, 0)
+                import_occurrences[imported_module] = occurrence + 1
+                import_symbols.setdefault(
+                    (file_path, imported_module),
+                    build_import_symbol_entry(
+                        source_file=file_path,
+                        imported_module=imported_module,
+                        source_line=source_line,
+                        change_kind=file_change_kind,
+                    ),
+                )
                 all_import_relationships.append(
                     build_import_relationship(
                         source_file=file_path,
                         imported_module=imported_module,
+                        source_line=source_line,
+                        index=occurrence,
                     )
                 )
 
@@ -1018,6 +1034,7 @@ class TreeSitterProcessor(BaseProcessor):
 
         return build_schema_v2_output(
             symbol_changes=all_symbol_changes,
+            import_symbols=list(import_symbols.values()),
             import_relationships=all_import_relationships,
             file_changes=file_change_list,
             diff_ref=diff_ref,

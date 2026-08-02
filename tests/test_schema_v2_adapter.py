@@ -18,10 +18,12 @@ from diffgraph.processing_modes.schema_v2_adapter import (
     compute_symbol_diff,
     build_schema_v2_output,
     build_import_relationship,
+    build_import_symbol_entry,
     build_symbol_entry,
     qualified_name_for,
     symbol_id,
     file_symbol_id,
+    import_symbol_id,
 )
 
 
@@ -245,16 +247,31 @@ class TestBuildSymbolEntry:
 class TestBuildImportRelationship:
 
     def test_basic_import(self):
-        rel = build_import_relationship("api/routes.py", "auth.validator")
-        # Schema v2: source_id / target_id (not from / to)
-        assert rel["source_id"] == "sym::file::api/routes.py"
-        assert rel["target_id"] == "module::auth.validator"
+        rel = build_import_relationship("api/routes.py", "auth.validator", source_line=4)
+        assert rel["source_id"] == "file::api/routes.py"
+        assert rel["target_id"] == "sym::api/routes.py::import::auth.validator"
         assert rel["kind"] == "imports"
         assert rel["analysis_source"] == "structural"
         # id must match pattern ^rel::.+->.+
         assert rel["id"].startswith("rel::")
         assert "->" in rel["id"]
         assert rel["evidence"][0]["kind"] == "import_statement"
+        assert rel["evidence"][0]["line_start"] == 5
+
+    def test_repeated_import_ids_are_unique(self):
+        first = build_import_relationship("api/routes.py", "auth", index=0)
+        second = build_import_relationship("api/routes.py", "auth", index=1)
+        assert first["id"] != second["id"]
+        assert second["id"].endswith("#1")
+
+    def test_import_target_is_an_emitted_symbol(self):
+        symbol = build_import_symbol_entry("api/routes.py", "auth.validator", source_line=4)
+        assert symbol["id"] == import_symbol_id("api/routes.py", "auth.validator")
+        assert symbol["file_id"] == "file::api/routes.py"
+        assert symbol["kind"] == "import"
+        assert symbol["location"] == {
+            "file": "api/routes.py", "line_start": 5, "line_end": 5,
+        }
 
 
 # ---------------------------------------------------------------------------

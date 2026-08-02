@@ -97,6 +97,11 @@ def file_symbol_id(file_path: str) -> str:
     return f"sym::file::{file_path}"
 
 
+def import_symbol_id(source_file: str, imported_module: str) -> str:
+    """Stable ID for an unresolved import declaration in ``source_file``."""
+    return symbol_id(source_file, f"import::{imported_module}")
+
+
 # ---------------------------------------------------------------------------
 # Symbol diff computation
 # ---------------------------------------------------------------------------
@@ -244,19 +249,19 @@ def build_import_relationship(
     source_file: str,
     imported_module: str,
     source_line: Optional[int] = None,
+    index: int = 0,
 ) -> Dict:
     """
     Build a schema v2 ``relationships[]`` entry for an import statement.
 
-    The ``source_id`` is a file-scope synthetic symbol ID (schema v2 D1) to
-    represent the module-level import, not a specific function.
-    The ``target_id`` is a synthetic module ID (``module::<name>``) — the
-    target may not resolve to a known file within this analysis run.
+    The source is the emitted ``files[]`` entry. The target is an emitted
+    ``kind: import`` symbol anchored to that file, which explicitly represents
+    an import whose module may not resolve within the current diff.
+
+    ``index`` disambiguates repeated imports of the same module in one file.
     """
-    src_id = file_symbol_id(source_file)
-    # Synthetic target: module name may not resolve to a file in the diff;
-    # use a stable namespaced ID so consumers can correlate across runs.
-    tgt_id = f"module::{imported_module}"
+    src_id = file_id(source_file)
+    tgt_id = import_symbol_id(source_file, imported_module)
     evidence_entry: Dict = {
         "kind": "import_statement",
         "file": source_file,
@@ -264,11 +269,42 @@ def build_import_relationship(
     if source_line is not None:
         evidence_entry["line_start"] = source_line + 1
     return {
-        "id": relationship_id(src_id, tgt_id),
+        "id": relationship_id(src_id, tgt_id, index),
         "kind": "imports",
         "source_id": src_id,
         "target_id": tgt_id,
         "analysis_source": "structural",
+        "evidence": [evidence_entry],
+    }
+
+
+def build_import_symbol_entry(
+    source_file: str,
+    imported_module: str,
+    source_line: Optional[int] = None,
+    change_kind: str = "added",
+) -> Dict:
+    """Build the emitted symbol targeted by an unresolved import edge."""
+    evidence_entry: Dict = {
+        "kind": "import_statement",
+        "file": source_file,
+    }
+    location = None
+    if source_line is not None:
+        line = source_line + 1
+        evidence_entry["line_start"] = line
+        location = {"file": source_file, "line_start": line, "line_end": line}
+
+    return {
+        "id": import_symbol_id(source_file, imported_module),
+        "name": imported_module,
+        "qualified_name": imported_module,
+        "file_id": file_id(source_file),
+        "kind": "import",
+        "parent_id": None,
+        "change_kind": change_kind,
+        "analysis_source": "structural",
+        "location": location,
         "evidence": [evidence_entry],
     }
 
@@ -335,6 +371,7 @@ def build_schema_v2_output(
     wild_version: str,
     analysis_duration_ms: int,
     languages_detected: List[str],
+    import_symbols: Optional[List[Dict]] = None,
     warnings: Optional[List[Dict]] = None,
     files_analyzed: Optional[int] = None,
     files_skipped: Optional[int] = None,
@@ -350,6 +387,7 @@ def build_schema_v2_output(
 
     Args:
         symbol_changes:        Output of compute_symbol_diff().
+        import_symbols:        Emitted symbols for unresolved import targets.
         import_relationships:  Output of build_import_relationship() calls.
         file_changes:          List of dicts with "path" and "change_kind".
         diff_ref:              Internal diff ref dict; converted to schema v2 by this function.
@@ -369,7 +407,7 @@ def build_schema_v2_output(
         "wild_version": wild_version,
         "diff_ref": _build_diff_ref(diff_ref),
         "files": [_build_file_entry(fc) for fc in file_changes],
-        "symbols": [build_symbol_entry(sc) for sc in symbol_changes],
+        "symbols": [build_symbol_entry(sc) for sc in symbol_changes] + list(import_symbols or []),
         "relationships": import_relationships,
         "summary": None,           # D2: null when no LLM
         "metadata": {

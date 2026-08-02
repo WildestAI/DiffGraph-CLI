@@ -249,6 +249,28 @@ class TestImportRelationships:
             f"Expected import relationships for Python imports (os/sys/logging), "
             f"got 0 from {len(relationships)} total relationships"
         )
+        entity_ids = {
+            entry["id"]
+            for collection in (result["files"], result["symbols"])
+            for entry in collection
+        }
+        assert all(rel["source_id"] in entity_ids for rel in import_rels)
+        assert all(rel["target_id"] in entity_ids for rel in import_rels)
+        assert all("line_start" in rel["evidence"][0] for rel in import_rels)
+
+    def test_repeated_imports_have_unique_relationship_ids(self, tmp_path, monkeypatch):
+        monkeypatch.chdir(tmp_path)
+        result = TreeSitterProcessor().analyze_changes([
+            _make_file_data(
+                "api/routes.py",
+                "from auth import first\nfrom auth import second\n",
+                "added",
+            )
+        ])
+        import_rels = [r for r in result["relationships"] if r["kind"] == "imports"]
+        assert len(import_rels) == 2
+        assert len({r["id"] for r in import_rels}) == 2
+        assert [r["evidence"][0]["line_start"] for r in import_rels] == [1, 2]
 
     def test_import_relationships_have_structural_source(self, tmp_path, monkeypatch):
         monkeypatch.chdir(tmp_path)
