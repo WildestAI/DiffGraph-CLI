@@ -13,7 +13,7 @@ setup(
             "wild=diffgraph.cli:main",
         ],
     },
-    python_requires=">=3.7",
+    python_requires=">=3.10",
     author="WildestAI Team",
     description="AI-powered git-wrapper CLI tool with visualizing diffs",
     long_description=open("README.md").read(),
@@ -23,9 +23,6 @@ setup(
         "Intended Audience :: Developers",
         "License :: OSI Approved :: MIT License",
         "Programming Language :: Python :: 3",
-        "Programming Language :: Python :: 3.7",
-        "Programming Language :: Python :: 3.8",
-        "Programming Language :: Python :: 3.9",
         "Programming Language :: Python :: 3.10",
     ],
 )
