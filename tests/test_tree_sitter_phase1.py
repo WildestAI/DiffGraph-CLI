@@ -195,6 +195,27 @@ class TestAnalysisWarnings:
         monkeypatch.chdir(tmp_path)
         processor = TreeSitterProcessor()
 
+        class FailingParser:
+            def parse(self, source):
+                raise RuntimeError("parse failed")
+
+        monkeypatch.setattr(processor, "_get_parser", lambda language: FailingParser())
+        result = processor.analyze_changes(
+            [_make_file_data("broken.py", "def broken(:", "added")]
+        )
+
+        assert result["metadata"]["files_analyzed"] == 1
+        assert result["metadata"]["files_skipped"] == 0
+        assert result["metadata"]["warnings"] == [{
+            "code": "PARSE_FAILURE",
+            "file": "broken.py",
+            "detail": "post-change: RuntimeError: parse failed",
+        }]
+
+    def test_parser_initialization_failure_is_reported(self, tmp_path, monkeypatch):
+        monkeypatch.chdir(tmp_path)
+        processor = TreeSitterProcessor()
+
         def fail_parser(language):
             raise RuntimeError(f"parser unavailable for {language}")
 
@@ -203,8 +224,6 @@ class TestAnalysisWarnings:
             [_make_file_data("broken.py", "def broken(:", "added")]
         )
 
-        assert result["metadata"]["files_analyzed"] == 1
-        assert result["metadata"]["files_skipped"] == 0
         assert result["metadata"]["warnings"] == [{
             "code": "PARSE_FAILURE",
             "file": "broken.py",
