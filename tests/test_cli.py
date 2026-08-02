@@ -1,8 +1,11 @@
 """
 Tests for CLI functionality.
 """
+from types import SimpleNamespace
+
 import pytest
 from click.testing import CliRunner
+from diffgraph import cli
 from diffgraph.cli import main
 
 
@@ -57,3 +60,52 @@ def test_cli_version(cli_runner):
     
     assert result.exit_code == 0
     assert 'version' in result.output.lower()
+
+
+@pytest.mark.parametrize(
+    ("graph_format", "export_name"),
+    [("json", "export_structured_json"), ("pickle", "export_graph")],
+)
+def test_cli_exports_selected_processors_graph(
+    cli_runner, monkeypatch, graph_format, export_name
+):
+    """Graph export uses the selected processor rather than a stale variable."""
+    graph_manager = object()
+    processor = SimpleNamespace(
+        graph_manager=graph_manager,
+        analyze_changes=lambda files, callback: SimpleNamespace(),
+    )
+    exported = {}
+
+    monkeypatch.setattr(cli, "is_git_repo", lambda: True)
+    monkeypatch.setattr(
+        cli, "get_changed_files", lambda args: [{"path": "example.py", "status": "modified"}]
+    )
+    monkeypatch.setattr(
+        cli,
+        "load_file_contents",
+        lambda files, args: [{"path": "example.py", "status": "modified", "content": ""}],
+    )
+    monkeypatch.setattr(cli, "get_processor", lambda mode, api_key=None: processor)
+
+    def record_export(manager, output, *args):
+        exported["manager"] = manager
+        return output
+
+    monkeypatch.setattr(cli, export_name, record_export)
+
+    result = cli_runner.invoke(
+        main,
+        [
+            "--format",
+            "graph",
+            "--graph-format",
+            graph_format,
+            "--output",
+            "result.json",
+            "diff",
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    assert exported["manager"] is graph_manager

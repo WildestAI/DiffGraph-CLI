@@ -230,10 +230,10 @@ def main(args, api_key: str, output: str, format: str, graph_format: str, no_ope
                 click.echo(f"💾 Exporting graph data in {graph_format} format...")
                 if graph_format == 'json':
                     # Use structured format for JSON
-                    graph_path = export_structured_json(agent.graph_manager, output, diff_args)
+                    graph_path = export_structured_json(processor.graph_manager, output, diff_args)
                 else:
                     # Use NetworkX format for pickle/graphml
-                    graph_path = export_graph(agent.graph_manager, output, graph_format)
+                    graph_path = export_graph(processor.graph_manager, output, graph_format)
                 click.echo(f"✅ Graph data exported: {graph_path}")
             else:
                 # Create analysis result
