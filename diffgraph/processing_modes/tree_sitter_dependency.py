@@ -900,6 +900,9 @@ class TreeSitterProcessor(BaseProcessor):
         all_import_relationships = []
         file_change_list = []
         languages_seen: set = set()
+        warnings: List[Dict[str, str]] = []
+        files_analyzed = 0
+        files_skipped = 0
 
         for idx, file_data in enumerate(files_with_content):
             file_path = file_data["path"]
@@ -922,9 +925,16 @@ class TreeSitterProcessor(BaseProcessor):
             # Determine language — skip unsupported files
             language = get_language_from_file(file_path)
             if not language:
+                files_skipped += 1
+                warnings.append({
+                    "code": "UNSUPPORTED_LANGUAGE",
+                    "file": file_path,
+                    "detail": "No Tree-sitter language is configured for this file.",
+                })
                 if progress_callback:
                     progress_callback(file_path, total_files, "skipped")
                 continue
+            files_analyzed += 1
             languages_seen.add(language)
 
             # Fetch pre/post content
@@ -954,7 +964,11 @@ class TreeSitterProcessor(BaseProcessor):
                         language, pre_tree, pre_content.encode("utf-8"), file_path
                     )
                 except Exception as e:
-                    pass  # Treat parse failure as empty pre-snapshot
+                    warnings.append({
+                        "code": "PARSE_FAILURE",
+                        "file": file_path,
+                        "detail": f"pre-change: {type(e).__name__}: {e}",
+                    })
 
             # Parse post snapshot
             post_components = []
@@ -973,7 +987,11 @@ class TreeSitterProcessor(BaseProcessor):
                             post_tree, post_source_bytes
                         )
                 except Exception as e:
-                    pass  # Treat parse failure as empty post-snapshot
+                    warnings.append({
+                        "code": "PARSE_FAILURE",
+                        "file": file_path,
+                        "detail": f"post-change: {type(e).__name__}: {e}",
+                    })
 
             # Compute symbol-level diff
             symbol_changes = compute_symbol_diff(
@@ -1006,6 +1024,9 @@ class TreeSitterProcessor(BaseProcessor):
             wild_version=wild_version,
             analysis_duration_ms=duration_ms,
             languages_detected=sorted(languages_seen),
+            warnings=warnings,
+            files_analyzed=files_analyzed,
+            files_skipped=files_skipped,
         )
 
     def analyze_changes(

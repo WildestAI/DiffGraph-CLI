@@ -298,6 +298,25 @@ class TestBuildSchemaV2Output:
         assert "warnings" in out["metadata"]
         assert out["metadata"]["warnings"] == []
 
+    def test_analysis_counts_and_warnings_are_preserved(self):
+        out = build_schema_v2_output(
+            symbol_changes=[],
+            import_relationships=[],
+            file_changes=[{"path": FILE, "change_kind": "modified"}],
+            diff_ref={"from": "HEAD", "to": "working_tree", "kind": "unstaged"},
+            wild_version="2.0.0-dev",
+            analysis_duration_ms=1,
+            languages_detected=["python"],
+            warnings=[{"code": "PARSE_FAILURE", "file": FILE, "detail": "bad tree"}],
+            files_analyzed=1,
+            files_skipped=2,
+        )
+        assert out["metadata"]["files_analyzed"] == 1
+        assert out["metadata"]["files_skipped"] == 2
+        assert out["metadata"]["warnings"] == [
+            {"code": "PARSE_FAILURE", "file": FILE, "detail": "bad tree"}
+        ]
+
     def test_no_network_calls(self):
         """
         Structural invariant: building schema v2 output makes zero network calls.

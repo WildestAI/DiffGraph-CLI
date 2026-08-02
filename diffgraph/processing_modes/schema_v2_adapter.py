@@ -335,13 +335,16 @@ def build_schema_v2_output(
     wild_version: str,
     analysis_duration_ms: int,
     languages_detected: List[str],
+    warnings: Optional[List[Dict]] = None,
+    files_analyzed: Optional[int] = None,
+    files_skipped: Optional[int] = None,
 ) -> Dict:
     """
     Assemble a complete schema v2 JSON dict from structural analysis data.
 
     Invariants enforced here:
     - ``summary: null``  (no LLM → D2 from JSON-SCHEMA.md)
-    - ``metadata.warnings: []``  (always present → D4; lives in metadata not top-level)
+    - ``metadata.warnings`` is always present (D4; lives in metadata, not top-level)
     - ``metadata.privacy_tier: "local"``  (no network calls)
     - ``metadata.cloud_providers_used: []``
 
@@ -353,6 +356,9 @@ def build_schema_v2_output(
         wild_version:          Semver string, e.g. "2.0.0".
         analysis_duration_ms:  Wall-clock ms for the full analysis run.
         languages_detected:    List of language slugs, e.g. ["python"].
+        warnings:              Structured warning records produced during analysis.
+        files_analyzed:        Number of files sent through a supported parser.
+        files_skipped:         Number of files skipped before parsing.
 
     Returns:
         A dict that validates against diffgraph-v2.schema.json.
@@ -371,6 +377,8 @@ def build_schema_v2_output(
             "cloud_providers_used": [],
             "analysis_duration_ms": analysis_duration_ms,
             "languages_detected": sorted(languages_detected),
-            "warnings": [],        # D4: always present; in metadata not top-level
+            "files_analyzed": files_analyzed,
+            "files_skipped": files_skipped,
+            "warnings": list(warnings or []),  # D4: always present in metadata
         },
     }

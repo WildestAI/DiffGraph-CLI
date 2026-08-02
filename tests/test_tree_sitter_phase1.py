@@ -174,7 +174,46 @@ class TestAnalysisDuration:
 
 
 # ---------------------------------------------------------------------------
-# 4. relationships[] includes import relationships for Python files
+# 4. Analysis warnings and file counts are explicit
+# ---------------------------------------------------------------------------
+
+class TestAnalysisWarnings:
+    def test_unsupported_file_is_reported_as_skipped(self, tmp_path, monkeypatch):
+        monkeypatch.chdir(tmp_path)
+        result = TreeSitterProcessor().analyze_changes(
+            [_make_file_data("README.md", "# Hello", "added")]
+        )
+        assert result["metadata"]["files_analyzed"] == 0
+        assert result["metadata"]["files_skipped"] == 1
+        assert result["metadata"]["warnings"] == [{
+            "code": "UNSUPPORTED_LANGUAGE",
+            "file": "README.md",
+            "detail": "No Tree-sitter language is configured for this file.",
+        }]
+
+    def test_post_parse_failure_is_reported(self, tmp_path, monkeypatch):
+        monkeypatch.chdir(tmp_path)
+        processor = TreeSitterProcessor()
+
+        def fail_parser(language):
+            raise RuntimeError(f"parser unavailable for {language}")
+
+        monkeypatch.setattr(processor, "_get_parser", fail_parser)
+        result = processor.analyze_changes(
+            [_make_file_data("broken.py", "def broken(:", "added")]
+        )
+
+        assert result["metadata"]["files_analyzed"] == 1
+        assert result["metadata"]["files_skipped"] == 0
+        assert result["metadata"]["warnings"] == [{
+            "code": "PARSE_FAILURE",
+            "file": "broken.py",
+            "detail": "post-change: RuntimeError: parser unavailable for python",
+        }]
+
+
+# ---------------------------------------------------------------------------
+# 5. relationships[] includes import relationships for Python files
 # ---------------------------------------------------------------------------
 
 class TestImportRelationships:
@@ -215,7 +254,7 @@ class TestImportRelationships:
 
 
 # ---------------------------------------------------------------------------
-# 5. symbols[] are populated for Python files
+# 6. symbols[] are populated for Python files
 # ---------------------------------------------------------------------------
 
 class TestSymbols:
@@ -260,7 +299,7 @@ class TestSymbols:
 
 
 # ---------------------------------------------------------------------------
-# 6. Output validates against diffgraph-v2.schema.json
+# 7. Output validates against diffgraph-v2.schema.json
 # ---------------------------------------------------------------------------
 
 @pytest.mark.skipif(not HAS_JSONSCHEMA, reason="jsonschema not installed")
