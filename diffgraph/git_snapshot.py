@@ -13,6 +13,7 @@ filename bytes are not delimiters.
 from __future__ import annotations
 
 import os
+import posixpath
 import stat
 import subprocess
 from dataclasses import dataclass
@@ -52,6 +53,10 @@ class SnapshotResolution:
 
     entries: Tuple[SnapshotEntry, ...]
     warnings: Tuple[ResolutionWarning, ...]
+
+
+class GitSnapshotError(RuntimeError):
+    """A Git or working-tree operation required for exact snapshots failed."""
 
 
 @dataclass(frozen=True)
@@ -106,9 +111,10 @@ def _resolve(
     command.extend(
         ["--raw", "-z", "--no-abbrev", "--no-ext-diff", "--find-renames=50%"]
     )
-    if pathspecs:
+    scoped_pathspecs = _root_relative_pathspecs(repository, root, pathspecs)
+    if scoped_pathspecs:
         command.append("--")
-        command.extend(pathspecs)
+        command.extend(scoped_pathspecs)
 
     output = _run(command, root, warnings, "git_diff_failed")
     if output is None:
@@ -142,6 +148,82 @@ def _repository_root(
     return os.fsdecode(output.rstrip(b"\n"))
 
 
+def repository_root(repository: str) -> str:
+    """Return the repository root or raise a typed, user-facing error."""
+
+    output = run_git(repository, "rev-parse", "--show-toplevel")
+    return os.fsdecode(output.rstrip(b"\n"))
+
+
+def run_git(
+    repository: str, *args: str, input_bytes: Optional[bytes] = None
+) -> bytes:
+    """Run Git with captured output and raise :class:`GitSnapshotError`."""
+
+    try:
+        completed = subprocess.run(
+            ["git", *args],
+            cwd=os.fspath(repository),
+            input=input_bytes,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            check=False,
+        )
+    except (OSError, ValueError) as error:
+        raise GitSnapshotError(str(error)) from error
+
+    if completed.returncode != 0:
+        detail = os.fsdecode(completed.stderr).strip()
+        message = detail or "Git command exited with status {}".format(
+            completed.returncode
+        )
+        raise GitSnapshotError(message)
+    return completed.stdout
+
+
+def _root_relative_pathspecs(
+    repository: str,
+    root: str,
+    pathspecs: Optional[Sequence[str]],
+) -> List[str]:
+    """Translate caller-relative pathspecs for a Git process run at ``root``."""
+
+    if not pathspecs:
+        return []
+    caller = os.path.abspath(os.fspath(repository))
+    prefix = os.path.relpath(caller, root)
+    if prefix == ".":
+        return list(pathspecs)
+    prefix = prefix.replace(os.sep, "/")
+    scoped: List[str] = []
+    for pathspec in pathspecs:
+        if os.path.isabs(pathspec):
+            scoped.append(os.path.relpath(pathspec, root).replace(os.sep, "/"))
+        else:
+            scoped.append(_prefix_pathspec(pathspec, prefix))
+    return scoped
+
+
+def _prefix_pathspec(pathspec: str, prefix: str) -> str:
+    """Prefix a Git pathspec while preserving common pathspec magic."""
+
+    def prefixed(pattern: str) -> str:
+        return posixpath.normpath(posixpath.join(prefix, pattern))
+
+    if pathspec.startswith(":/"):
+        return pathspec
+    if pathspec.startswith(":("):
+        end = pathspec.find(")")
+        if end != -1:
+            magic = pathspec[2:end].split(",")
+            if "top" in magic:
+                return pathspec
+            return pathspec[: end + 1] + prefixed(pathspec[end + 1 :])
+    if pathspec.startswith((":!", ":^")):
+        return pathspec[:2] + prefixed(pathspec[2:])
+    return prefixed(pathspec)
+
+
 def _run(
     command: Sequence[str],
     cwd: str,
@@ -151,24 +233,12 @@ def _run(
     path: Optional[str] = None,
 ) -> Optional[bytes]:
     try:
-        completed = subprocess.run(
-            list(command),
-            cwd=cwd,
-            input=input_bytes,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            check=False,
-        )
-    except (OSError, ValueError) as error:
+        if not command or command[0] != "git":
+            raise ValueError("only Git commands are supported")
+        return run_git(cwd, *command[1:], input_bytes=input_bytes)
+    except (GitSnapshotError, ValueError) as error:
         warnings.append(ResolutionWarning(code, str(error), path))
         return None
-
-    if completed.returncode != 0:
-        detail = os.fsdecode(completed.stderr).strip()
-        message = detail or "Git command exited with status {}".format(completed.returncode)
-        warnings.append(ResolutionWarning(code, message, path))
-        return None
-    return completed.stdout
 
 
 def _parse_raw(data: bytes, warnings: List[ResolutionWarning]) -> List[_RawEntry]:
@@ -287,6 +357,16 @@ def _working_tree_oid(
     mode: Optional[str],
     warnings: List[ResolutionWarning],
 ) -> Optional[str]:
+    result = _working_tree_blob(root, path, mode, warnings)
+    return result[1] if result is not None else None
+
+
+def _working_tree_blob(
+    root: str,
+    path: str,
+    mode: Optional[str],
+    warnings: List[ResolutionWarning],
+) -> Optional[Tuple[bytes, str]]:
     full_path = os.path.join(root, path)
     try:
         before = os.lstat(full_path)
@@ -296,7 +376,7 @@ def _working_tree_oid(
             with open(full_path, "rb") as handle:
                 content = handle.read()
                 opened = os.fstat(handle.fileno())
-            if (opened.st_dev, opened.st_ino) != (before.st_dev, before.st_ino):
+            if _stat_identity(opened) != _stat_identity(before):
                 raise OSError("working-tree file changed while it was opened")
         else:
             warnings.append(
@@ -308,19 +388,17 @@ def _working_tree_oid(
             )
             return None
         after = os.lstat(full_path)
-        if (
-            before.st_dev,
-            before.st_ino,
-            before.st_size,
-            before.st_mtime_ns,
-        ) != (after.st_dev, after.st_ino, after.st_size, after.st_mtime_ns):
+        if _stat_identity(before) != _stat_identity(after):
             raise OSError("working-tree file changed while it was hashed")
     except OSError as error:
         warnings.append(ResolutionWarning("worktree_read_failed", str(error), path))
         return None
 
+    command = ["git", "hash-object", "--stdin"]
+    if mode != "120000":
+        command.append("--path={}".format(path))
     output = _run(
-        ["git", "hash-object", "--stdin", "--path={}".format(path)],
+        command,
         root,
         warnings,
         "hash_object_failed",
@@ -335,7 +413,37 @@ def _working_tree_oid(
             ResolutionWarning("malformed_hash_object_output", "Git returned an invalid object ID", path)
         )
         return None
-    return oid
+    return content, oid
+
+
+def read_worktree_blob(
+    root: str, path: str, mode: Optional[str], expected_oid: Optional[str] = None
+) -> bytes:
+    """Read exact regular-file or symlink bytes and verify their Git identity."""
+
+    warnings: List[ResolutionWarning] = []
+    result = _working_tree_blob(root, path, mode, warnings)
+    if result is None:
+        warning = warnings[0] if warnings else ResolutionWarning(
+            "worktree_read_failed", "working-tree content could not be read", path
+        )
+        raise GitSnapshotError("{}: {}".format(warning.code, warning.message))
+    content, oid = result
+    if expected_oid is not None and oid != expected_oid:
+        raise GitSnapshotError(
+            "working-tree content no longer matches resolved Git identity"
+        )
+    return content
+
+
+def _stat_identity(value: os.stat_result) -> Tuple[int, int, int, int, int]:
+    return (
+        value.st_mode,
+        value.st_dev,
+        value.st_ino,
+        value.st_size,
+        value.st_mtime_ns,
+    )
 
 
 def _entry_sort_key(entry: SnapshotEntry) -> Tuple[bytes, bytes, str]:

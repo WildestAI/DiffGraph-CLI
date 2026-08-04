@@ -386,7 +386,22 @@
       "properties": {
         "code": {
           "type": "string",
-          "enum": ["PARSE_FAILURE", "UNSUPPORTED_LANGUAGE", "PARTIAL_ANALYSIS", "LLM_TIMEOUT", "LLM_ERROR", "UNKNOWN"],
+          "enum": [
+            "PARSE_FAILURE",
+            "UNSUPPORTED_LANGUAGE",
+            "PARTIAL_ANALYSIS",
+            "LLM_TIMEOUT",
+            "LLM_ERROR",
+            "UNKNOWN",
+            "not_a_git_repository",
+            "git_diff_failed",
+            "malformed_git_output",
+            "missing_object_id",
+            "unsupported_worktree_entry",
+            "worktree_read_failed",
+            "hash_object_failed",
+            "malformed_hash_object_output"
+          ],
           "description": "Machine-readable warning code. Consumers can surface these to the user."
         },
         "file": { "type": "string" },

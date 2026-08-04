@@ -203,7 +203,8 @@ def test_repeated_resolution_is_deterministic(tmp_path):
     assert [entry.new_path for entry in first.entries] == ["a.txt", "middle.txt", "z.txt"]
 
 
-def test_git_failures_are_warnings_not_changes(tmp_path):
+def test_git_failures_are_warnings_not_changes(tmp_path, monkeypatch):
+    monkeypatch.setenv("GIT_CEILING_DIRECTORIES", str(tmp_path.parent))
     result = resolve_staged(str(tmp_path))
 
     assert result.entries == ()
@@ -252,4 +253,38 @@ def test_unstaged_intent_to_add_and_rename_have_exact_identities(tmp_path):
         "--stdin",
         "--path=added.py",
         input_bytes=(repo / "added.py").read_bytes(),
+    ).decode("ascii").strip()
+
+
+def test_pathspecs_are_relative_to_the_calling_subdirectory(tmp_path):
+    repo = make_repo(tmp_path)
+    write(repo, "src/app.py", b"def value():\n    return 1\n")
+    write(repo, "app.py", b"def root_value():\n    return 1\n")
+    commit_all(repo)
+    write(repo, "src/app.py", b"def value():\n    return 2\n")
+    write(repo, "app.py", b"def root_value():\n    return 2\n")
+
+    result = resolve_unstaged(str(repo / "src"), ["app.py"])
+
+    assert result.warnings == ()
+    assert [entry.new_path for entry in result.entries] == ["src/app.py"]
+
+
+def test_unstaged_symlink_hashes_raw_target_without_attributes(tmp_path):
+    repo = make_repo(tmp_path)
+    write(repo, ".gitattributes", b"*.py filter=decorate\n")
+    git(repo, "config", "filter.decorate.clean", "sed 's/^/filtered:/'")
+    os.symlink("original.py", repo / "link.py")
+    commit_all(repo)
+
+    os.unlink(repo / "link.py")
+    os.symlink("replacement.py", repo / "link.py")
+    result = resolve_unstaged(str(repo), ["link.py"])
+
+    assert result.warnings == ()
+    assert len(result.entries) == 1
+    entry = result.entries[0]
+    assert entry.new_mode == "120000"
+    assert entry.new_oid == git(
+        repo, "hash-object", "--stdin", input_bytes=b"replacement.py"
     ).decode("ascii").strip()

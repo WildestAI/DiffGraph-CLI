@@ -4,14 +4,22 @@ import subprocess
 from pathlib import Path
 
 import jsonschema
+import pytest
 
+from diffgraph.git_snapshot import GitSnapshotError, ResolutionWarning, SnapshotResolution
 from diffgraph.structural import analyze_local_diff
 
 SCHEMA = json.loads((Path(__file__).parents[1] / "diffgraph/schema/diffgraph-v2.schema.json").read_text())
 
 
-def git(repo, *args):
-    return subprocess.run(["git", *args], cwd=repo, check=True, stdout=subprocess.PIPE).stdout.decode().strip()
+def git(repo, *args, input_bytes=None):
+    return subprocess.run(
+        ["git", *args],
+        cwd=repo,
+        input=input_bytes,
+        check=True,
+        stdout=subprocess.PIPE,
+    ).stdout.decode().strip()
 
 
 def write(repo, path, text):
@@ -57,13 +65,14 @@ def test_staged_add_modify_delete_rename_import_is_schema_valid_and_golden(tmp_p
     write(root, "modify.py", "def retained():\n    return 2\n\ndef created():\n    return 3\n")
     os.unlink(root / "delete.py")
     git(root, "mv", "rename.py", "renamed.py")
+    write(root, "renamed.py", "def moved():\n    return 2\n")
     git(root, "add", "-A")
 
     artifact = analyze_local_diff(str(root), staged=True)
     assert_valid(artifact)
     assert [f["path"] for f in artifact["files"]] == ["add.py", "delete.py", "modify.py", "renamed.py"]
     assert {f["path"]: f["change_kind"] for f in artifact["files"]} == {
-        "add.py": "added", "delete.py": "deleted", "modify.py": "modified", "renamed.py": "renamed"
+        "add.py": "added", "delete.py": "deleted", "modify.py": "modified", "renamed.py": "renamed_modified"
     }
     changes = {s["id"]: s["change_kind"] for s in artifact["symbols"]}
     assert changes["sym::add.py::added"] == "added"
@@ -71,7 +80,8 @@ def test_staged_add_modify_delete_rename_import_is_schema_valid_and_golden(tmp_p
     assert changes["sym::modify.py::retained"] == "modified"
     assert changes["sym::modify.py::removed"] == "deleted"
     assert changes["sym::modify.py::created"] == "added"
-    assert changes["sym::renamed.py::moved"] == "unchanged"
+    assert changes["sym::renamed.py::moved"] == "modified"
+    assert artifact["metadata"]["files_analyzed"] == 4
     imports = [r for r in artifact["relationships"] if r["kind"] == "imports"]
     assert [r["label"] for r in imports] == [
         "unresolved/external module: external.pkg", "unresolved/external module: os"
@@ -92,7 +102,7 @@ def test_staged_add_modify_delete_rename_import_is_schema_valid_and_golden(tmp_p
     }
     if os.environ.get("UPDATE_GOLDEN"):
         golden_path.write_text(json.dumps(actual, indent=2) + "\n")
-        expected = actual
+        pytest.skip("golden fixture regenerated")
     assert actual == expected
 
 
@@ -194,6 +204,24 @@ def test_cli_structural_json_rejects_unimplemented_commit_ranges(tmp_path, monke
     assert "currently supports only unstaged" in result.output
 
 
+def test_cli_structural_json_requires_separator_before_pathspecs(tmp_path, monkeypatch):
+    from click.testing import CliRunner
+    from diffgraph.cli import main
+
+    root = repo(tmp_path)
+    write(root, "app.py", "def value():\n    return 1\n")
+    commit(root)
+    write(root, "app.py", "def value():\n    return 2\n")
+    monkeypatch.chdir(root)
+
+    result = CliRunner().invoke(
+        main, ["--structural-json", "-", "diff", "app.py"]
+    )
+
+    assert result.exit_code == 2
+    assert "put pathspecs after '--'" in result.output
+
+
 def test_methods_nested_functions_and_deleted_imports_are_not_overclaimed(tmp_path):
     root = repo(tmp_path)
     write(
@@ -220,3 +248,217 @@ def test_methods_nested_functions_and_deleted_imports_are_not_overclaimed(tmp_pa
         and item["target_id"] == symbols["import::removed_pkg"]["id"]
         for item in artifact["relationships"]
     )
+
+
+def test_duplicate_symbol_occurrences_are_preserved(tmp_path):
+    root = repo(tmp_path)
+    write(
+        root,
+        "properties.py",
+        "class Item:\n"
+        "    @property\n"
+        "    def value(self):\n"
+        "        return 1\n\n"
+        "    @value.setter\n"
+        "    def value(self, new):\n"
+        "        self._value = new\n",
+    )
+    commit(root)
+    write(
+        root,
+        "properties.py",
+        "class Item:\n"
+        "    @property\n"
+        "    def value(self):\n"
+        "        return 1\n\n"
+        "    @value.setter\n"
+        "    def value(self, new):\n"
+        "        self._value = new + 1\n",
+    )
+
+    artifact = analyze_local_diff(str(root))
+    assert_valid(artifact)
+    values = {
+        item["qualified_name"]: item
+        for item in artifact["symbols"]
+        if item["name"] == "value"
+    }
+    assert set(values) == {"Item.value", "Item.value#1"}
+    assert values["Item.value"]["change_kind"] == "unchanged"
+    assert values["Item.value#1"]["change_kind"] == "modified"
+
+
+def test_aliased_import_uses_name_field_and_reports_alias_edit_as_modified(tmp_path):
+    root = repo(tmp_path)
+    write(root, "imports.py", "import package \\\n    as old_alias\n")
+    commit(root)
+    write(root, "imports.py", "import package \\\n    as new_alias\n")
+
+    artifact = analyze_local_diff(str(root))
+    assert_valid(artifact)
+    imported = next(item for item in artifact["symbols"] if item["kind"] == "import")
+    assert imported["name"] == "package"
+    assert imported["qualified_name"] == "import::package"
+    assert imported["change_kind"] == "modified"
+
+
+def test_worktree_symlink_uses_exact_link_bytes_without_partial_warning(tmp_path):
+    root = repo(tmp_path)
+    os.symlink("original.py", root / "link.py")
+    commit(root)
+    os.unlink(root / "link.py")
+    os.symlink("replacement.py", root / "link.py")
+
+    artifact = analyze_local_diff(str(root))
+    assert_valid(artifact)
+    assert artifact["metadata"]["files_analyzed"] == 1
+    assert not any(
+        warning["code"] == "PARTIAL_ANALYSIS"
+        for warning in artifact["metadata"]["warnings"]
+    )
+    provenance = json.loads(artifact["files"][0]["evidence"][0]["detail"])
+    assert provenance["new_oid"] == git(
+        root, "hash-object", "--stdin", input_bytes=b"replacement.py"
+    )
+
+
+def test_snapshot_read_failure_is_partial_analysis(monkeypatch, tmp_path):
+    root = repo(tmp_path)
+    write(root, "app.py", "def value():\n    return 1\n")
+    commit(root)
+    write(root, "app.py", "def value():\n    return 2\n")
+
+    def fail_read(*args, **kwargs):
+        raise GitSnapshotError("simulated read race")
+
+    monkeypatch.setattr("diffgraph.structural.read_worktree_blob", fail_read)
+    artifact = analyze_local_diff(str(root))
+    assert_valid(artifact)
+    assert artifact["metadata"]["files_analyzed"] == 0
+    assert artifact["metadata"]["files_skipped"] == 1
+    warning = artifact["metadata"]["warnings"][0]
+    assert warning["code"] == "PARTIAL_ANALYSIS"
+    assert "simulated read race" in warning["detail"]
+
+
+def test_resolution_warning_preserves_machine_readable_code(monkeypatch, tmp_path):
+    root = repo(tmp_path)
+    warning = ResolutionWarning("hash_object_failed", "simulated failure", "app.py")
+    monkeypatch.setattr(
+        "diffgraph.structural.resolve_unstaged",
+        lambda repository, pathspecs: SnapshotResolution((), (warning,)),
+    )
+
+    artifact = analyze_local_diff(str(root))
+    assert_valid(artifact)
+    assert artifact["metadata"]["warnings"] == [
+        {
+            "code": "hash_object_failed",
+            "file": "app.py",
+            "detail": "hash_object_failed: simulated failure",
+        }
+    ]
+
+
+def test_cli_structural_json_rejects_non_diff_command():
+    from click.testing import CliRunner
+    from diffgraph.cli import main
+
+    result = CliRunner().invoke(main, ["--structural-json", "out.json", "status"])
+    assert result.exit_code == 2
+    assert "can only be used with 'diff'" in result.output
+
+
+def test_cli_pathspec_is_relative_to_calling_subdirectory(tmp_path, monkeypatch):
+    from click.testing import CliRunner
+    from diffgraph.cli import main
+
+    root = repo(tmp_path)
+    write(root, "src/app.py", "def value():\n    return 1\n")
+    write(root, "app.py", "def root_value():\n    return 1\n")
+    commit(root)
+    write(root, "src/app.py", "def value():\n    return 2\n")
+    write(root, "app.py", "def root_value():\n    return 2\n")
+    monkeypatch.chdir(root / "src")
+
+    result = CliRunner().invoke(
+        main, ["--structural-json", "-", "diff", "--", "app.py"]
+    )
+    assert result.exit_code == 0, result.output
+    artifact = json.loads(result.output)
+    assert [item["path"] for item in artifact["files"]] == ["src/app.py"]
+
+
+def test_cli_missing_structural_output_parent_is_a_click_error(tmp_path, monkeypatch):
+    from click.testing import CliRunner
+    from diffgraph.cli import main
+
+    root = repo(tmp_path)
+    write(root, "app.py", "def value():\n    return 1\n")
+    git(root, "add", "app.py")
+    monkeypatch.chdir(root)
+    output = root / "nested" / "artifact.json"
+
+    result = CliRunner().invoke(
+        main, ["--structural-json", str(output), "diff", "--staged"]
+    )
+    assert result.exit_code == 1
+    assert "could not write" in result.output
+    assert "Traceback" not in result.output
+    assert not output.exists()
+
+
+def test_schema_errors_become_click_errors(monkeypatch):
+    import jsonschema as jsonschema_module
+    from click import ClickException
+    from diffgraph.cli import _validate_structural_artifact
+
+    def invalid_schema(*args, **kwargs):
+        raise jsonschema_module.SchemaError("invalid schema")
+
+    monkeypatch.setattr(jsonschema_module, "validate", invalid_schema)
+    with pytest.raises(ClickException, match="structural artifact validation failed"):
+        _validate_structural_artifact({})
+
+
+def test_missing_parser_dependency_is_a_run_level_cli_error(tmp_path, monkeypatch):
+    from click.testing import CliRunner
+    from diffgraph.cli import main
+    from diffgraph.structural import StructuralDependencyError
+
+    root = repo(tmp_path)
+    write(root, "app.py", "def value():\n    return 1\n")
+    git(root, "add", "app.py")
+    monkeypatch.chdir(root)
+
+    def unavailable():
+        raise StructuralDependencyError("parser dependency is unavailable")
+
+    monkeypatch.setattr("diffgraph.structural._parser", unavailable)
+    result = CliRunner().invoke(
+        main, ["--structural-json", "-", "diff", "--staged"]
+    )
+    assert result.exit_code == 1
+    assert "parser dependency is unavailable" in result.output
+    assert "PARSE_FAILURE" not in result.output
+
+
+def test_missing_ai_dependency_is_a_click_error(tmp_path, monkeypatch):
+    import builtins
+    from click.testing import CliRunner
+    from diffgraph.cli import main
+
+    root = repo(tmp_path)
+    monkeypatch.chdir(root)
+    real_import = builtins.__import__
+
+    def without_spinner(name, *args, **kwargs):
+        if name == "click_spinner":
+            raise ImportError("simulated missing spinner")
+        return real_import(name, *args, **kwargs)
+
+    monkeypatch.setattr(builtins, "__import__", without_spinner)
+    result = CliRunner().invoke(main, ["diff"])
+    assert result.exit_code == 1
+    assert "requires additional dependencies" in result.output
+    assert "Traceback" not in result.output

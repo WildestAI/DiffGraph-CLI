@@ -18,7 +18,7 @@
     {
       "path": "renamed.py",
       "old_path": "rename.py",
-      "change_kind": "renamed"
+      "change_kind": "renamed_modified"
     }
   ],
   "symbols": [
@@ -60,7 +60,7 @@
     {
       "id": "sym::renamed.py::moved",
       "kind": "function",
-      "change_kind": "unchanged"
+      "change_kind": "modified"
     }
   ],
   "relationships": [

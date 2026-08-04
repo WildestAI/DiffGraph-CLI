@@ -8,25 +8,34 @@ from __future__ import annotations
 
 import hashlib
 import json
-import os
-import subprocess
+import threading
 import time
 from dataclasses import dataclass
 from datetime import datetime, timezone
+from functools import lru_cache
 from importlib.metadata import PackageNotFoundError, version
 from pathlib import Path
 from typing import Dict, List, Optional, Sequence, Tuple
 
 from diffgraph import __version__ as package_version
 from diffgraph.git_snapshot import (
+    GitSnapshotError,
     ResolutionWarning,
     SnapshotEntry,
+    read_worktree_blob,
+    repository_root,
     resolve_staged,
     resolve_unstaged,
+    run_git,
 )
 
 ANALYZER = "diffgraph-python-tree-sitter"
 QUERY_VERSION = "python-structure-v1"
+_PARSER_STATE = threading.local()
+
+
+class StructuralDependencyError(ImportError):
+    """A required local structural parser dependency is unavailable."""
 
 
 @dataclass(frozen=True)
@@ -47,54 +56,38 @@ class _Import:
     snippet: str
 
 
-def _run(repository: str, *args: str) -> bytes:
-    return subprocess.run(
-        ["git", *args], cwd=repository, check=True, stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-    ).stdout
-
-
-def _root(repository: str) -> str:
-    return os.fsdecode(_run(repository, "rev-parse", "--show-toplevel").rstrip(b"\n"))
-
-
 def _blob(repository: str, oid: Optional[str]) -> Optional[bytes]:
     if oid is None:
         return None
-    return _run(repository, "cat-file", "blob", oid)
+    return run_git(repository, "cat-file", "blob", oid)
 
 
 def _worktree_bytes(repository: str, entry: SnapshotEntry) -> Optional[bytes]:
     if entry.new_path is None:
         return None
-    path = os.path.join(repository, entry.new_path)
-    before = os.stat(path, follow_symlinks=False)
-    with open(path, "rb") as handle:
-        content = handle.read()
-        opened = os.fstat(handle.fileno())
-    after = os.stat(path, follow_symlinks=False)
-    identity = lambda value: (value.st_dev, value.st_ino, value.st_size, value.st_mtime_ns)
-    if identity(before) != identity(opened) or identity(before) != identity(after):
-        raise OSError("working-tree file changed while it was read")
-    computed = os.fsdecode(
-        subprocess.run(
-            ["git", "hash-object", "--stdin", "--path={}".format(entry.new_path)],
-            cwd=repository, input=content, check=True, stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-        ).stdout
-    ).strip()
-    if computed != entry.new_oid:
-        raise OSError("working-tree content no longer matches resolved Git identity")
-    return content
+    return read_worktree_blob(
+        repository, entry.new_path, entry.new_mode, expected_oid=entry.new_oid
+    )
 
 
 def _parser():
-    import tree_sitter
-    import tree_sitter_language_pack
+    parser = getattr(_PARSER_STATE, "python_parser", None)
+    if parser is not None:
+        return parser
+    try:
+        import tree_sitter
+        import tree_sitter_language_pack
+    except ImportError as error:
+        raise StructuralDependencyError(
+            "Python structural analysis requires tree-sitter and "
+            "tree-sitter-language-pack"
+        ) from error
 
     # Construct the official parser directly so byte offsets and byte input
     # remain exact across language-pack releases.
-    return tree_sitter.Parser(tree_sitter_language_pack.get_language("python"))
+    parser = tree_sitter.Parser(tree_sitter_language_pack.get_language("python"))
+    _PARSER_STATE.python_parser = parser
+    return parser
 
 
 def _node_text(source: bytes, node) -> str:
@@ -118,6 +111,7 @@ def _parse_python(content: bytes) -> Tuple[List[_Symbol], List[_Import]]:
 
     symbols: List[_Symbol] = []
     imports: List[_Import] = []
+    symbol_occurrences: Dict[str, int] = {}
 
     def visit(node, parents: Tuple[Tuple[str, str], ...] = ()) -> None:
         next_parents = parents
@@ -125,8 +119,7 @@ def _parse_python(content: bytes) -> Tuple[List[_Symbol], List[_Import]]:
             name_node = _name_child(node)
             if name_node is not None:
                 name = _node_text(content, name_node)
-                parent_names = tuple(item[0] for item in parents)
-                parent = ".".join(parent_names) if parent_names else None
+                parent = parents[-1][0] if parents else None
                 is_method = bool(parents and parents[-1][1] == "class")
                 kind = (
                     "class"
@@ -135,7 +128,14 @@ def _parse_python(content: bytes) -> Tuple[List[_Symbol], List[_Import]]:
                     if is_method
                     else "function"
                 )
-                qname = ".".join((*parent_names, name))
+                base_qname = "{}.{}".format(parent, name) if parent else name
+                occurrence = symbol_occurrences.get(base_qname, 0)
+                symbol_occurrences[base_qname] = occurrence + 1
+                qname = (
+                    base_qname
+                    if occurrence == 0
+                    else "{}#{}".format(base_qname, occurrence)
+                )
                 body = content[node.start_byte:node.end_byte]
                 symbols.append(
                     _Symbol(
@@ -148,13 +148,19 @@ def _parse_python(content: bytes) -> Tuple[List[_Symbol], List[_Import]]:
                         hashlib.sha256(body).hexdigest(),
                     )
                 )
-                next_parents = (*parents, (name, kind))
+                next_parents = (*parents, (qname, kind))
         elif node.type in ("import_statement", "import_from_statement"):
             snippet = _node_text(content, node)
             if node.type == "import_statement":
                 names = [c for c in node.children if c.type in ("dotted_name", "aliased_import")]
                 for item in names:
-                    raw = _node_text(content, item).split(" as ", 1)[0]
+                    if item.type == "aliased_import":
+                        name_node = item.child_by_field_name("name")
+                        if name_node is None:
+                            raise ValueError("aliased import has no name")
+                        raw = _node_text(content, name_node)
+                    else:
+                        raw = _node_text(content, item)
                     imports.append(_Import(raw, node.start_point[0] + 1, snippet))
             else:
                 module_node = node.child_by_field_name("module_name")
@@ -170,9 +176,12 @@ def _parse_python(content: bytes) -> Tuple[List[_Symbol], List[_Import]]:
 
 
 def _change_kind(status: str, old_oid: Optional[str], new_oid: Optional[str]) -> str:
-    if status == "A": return "added"
-    if status == "D": return "deleted"
-    if status == "R": return "renamed" if old_oid == new_oid else "renamed_modified"
+    if status == "A":
+        return "added"
+    if status == "D":
+        return "deleted"
+    if status == "R":
+        return "renamed" if old_oid == new_oid else "renamed_modified"
     return "modified"
 
 
@@ -187,24 +196,40 @@ def _provenance(entry: SnapshotEntry, old: Optional[bytes], new: Optional[bytes]
     return json.dumps(values, sort_keys=True, separators=(",", ":"))
 
 
-def _parser_provenance(oid: Optional[str]) -> str:
+@lru_cache(maxsize=1)
+def _parser_version() -> str:
     try:
-        parser_version = version("tree-sitter-language-pack")
+        return version("tree-sitter-language-pack")
     except PackageNotFoundError:
-        parser_version = "unknown"
+        return "unknown"
+
+
+def _parser_provenance(oid: Optional[str]) -> str:
     return "analyzer={};parser=tree-sitter-language-pack@{};query={};blob={}".format(
-        ANALYZER, parser_version, QUERY_VERSION, oid or "absent"
+        ANALYZER, _parser_version(), QUERY_VERSION, oid or "absent"
     )
 
 
 def _warning(code: str, path: Optional[str], detail: str) -> Dict[str, str]:
     result = {"code": code, "detail": detail}
-    if path is not None: result["file"] = path
+    if path is not None:
+        result["file"] = path
     return result
 
 
 def _resolution_warning(item: ResolutionWarning) -> Dict[str, str]:
-    return _warning("UNKNOWN", item.path, "{}: {}".format(item.code, item.message))
+    known_codes = {
+        "not_a_git_repository",
+        "git_diff_failed",
+        "malformed_git_output",
+        "missing_object_id",
+        "unsupported_worktree_entry",
+        "worktree_read_failed",
+        "hash_object_failed",
+        "malformed_hash_object_output",
+    }
+    code = item.code if item.code in known_codes else "UNKNOWN"
+    return _warning(code, item.path, "{}: {}".format(item.code, item.message))
 
 
 def _symbol_id(path: str, qualified_name: str) -> str:
@@ -218,14 +243,24 @@ def _evidence(path: str, symbol: _Symbol, oid: Optional[str]) -> List[Dict]:
     }]
 
 
+def _keyed_imports(items: List[_Import]) -> Dict[Tuple[str, int], _Import]:
+    occurrences: Dict[str, int] = {}
+    result: Dict[Tuple[str, int], _Import] = {}
+    for import_item in items:
+        occurrence = occurrences.get(import_item.module, 0)
+        occurrences[import_item.module] = occurrence + 1
+        result[(import_item.module, occurrence)] = import_item
+    return result
+
+
 def analyze_local_diff(
     repository: str = ".", *, staged: bool = False,
     pathspecs: Optional[Sequence[str]] = None, wild_version: str = package_version,
 ) -> Dict:
     """Build a schema-v2 structural artifact for HEAD→index or index→worktree."""
     started = time.monotonic()
-    root = _root(repository)
-    resolution = (resolve_staged if staged else resolve_unstaged)(root, pathspecs)
+    root = repository_root(repository)
+    resolution = (resolve_staged if staged else resolve_unstaged)(repository, pathspecs)
     warnings = [_resolution_warning(item) for item in resolution.warnings]
     files: List[Dict] = []
     symbols: List[Dict] = []
@@ -234,11 +269,12 @@ def analyze_local_diff(
 
     for entry in resolution.entries:
         path = entry.new_path or entry.old_path
-        assert path is not None
+        if path is None:
+            raise RuntimeError("snapshot entry has neither an old nor a new path")
         try:
             old = _blob(root, entry.old_oid)
             new = _blob(root, entry.new_oid) if staged else _worktree_bytes(root, entry)
-        except (OSError, subprocess.CalledProcessError) as error:
+        except (OSError, GitSnapshotError) as error:
             old = new = None
             warnings.append(_warning("PARTIAL_ANALYSIS", path, "snapshot read failed: {}".format(error)))
 
@@ -255,12 +291,14 @@ def analyze_local_diff(
             skipped += 1
             warnings.append(_warning("UNSUPPORTED_LANGUAGE", path, "Deterministic extraction currently supports Python (.py) only."))
             continue
-        if old is None and entry.old_oid is not None or new is None and entry.new_oid is not None:
+        if (old is None and entry.old_oid is not None) or (
+            new is None and entry.new_oid is not None
+        ):
             skipped += 1
             continue
 
         parser_errors = (
-            UnicodeDecodeError, ValueError, RuntimeError, ImportError, OSError, TypeError
+            UnicodeDecodeError, ValueError, RuntimeError, OSError, TypeError
         )
         try:
             old_symbols, old_imports = _parse_python(old) if old is not None else ([], [])
@@ -281,7 +319,8 @@ def analyze_local_diff(
         for qname in sorted(set(old_map) | set(new_map)):
             before, after = old_map.get(qname), new_map.get(qname)
             current = after or before
-            assert current is not None
+            if current is None:
+                raise RuntimeError("symbol comparison produced no symbol")
             kind = "added" if before is None else "deleted" if after is None else (
                 "unchanged" if before.text_hash == after.text_hash else "modified"
             )
@@ -314,22 +353,14 @@ def analyze_local_diff(
                     "analysis_source": "structural", "evidence": _evidence(output_path, item, entry.new_oid),
                 })
 
-        def keyed_imports(items: List[_Import]) -> Dict[Tuple[str, int], _Import]:
-            occurrences: Dict[str, int] = {}
-            result: Dict[Tuple[str, int], _Import] = {}
-            for import_item in items:
-                occurrence = occurrences.get(import_item.module, 0)
-                occurrences[import_item.module] = occurrence + 1
-                result[(import_item.module, occurrence)] = import_item
-            return result
-
-        old_import_map = keyed_imports(old_imports)
-        new_import_map = keyed_imports(new_imports)
+        old_import_map = _keyed_imports(old_imports)
+        new_import_map = _keyed_imports(new_imports)
         for import_key in sorted(set(old_import_map) | set(new_import_map)):
             before = old_import_map.get(import_key)
             after = new_import_map.get(import_key)
             item = after or before
-            assert item is not None
+            if item is None:
+                raise RuntimeError("import comparison produced no import")
             module, occurrence = import_key
             suffix = "" if occurrence == 0 else "#{}".format(occurrence)
             qualified_name = "import::{}{}".format(module, suffix)
@@ -346,7 +377,13 @@ def analyze_local_diff(
                 }
             ]
             import_kind = (
-                "added" if before is None else "deleted" if after is None else "unchanged"
+                "added"
+                if before is None
+                else "deleted"
+                if after is None
+                else "unchanged"
+                if before.snippet == after.snippet
+                else "modified"
             )
             location = (
                 {

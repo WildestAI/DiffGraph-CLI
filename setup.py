@@ -14,6 +14,7 @@ setup(
         "openai-agents>=0.0.17",
         "python-dotenv>=1.0.0",
         "tree-sitter-language-pack>=0.10.0,<2",
+        "tree-sitter>=0.23,<1",
     ],
     entry_points={
         "console_scripts": [
