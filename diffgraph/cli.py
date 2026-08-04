@@ -173,6 +173,11 @@ def main(args, api_key: str, output: str, format: str, graph_format: str, no_ope
             debug_environment(api_key)
             return
 
+        if mode not in list_available_modes():
+            click.echo(f"❌ Error: Unknown processing mode: '{mode}'", err=True)
+            click.echo("\nUse --list-modes to see available processing modes.", err=True)
+            sys.exit(1)
+
         if not is_git_repo():
             click.echo("❌ Error: Not a git repository", err=True)
             sys.exit(1)
@@ -193,12 +198,7 @@ def main(args, api_key: str, output: str, format: str, graph_format: str, no_ope
         try:
             # Initialize the processor based on selected mode
             click.echo(f"🤖 Initializing {mode} processor...")
-            try:
-                processor = get_processor(mode, api_key=api_key)
-            except ValueError as e:
-                click.echo(f"❌ Error: {e}", err=True)
-                click.echo("\nUse --list-modes to see available processing modes.", err=True)
-                sys.exit(1)
+            processor = get_processor(mode, api_key=api_key)
 
             # Define progress callback
             def progress_callback(current_file, total_files, status):

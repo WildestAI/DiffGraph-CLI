@@ -43,15 +43,16 @@ def test_cli_help_shows_default_mode(cli_runner):
            ('openai-' in result.output and 'dependency-graph' in result.output)
 
 
-def test_cli_invalid_mode_error(cli_runner):
-    """Test that invalid mode shows helpful error."""
-    # We need a git repo and changes for this to work properly
-    # This test will fail early with invalid mode error
+def test_cli_invalid_mode_error(cli_runner, monkeypatch):
+    """Invalid modes are rejected even when the repository has no changes."""
+    monkeypatch.setattr(cli, "is_git_repo", lambda: True)
+    monkeypatch.setattr(cli, "get_changed_files", lambda args: [])
+
     result = cli_runner.invoke(main, ['diff', '--mode', 'invalid-mode'])
-    
-    # Should show error about invalid mode
-    # (might fail earlier if not in a git repo, which is fine)
-    assert result.exit_code != 0 or 'Available processing modes' in result.output
+
+    assert result.exit_code == 1
+    assert "Unknown processing mode: 'invalid-mode'" in result.output
+    assert 'Use --list-modes to see available processing modes.' in result.output
 
 
 def test_cli_version(cli_runner):
