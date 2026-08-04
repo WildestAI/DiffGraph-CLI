@@ -88,3 +88,27 @@ This project is licensed under the GNU General Public License v3.0 - see the [LI
 - [Highlight.js](https://highlightjs.org/) for syntax highlighting
 - [Tailwind CSS](https://tailwindcss.com/) for styling
 - [OpenAI](https://openai.com/) for AI capabilities
+
+### Local structural JSON (experimental)
+
+A deterministic, network-free Python baseline can be written as a validated
+DiffGraph v2 artifact without changing the existing AI/HTML default:
+
+```bash
+wild --structural-json diffgraph.json diff
+wild --structural-json staged.json diff --staged -- src/
+wild --structural-json - diff -- path/to/file.py
+```
+
+This increment intentionally supports only local unstaged (`index` → working
+tree) and staged (`HEAD` → index) snapshots. Put pathspecs after `--`.
+Commit ranges are rejected rather than analyzed with guessed semantics.
+
+Python (`.py`) is the only language with structural symbol/import extraction in
+this baseline. Other changed files remain in `files[]` and receive a scoped
+`UNSUPPORTED_LANGUAGE` warning. Syntax/decoding failures receive a scoped
+`PARSE_FAILURE` warning and do not produce invented symbol changes. Import
+targets are explicitly labeled unresolved/external; no project-wide resolution
+is claimed. Every file records old/new paths, modes, Git object IDs, and content
+SHA-256 values in structural evidence, while symbol/relationship evidence names
+the parser package, query revision, and source blob identity.

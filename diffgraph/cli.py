@@ -1,14 +1,14 @@
+import json
 import subprocess
 import sys
 from pathlib import Path
 import click
-from click_spinner import spinner
 from typing import List, Dict
 import os
-from diffgraph.ai_analysis import CodeAnalysisAgent
-from diffgraph.html_report import generate_html_report, AnalysisResult
+from diffgraph import __version__
 from diffgraph.env_loader import load_env_file, debug_environment
 from diffgraph.utils import sanitize_diff_args, involves_working_tree
+from diffgraph.structural import analyze_local_diff
 
 # Load environment variables
 load_env_file()
@@ -86,6 +86,42 @@ def get_changed_files(diff_args: List[str] = None) -> List[Dict[str, str]]:
 
     return changed_files
 
+def _structural_scope(diff_args: List[str]):
+    """Accept only the exact local snapshot modes implemented by this increment."""
+    staged = False
+    pathspecs = []
+    after_separator = False
+    for argument in diff_args:
+        if argument == "--":
+            after_separator = True
+        elif argument in ("--staged", "--cached") and not after_separator:
+            staged = True
+        elif after_separator:
+            pathspecs.append(argument)
+        else:
+            raise click.UsageError(
+                "--structural-json currently supports only unstaged or --staged/--cached "
+                "local diffs; put pathspecs after '--'"
+            )
+    return staged, pathspecs
+
+
+def _validate_structural_artifact(artifact):
+    """Fail closed when the canonical v2 schema cannot validate the artifact."""
+    try:
+        import jsonschema
+    except ImportError as error:
+        raise click.ClickException(
+            "jsonschema is required to validate --structural-json output"
+        ) from error
+    schema_path = Path(__file__).parent / "schema" / "diffgraph-v2.schema.json"
+    try:
+        schema = json.loads(schema_path.read_text(encoding="utf-8"))
+        jsonschema.validate(artifact, schema)
+    except (OSError, json.JSONDecodeError, jsonschema.ValidationError) as error:
+        raise click.ClickException(f"structural artifact validation failed: {error}") from error
+
+
 def load_file_contents(changed_files: List[Dict[str, str]], diff_args: List[str] = None) -> List[Dict[str, str]]:
     """
     Load contents of changed files.
@@ -136,7 +172,12 @@ def load_file_contents(changed_files: List[Dict[str, str]], diff_args: List[str]
 @click.option('--output', '-o', default='diffgraph.html', help='Output HTML file path')
 @click.option('--no-open', is_flag=True, help='Do not open the HTML report automatically')
 @click.option('--debug-env', is_flag=True, help='Debug environment variable loading')
-def main(args, api_key: str, output: str, no_open: bool, debug_env: bool):
+@click.option(
+    '--structural-json',
+    type=click.Path(dir_okay=False, path_type=Path),
+    help="Write the local Python structural DiffGraph v2 artifact ('-' for stdout)",
+)
+def main(args, api_key: str, output: str, no_open: bool, debug_env: bool, structural_json: Path):
     """wild - Git wrapper CLI with DiffGraph for diff commands."""
 
     # Check if this is a diff command
@@ -152,6 +193,26 @@ def main(args, api_key: str, output: str, no_open: bool, debug_env: bool):
         if not is_git_repo():
             click.echo("❌ Error: Not a git repository", err=True)
             sys.exit(1)
+
+        if structural_json is not None:
+            staged, pathspecs = _structural_scope(diff_args)
+            artifact = analyze_local_diff(
+                ".", staged=staged, pathspecs=pathspecs, wild_version=__version__
+            )
+            _validate_structural_artifact(artifact)
+            rendered = json.dumps(artifact, indent=2, sort_keys=True) + "\n"
+            if str(structural_json) == "-":
+                click.echo(rendered, nl=False)
+            else:
+                structural_json.write_text(rendered, encoding="utf-8")
+                click.echo(f"✅ Structural DiffGraph written: {structural_json}", err=True)
+            return
+
+        # Keep the legacy AI/HTML path lazy so local structural output never
+        # imports a network-capable SDK.
+        from click_spinner import spinner
+        from diffgraph.ai_analysis import CodeAnalysisAgent
+        from diffgraph.html_report import generate_html_report, AnalysisResult
 
         click.echo("🔍 Scanning for changed files...")
         changed_files = get_changed_files(diff_args)
