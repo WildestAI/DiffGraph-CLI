@@ -1,6 +1,10 @@
 click>=8.1.7
+jsonschema>=4.18
+tree-sitter-language-pack>=0.10.0,<2
+tree-sitter>=0.23,<1
 openai-agents>=0.0.17
 python-dotenv>=1.0.0
-networkx>=3.5
+networkx>=3.4.2,<3.5; python_version < "3.11"
+networkx>=3.5; python_version >= "3.11"
 click-spinner>=0.1.10
 pyinstaller>=6.14.2
