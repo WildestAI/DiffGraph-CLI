@@ -17,6 +17,7 @@ Flags (set via constructor):
 from __future__ import annotations
 
 import os
+import re
 import shutil
 import sys
 from dataclasses import dataclass, field
@@ -125,6 +126,7 @@ class TerminalFormatter:
     """
 
     DEFAULT_MAX_ITEMS = 10
+    SUPPORTED_SCHEMA_MAJOR = 2
 
     def __init__(
         self,
@@ -134,10 +136,27 @@ class TerminalFormatter:
         max_items: Optional[int] = DEFAULT_MAX_ITEMS,
         color: Optional[bool] = None,
     ):
+        self._validate_schema_version(diffgraph.get("schema_version"))
         self.dg = diffgraph
         self.compact = compact
         self.max_items = max_items
         self._color_override = color
+
+    @classmethod
+    def _validate_schema_version(cls, schema_version: object) -> None:
+        """Reject malformed or unsupported DiffGraph schema versions."""
+        if not isinstance(schema_version, str) or not re.fullmatch(r"\d+\.\d+", schema_version):
+            raise ValueError(
+                "DiffGraph schema_version must use MAJOR.MINOR format; "
+                f"received {schema_version!r}"
+            )
+
+        major = int(schema_version.split(".", 1)[0])
+        if major != cls.SUPPORTED_SCHEMA_MAJOR:
+            raise ValueError(
+                f"Unsupported DiffGraph schema major {major}; "
+                f"TerminalFormatter supports major {cls.SUPPORTED_SCHEMA_MAJOR}"
+            )
 
     # ------------------------------------------------------------------
     # Public API

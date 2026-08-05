@@ -90,6 +90,30 @@ def _make_diffgraph(
     }
 
 
+@pytest.mark.parametrize("schema_version", [None, "2", "v2", "2.0.0", 2])
+def test_terminal_formatter_rejects_malformed_schema_version(schema_version):
+    dg = _make_diffgraph()
+    dg["schema_version"] = schema_version
+
+    with pytest.raises(ValueError, match="MAJOR.MINOR"):
+        TerminalFormatter(dg)
+
+
+def test_terminal_formatter_rejects_unsupported_schema_major():
+    dg = _make_diffgraph()
+    dg["schema_version"] = "3.0"
+
+    with pytest.raises(ValueError, match="Unsupported DiffGraph schema major 3"):
+        TerminalFormatter(dg)
+
+
+def test_terminal_formatter_accepts_additive_schema_minor():
+    dg = _make_diffgraph()
+    dg["schema_version"] = "2.7"
+
+    TerminalFormatter(dg)
+
+
 # ---------------------------------------------------------------------------
 # 1. Empty diff — no symbols
 # ---------------------------------------------------------------------------
