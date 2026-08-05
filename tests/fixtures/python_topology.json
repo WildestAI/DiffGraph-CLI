@@ -1,0 +1,92 @@
+{
+  "files": [
+    {
+      "path": "add.py",
+      "old_path": null,
+      "change_kind": "added"
+    },
+    {
+      "path": "delete.py",
+      "old_path": null,
+      "change_kind": "deleted"
+    },
+    {
+      "path": "modify.py",
+      "old_path": null,
+      "change_kind": "modified"
+    },
+    {
+      "path": "renamed.py",
+      "old_path": "rename.py",
+      "change_kind": "renamed_modified"
+    }
+  ],
+  "symbols": [
+    {
+      "id": "sym::add.py::added",
+      "kind": "function",
+      "change_kind": "added"
+    },
+    {
+      "id": "sym::add.py::import::external.pkg",
+      "kind": "import",
+      "change_kind": "added"
+    },
+    {
+      "id": "sym::add.py::import::os",
+      "kind": "import",
+      "change_kind": "added"
+    },
+    {
+      "id": "sym::delete.py::Deleted",
+      "kind": "class",
+      "change_kind": "deleted"
+    },
+    {
+      "id": "sym::modify.py::created",
+      "kind": "function",
+      "change_kind": "added"
+    },
+    {
+      "id": "sym::modify.py::removed",
+      "kind": "function",
+      "change_kind": "deleted"
+    },
+    {
+      "id": "sym::modify.py::retained",
+      "kind": "function",
+      "change_kind": "modified"
+    },
+    {
+      "id": "sym::renamed.py::moved",
+      "kind": "function",
+      "change_kind": "modified"
+    }
+  ],
+  "relationships": [
+    {
+      "id": "rel::file::add.py->sym::add.py::added",
+      "kind": "defines"
+    },
+    {
+      "id": "rel::file::add.py->sym::add.py::import::external.pkg",
+      "kind": "imports"
+    },
+    {
+      "id": "rel::file::add.py->sym::add.py::import::os",
+      "kind": "imports"
+    },
+    {
+      "id": "rel::file::modify.py->sym::modify.py::created",
+      "kind": "defines"
+    },
+    {
+      "id": "rel::file::modify.py->sym::modify.py::retained",
+      "kind": "defines"
+    },
+    {
+      "id": "rel::file::renamed.py->sym::renamed.py::moved",
+      "kind": "defines"
+    }
+  ]
+}

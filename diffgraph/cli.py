@@ -1,14 +1,15 @@
+import json
 import subprocess
 import sys
 from pathlib import Path
 import click
-from click_spinner import spinner
 from typing import List, Dict
 import os
-from diffgraph.ai_analysis import CodeAnalysisAgent
-from diffgraph.html_report import generate_html_report, AnalysisResult
+from diffgraph import __version__
 from diffgraph.env_loader import load_env_file, debug_environment
+from diffgraph.git_snapshot import GitSnapshotError
 from diffgraph.utils import sanitize_diff_args, involves_working_tree
+from diffgraph.structural import StructuralDependencyError, analyze_local_diff
 
 # Load environment variables
 load_env_file()
@@ -86,6 +87,77 @@ def get_changed_files(diff_args: List[str] = None) -> List[Dict[str, str]]:
 
     return changed_files
 
+class _RawArgsCommand(click.Command):
+    """Retain the raw separator that Click removes from variadic arguments."""
+
+    def parse_args(self, ctx, args):
+        ctx.meta["raw_args"] = tuple(args)
+        return super().parse_args(ctx, args)
+
+
+def _separator_follows_diff(raw_args) -> bool:
+    """Return whether the raw CLI placed ``--`` after the ``diff`` operand."""
+
+    value_options = {"--api-key", "--output", "-o", "--structural-json"}
+    index = 0
+    while index < len(raw_args):
+        argument = raw_args[index]
+        if argument in value_options:
+            index += 2
+            continue
+        if any(argument.startswith(option + "=") for option in value_options):
+            index += 1
+            continue
+        if argument.startswith("-o") and argument != "-o":
+            index += 1
+            continue
+        if argument == "diff":
+            return "--" in raw_args[index + 1 :]
+        index += 1
+    return False
+
+
+def _structural_scope(diff_args: List[str], separator_present: bool = False):
+    """Accept only the exact local snapshot modes implemented by this increment."""
+    staged = False
+    pathspecs = []
+    after_separator = separator_present
+    for argument in diff_args:
+        if argument == "--":
+            after_separator = True
+        elif argument in ("--staged", "--cached") and not after_separator:
+            staged = True
+        elif after_separator:
+            pathspecs.append(argument)
+        else:
+            raise click.UsageError(
+                "--structural-json currently supports only unstaged or --staged/--cached "
+                "local diffs; put pathspecs after '--'"
+            )
+    return staged, pathspecs
+
+
+def _validate_structural_artifact(artifact):
+    """Fail closed when the canonical v2 schema cannot validate the artifact."""
+    try:
+        import jsonschema
+    except ImportError as error:
+        raise click.ClickException(
+            "jsonschema is required to validate --structural-json output"
+        ) from error
+    schema_path = Path(__file__).parent / "schema" / "diffgraph-v2.schema.json"
+    try:
+        schema = json.loads(schema_path.read_text(encoding="utf-8"))
+        jsonschema.validate(artifact, schema)
+    except (
+        OSError,
+        json.JSONDecodeError,
+        jsonschema.ValidationError,
+        jsonschema.SchemaError,
+    ) as error:
+        raise click.ClickException(f"structural artifact validation failed: {error}") from error
+
+
 def load_file_contents(changed_files: List[Dict[str, str]], diff_args: List[str] = None) -> List[Dict[str, str]]:
     """
     Load contents of changed files.
@@ -129,15 +201,26 @@ def load_file_contents(changed_files: List[Dict[str, str]], diff_args: List[str]
 
     return files_with_content
 
-@click.command(context_settings={"ignore_unknown_options": True, "allow_extra_args": True})
+@click.command(
+    cls=_RawArgsCommand,
+    context_settings={"ignore_unknown_options": True, "allow_extra_args": True},
+)
 @click.version_option(package_name='wild')
 @click.argument('args', nargs=-1, type=click.UNPROCESSED)
 @click.option('--api-key', envvar='OPENAI_API_KEY', help='OpenAI API key')
 @click.option('--output', '-o', default='diffgraph.html', help='Output HTML file path')
 @click.option('--no-open', is_flag=True, help='Do not open the HTML report automatically')
 @click.option('--debug-env', is_flag=True, help='Debug environment variable loading')
-def main(args, api_key: str, output: str, no_open: bool, debug_env: bool):
+@click.option(
+    '--structural-json',
+    type=click.Path(dir_okay=False, path_type=Path),
+    help="Write the local Python structural DiffGraph v2 artifact ('-' for stdout)",
+)
+def main(args, api_key: str, output: str, no_open: bool, debug_env: bool, structural_json: Path):
     """wild - Git wrapper CLI with DiffGraph for diff commands."""
+
+    if structural_json is not None and (not args or args[0] != "diff"):
+        raise click.UsageError("--structural-json can only be used with 'diff'")
 
     # Check if this is a diff command
     if args and args[0] == 'diff':
@@ -152,6 +235,42 @@ def main(args, api_key: str, output: str, no_open: bool, debug_env: bool):
         if not is_git_repo():
             click.echo("❌ Error: Not a git repository", err=True)
             sys.exit(1)
+
+        if structural_json is not None:
+            raw_args = click.get_current_context().meta.get("raw_args", ())
+            staged, pathspecs = _structural_scope(
+                diff_args, separator_present=_separator_follows_diff(raw_args)
+            )
+            try:
+                artifact = analyze_local_diff(
+                    ".", staged=staged, pathspecs=pathspecs, wild_version=__version__
+                )
+            except (GitSnapshotError, StructuralDependencyError) as error:
+                raise click.ClickException(str(error)) from error
+            _validate_structural_artifact(artifact)
+            rendered = json.dumps(artifact, indent=2, sort_keys=True) + "\n"
+            if str(structural_json) == "-":
+                click.echo(rendered, nl=False)
+            else:
+                try:
+                    structural_json.write_text(rendered, encoding="utf-8")
+                except OSError as error:
+                    raise click.ClickException(
+                        f"could not write {structural_json}: {error}"
+                    ) from error
+                click.echo(f"✅ Structural DiffGraph written: {structural_json}", err=True)
+            return
+
+        # Keep the legacy AI/HTML path lazy so local structural output never
+        # imports a network-capable SDK.
+        try:
+            from click_spinner import spinner
+            from diffgraph.ai_analysis import CodeAnalysisAgent
+            from diffgraph.html_report import generate_html_report, AnalysisResult
+        except ImportError as error:
+            raise click.ClickException(
+                f"The AI report path requires additional dependencies: {error}"
+            ) from error
 
         click.echo("🔍 Scanning for changed files...")
         changed_files = get_changed_files(diff_args)
