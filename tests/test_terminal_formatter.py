@@ -95,7 +95,7 @@ def test_terminal_formatter_rejects_malformed_schema_version(schema_version):
     dg = _make_diffgraph()
     dg["schema_version"] = schema_version
 
-    with pytest.raises(ValueError, match="MAJOR.MINOR"):
+    with pytest.raises(ValueError, match=r"MAJOR\.MINOR"):
         TerminalFormatter(dg)
 
 
