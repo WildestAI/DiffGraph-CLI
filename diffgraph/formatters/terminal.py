@@ -230,13 +230,12 @@ class TerminalFormatter:
                 for fid in sorted(importer_file_ids)
             ]
 
-            # Lines changed (only meaningful for "modified")
+            # DiffGraph v2 currently exposes declaration spans, not per-symbol
+            # changed-line evidence. Do not present or rank a declaration's size
+            # as though every line changed; importer count is the honest signal
+            # available to this pure artifact consumer.
             lines_changed = 0
-            if change_kind == "modified" and sym.get("location"):
-                loc = sym["location"]
-                lines_changed = max(0, loc.get("line_end", 0) - loc.get("line_start", 0) + 1)
-
-            score = len(importer_paths) * 3 + lines_changed
+            score = len(importer_paths) * 3
 
             rs = _RankedSymbol(
                 symbol=sym,
@@ -251,10 +250,10 @@ class TerminalFormatter:
                 ranked.review_next.append(rs)
 
         # Sort each bucket
-        ranked.review_first.sort(key=lambda r: r.score, reverse=True)
-        ranked.review_next.sort(
-            key=lambda r: (-r.lines_changed, r.symbol.get("name", ""))
+        ranked.review_first.sort(
+            key=lambda r: (-r.score, r.symbol.get("name", ""))
         )
+        ranked.review_next.sort(key=lambda r: r.symbol.get("name", ""))
         ranked.context.sort(
             key=lambda r: (
                 file_id_to_path.get(r.symbol.get("file_id", ""), ""),

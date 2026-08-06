@@ -143,8 +143,12 @@ def test_rank_symbols_no_relationships():
     assert ranked.review_first == []
     assert len(ranked.review_next) == 2
     assert ranked.context == []
-    # Sorted by lines desc: validate_token (29 lines) before TokenCache (20 lines)
-    assert ranked.review_next[0].symbol["name"] == "validate_token"
+    # With no importer signal, use a deterministic name order rather than
+    # treating declaration spans as changed-line counts.
+    assert [item.symbol["name"] for item in ranked.review_next] == [
+        "TokenCache",
+        "validate_token",
+    ]
 
 
 # ---------------------------------------------------------------------------
@@ -310,15 +314,11 @@ def test_terminal_formatter_compact():
 
 
 # ---------------------------------------------------------------------------
-# 10. Score ordering — higher score symbol appears first in REVIEW FIRST
+# 10. Score ordering — declaration spans are not changed-line evidence
 # ---------------------------------------------------------------------------
 
-def test_rank_symbols_score_ordering():
-    """
-    Symbol A: 2 importers, 5 lines → score = 2*3 + 5 = 11
-    Symbol B: 1 importer, 20 lines → score = 1*3 + 20 = 23
-    B should appear first in REVIEW FIRST despite A having more importers.
-    """
+def test_rank_symbols_uses_importers_not_declaration_span():
+    """A large declaration must not outrank a more widely imported symbol."""
     files = [
         _make_file("f_a", "module_a.py", change_kind="modified"),
         _make_file("f_b", "module_b.py", change_kind="modified"),
@@ -326,23 +326,27 @@ def test_rank_symbols_score_ordering():
         _make_file("f_importer2", "consumer2.py", change_kind="modified"),
     ]
     symbols = [
-        _make_symbol("s_a", "small_func", "f_a", "modified", 1, 5),   # 5 lines
-        _make_symbol("s_b", "big_func", "f_b", "modified", 1, 20),    # 20 lines
+        _make_symbol("s_a", "small_func", "f_a", "modified", 1, 5),
+        _make_symbol("s_b", "big_func", "f_b", "modified", 1, 200),
     ]
     relationships = [
-        _make_import_rel("r1", "f_importer1", "f_a"),   # importer1 → A
-        _make_import_rel("r2", "f_importer2", "f_a"),   # importer2 → A (A has 2 importers)
-        _make_import_rel("r3", "f_importer1", "f_b"),   # importer1 → B (B has 1 importer)
+        _make_import_rel("r1", "f_importer1", "f_a"),
+        _make_import_rel("r2", "f_importer2", "f_a"),
+        _make_import_rel("r3", "f_importer1", "f_b"),
     ]
     dg = _make_diffgraph(files=files, symbols=symbols, relationships=relationships)
-    fmt = TerminalFormatter(dg)
+    fmt = TerminalFormatter(dg, color=False)
     ranked = fmt._rank_symbols()
 
-    assert len(ranked.review_first) == 2
-    # small_func score: 2*3 + 5 = 11; big_func score: 1*3 + 20 = 23
-    # big_func should come first
-    assert ranked.review_first[0].symbol["name"] == "big_func"
-    assert ranked.review_first[1].symbol["name"] == "small_func"
+    assert [item.symbol["name"] for item in ranked.review_first] == [
+        "small_func",
+        "big_func",
+    ]
+    assert all(item.lines_changed == 0 for item in ranked.review_first)
+
+    out = io.StringIO()
+    fmt.render(out)
+    assert "200 lines" not in out.getvalue()
 
 
 # ---------------------------------------------------------------------------
