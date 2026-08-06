@@ -191,6 +191,51 @@ def test_cli_structural_json_is_additive_and_stdout_is_valid_json(tmp_path, monk
     assert artifact["symbols"][0]["change_kind"] == "modified"
 
 
+def test_cli_terminal_format_renders_validated_local_artifact(tmp_path, monkeypatch):
+    from click.testing import CliRunner
+    from diffgraph.cli import main
+
+    root = repo(tmp_path)
+    write(root, "cli.py", "def value():\n    return 1\n")
+    commit(root)
+    write(root, "cli.py", "def value():\n    return 2\n")
+    monkeypatch.chdir(root)
+
+    result = CliRunner().invoke(main, ["diff", "--format", "terminal"])
+
+    assert result.exit_code == 0, result.output
+    assert "wild diff" in result.output
+    assert "cli.py" in result.output
+    assert "value" in result.output
+    assert "Analysis: structural" in result.output
+
+
+def test_cli_default_format_keeps_legacy_html_path(monkeypatch):
+    import sys
+    from types import ModuleType
+
+    from click.testing import CliRunner
+    import diffgraph.cli as cli
+
+    spinner_module = ModuleType("click_spinner")
+    spinner_module.spinner = object()
+    ai_module = ModuleType("diffgraph.ai_analysis")
+    ai_module.CodeAnalysisAgent = object
+    html_module = ModuleType("diffgraph.html_report")
+    html_module.generate_html_report = lambda *args, **kwargs: None
+    html_module.AnalysisResult = object
+    monkeypatch.setitem(sys.modules, "click_spinner", spinner_module)
+    monkeypatch.setitem(sys.modules, "diffgraph.ai_analysis", ai_module)
+    monkeypatch.setitem(sys.modules, "diffgraph.html_report", html_module)
+    monkeypatch.setattr(cli, "is_git_repo", lambda: True)
+    monkeypatch.setattr(cli, "get_changed_files", lambda diff_args: [])
+
+    result = CliRunner().invoke(cli.main, ["diff"])
+
+    assert result.exit_code == 0, result.output
+    assert "No changes to analyze" in result.output
+
+
 def test_cli_structural_json_rejects_unimplemented_commit_ranges(tmp_path, monkeypatch):
     from click.testing import CliRunner
     from diffgraph.cli import main
