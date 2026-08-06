@@ -217,6 +217,8 @@ def load_file_contents(changed_files: List[Dict[str, str]], diff_args: List[str]
     show_default=True,
     help='Render the legacy HTML report or a local structural terminal review',
 )
+@click.option('--compact', is_flag=True, help='Hide terminal CONTEXT output')
+@click.option('--all', 'show_all', is_flag=True, help='Show all terminal review items')
 @click.option('--no-open', is_flag=True, help='Do not open the HTML report automatically')
 @click.option('--debug-env', is_flag=True, help='Debug environment variable loading')
 @click.option(
@@ -229,6 +231,8 @@ def main(
     api_key: str,
     output: str,
     output_format: str,
+    compact: bool,
+    show_all: bool,
     no_open: bool,
     debug_env: bool,
     structural_json: Path,
@@ -272,7 +276,13 @@ def main(
                 from diffgraph.formatters.terminal import TerminalFormatter
 
                 try:
-                    TerminalFormatter(artifact).render()
+                    TerminalFormatter(
+                        artifact,
+                        compact=compact,
+                        max_items=(
+                            None if show_all else TerminalFormatter.DEFAULT_MAX_ITEMS
+                        ),
+                    ).render()
                 except ValueError as error:
                     raise click.ClickException(str(error)) from error
             else:

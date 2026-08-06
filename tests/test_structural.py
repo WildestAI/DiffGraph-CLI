@@ -210,6 +210,42 @@ def test_cli_terminal_format_renders_validated_local_artifact(tmp_path, monkeypa
     assert "Analysis: structural" in result.output
 
 
+def test_cli_terminal_compact_hides_context(tmp_path, monkeypatch):
+    from click.testing import CliRunner
+    from diffgraph.cli import main
+
+    root = repo(tmp_path)
+    write(root, "cli.py", "def changed():\n    return 1\n\ndef context():\n    return 1\n")
+    commit(root)
+    write(root, "cli.py", "def changed():\n    return 2\n\ndef context():\n    return 1\n")
+    monkeypatch.chdir(root)
+
+    result = CliRunner().invoke(main, ["diff", "--format", "terminal", "--compact"])
+
+    assert result.exit_code == 0, result.output
+    assert "REVIEW NEXT" in result.output
+    assert "CONTEXT" not in result.output
+
+
+def test_cli_terminal_all_disables_review_item_cap(tmp_path, monkeypatch):
+    from click.testing import CliRunner
+    from diffgraph.cli import main
+
+    root = repo(tmp_path)
+    before = "\n\n".join(f"def item_{index}():\n    return 1" for index in range(11)) + "\n"
+    after = "\n\n".join(f"def item_{index}():\n    return 2" for index in range(11)) + "\n"
+    write(root, "cli.py", before)
+    commit(root)
+    write(root, "cli.py", after)
+    monkeypatch.chdir(root)
+
+    result = CliRunner().invoke(main, ["diff", "--format", "terminal", "--all"])
+
+    assert result.exit_code == 0, result.output
+    assert "item_10" in result.output
+    assert "more" not in result.output
+
+
 def test_cli_default_format_keeps_legacy_html_path(monkeypatch):
     import sys
     from types import ModuleType
