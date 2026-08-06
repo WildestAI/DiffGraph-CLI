@@ -232,8 +232,9 @@ def test_cli_terminal_all_disables_review_item_cap(tmp_path, monkeypatch):
     from diffgraph.cli import main
 
     root = repo(tmp_path)
-    before = "\n\n".join(f"def item_{index}():\n    return 1" for index in range(11)) + "\n"
-    after = "\n\n".join(f"def item_{index}():\n    return 2" for index in range(11)) + "\n"
+    names = [f"item_{index:02d}" for index in range(11)]
+    before = "\n\n".join(f"def {name}():\n    return 1" for name in names) + "\n"
+    after = "\n\n".join(f"def {name}():\n    return 2" for name in names) + "\n"
     write(root, "cli.py", before)
     commit(root)
     write(root, "cli.py", after)
@@ -244,6 +245,24 @@ def test_cli_terminal_all_disables_review_item_cap(tmp_path, monkeypatch):
     assert result.exit_code == 0, result.output
     assert "item_10" in result.output
     assert "more" not in result.output
+
+
+def test_cli_git_passthrough_preserves_all(monkeypatch):
+    from click.testing import CliRunner
+    import diffgraph.cli as cli
+
+    calls = []
+
+    def run(command, *args, **kwargs):
+        calls.append(command)
+        return type("Result", (), {"returncode": 0})()
+
+    monkeypatch.setattr(cli.subprocess, "run", run)
+
+    result = CliRunner().invoke(cli.main, ["branch", "--all"])
+
+    assert result.exit_code == 0, result.output
+    assert calls == [["git", "branch", "--all"]]
 
 
 def test_cli_default_format_keeps_legacy_html_path(monkeypatch):

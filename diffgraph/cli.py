@@ -95,6 +95,21 @@ class _RawArgsCommand(click.Command):
         return super().parse_args(ctx, args)
 
 
+def _terminal_options(diff_args):
+    """Remove terminal-only display flags from a ``diff`` invocation."""
+    remaining = []
+    compact = False
+    show_all = False
+    for arg in diff_args:
+        if arg == "--compact":
+            compact = True
+        elif arg == "--all":
+            show_all = True
+        else:
+            remaining.append(arg)
+    return remaining, compact, show_all
+
+
 def _separator_follows_diff(raw_args) -> bool:
     """Return whether the raw CLI placed ``--`` after the ``diff`` operand."""
 
@@ -217,8 +232,6 @@ def load_file_contents(changed_files: List[Dict[str, str]], diff_args: List[str]
     show_default=True,
     help='Render the legacy HTML report or a local structural terminal review',
 )
-@click.option('--compact', is_flag=True, help='Hide terminal CONTEXT output')
-@click.option('--all', 'show_all', is_flag=True, help='Show all terminal review items')
 @click.option('--no-open', is_flag=True, help='Do not open the HTML report automatically')
 @click.option('--debug-env', is_flag=True, help='Debug environment variable loading')
 @click.option(
@@ -231,8 +244,6 @@ def main(
     api_key: str,
     output: str,
     output_format: str,
-    compact: bool,
-    show_all: bool,
     no_open: bool,
     debug_env: bool,
     structural_json: Path,
@@ -261,6 +272,10 @@ def main(
             sys.exit(1)
 
         if structural_json is not None or output_format == "terminal":
+            compact = False
+            show_all = False
+            if output_format == "terminal":
+                diff_args, compact, show_all = _terminal_options(diff_args)
             raw_args = click.get_current_context().meta.get("raw_args", ())
             staged, pathspecs = _structural_scope(
                 diff_args, separator_present=_separator_follows_diff(raw_args)
