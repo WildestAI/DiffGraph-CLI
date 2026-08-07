@@ -286,6 +286,24 @@ def test_terminal_formatter_piped():
     assert "\033[" not in output
 
 
+def test_write_section_uses_requested_header_style():
+    files = [_make_file("f1", "auth/validator.py", change_kind="modified")]
+    symbols = [_make_symbol("s1", "validate_token", "f1", "modified", 1, 10)]
+    fmt = TerminalFormatter(_make_diffgraph(files=files, symbols=symbols), color=True)
+    ranked = fmt._rank_symbols()
+    out = io.StringIO()
+
+    fmt._write_section(
+        "CUSTOM",
+        ranked.review_next,
+        out,
+        color=True,
+        section_style="dim",
+    )
+
+    assert out.getvalue().startswith("\033[2m▶ CUSTOM\033[0m\n")
+
+
 # ---------------------------------------------------------------------------
 # 9. --compact → CONTEXT section absent
 # ---------------------------------------------------------------------------

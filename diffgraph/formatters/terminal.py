@@ -77,6 +77,13 @@ def dim_red(text: str, color: bool) -> str:
     return _ansi("2;31", text, color)
 
 
+_SECTION_STYLE_FNS = {
+    "bold": bold,
+    "bold_yellow": bold_yellow,
+    "dim": dim,
+}
+
+
 def _change_label(change_kind: str, color: bool) -> str:
     """Return colored [label] for a change_kind value."""
     labels = {
@@ -341,12 +348,8 @@ class TerminalFormatter:
         # Section header
         prefix = "▶ " if not _is_dumb_terminal() else "> "
         header_text = f"{prefix}{title}"
-        if title == "REVIEW FIRST":
-            header = bold_yellow(header_text, color)
-        elif title == "CONTEXT":
-            header = dim(header_text, color)
-        else:
-            header = bold(header_text, color)
+        style_fn = _SECTION_STYLE_FNS.get(section_style, bold)
+        header = style_fn(header_text, color)
 
         if hidden > 0:
             hint = f"  (showing top {len(capped)} of {total} · run: wild diff --all to see all)"
