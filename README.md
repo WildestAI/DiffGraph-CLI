@@ -56,7 +56,9 @@ This will:
 ### Command-line Options
 
 - `--api-key`: Specify your OpenAI API key (defaults to OPENAI_API_KEY environment variable)
-- `--output` or `-o`: Specify the output HTML file path (default: diffgraph.html)
+- `--format`: Select `html` (default), `terminal`, or canonical `json` output.
+- `--output` or `-o`: Specify the HTML or JSON output path. HTML defaults to
+  `diffgraph.html`; JSON defaults to stdout. Terminal output is always stdout.
 - `--no-open`: Don't automatically open the HTML report in browser
 - `--structural-json`: Write a local Python structural DiffGraph v2 artifact to the given path (`-` for stdout). Applies to `wild diff` only.
 - `--version`: Show version information
@@ -66,16 +68,25 @@ Example:
 wild --output my-report.html --no-open
 ```
 
-### Local structural JSON (experimental)
+### Canonical local output (experimental)
 
 A deterministic, network-free Python baseline can be written as a validated
 DiffGraph v2 artifact without changing the existing AI/HTML default:
 
 ```bash
+wild diff --format json
+wild diff --format json --output diffgraph.json
+wild diff --format terminal
+# Compatibility spelling retained for existing scripts:
 wild --structural-json diffgraph.json diff
 wild --structural-json staged.json diff --staged -- src/
 wild --structural-json - diff -- path/to/file.py
 ```
+
+`--structural-json PATH` remains a compatibility alias for canonical JSON with
+that destination. Do not combine it with `--format` or `--output`; ambiguous
+combinations are usage errors. Likewise, `--format terminal` cannot use
+`--output`. Terminal-only `--compact` and `--all` flags follow `diff`.
 
 This increment intentionally supports only local unstaged (`index` → working
 tree) and staged (`HEAD` → index) snapshots. Put pathspecs after `--`.
@@ -91,6 +102,33 @@ targets are explicitly labeled unresolved/external; no project-wide resolution
 is claimed. Every file records old/new paths, modes, Git object IDs, and content
 SHA-256 values in structural evidence, while symbol/relationship evidence names
 the parser package, query revision, and source blob identity.
+
+#### CLI and offline contract
+
+- Each canonical invocation resolves the requested Git snapshot once, builds
+  one artifact, validates it against the packaged schema, and passes that same
+  validated object to the JSON or terminal consumer. Consumers never re-read
+  repository files or rebuild the artifact.
+- JSON sent to stdout contains only the artifact. Terminal output also uses
+  stdout. A successful JSON file write reports its path on stderr; diagnostics,
+  usage help, and errors use stderr. Explicit JSON paths are replaced atomically
+  and parent directories are not created implicitly.
+- Exit code `0` means success, including a snapshot with no changes. Empty JSON
+  has empty `files`, `symbols`, and `relationships` arrays; terminal output says
+  that the selected snapshot has no changes. Runtime, validation, output, and
+  cancellation failures return `1`; option/command usage errors return `2`.
+  Ctrl-C prints Click's `Aborted!` diagnostic and does not dispatch an artifact
+  or print a success message.
+- Canonical JSON and terminal modes are local/offline. They import or invoke no
+  AI or network module, make no network calls, report `privacy_tier: local` and
+  `llm_calls: 0`, and use only local Git/object/worktree data plus packaged
+  parser/schema resources.
+
+The default `html` mode is intentionally outside this canonical dispatch in
+this increment. Its existing AI analysis, progress output, report destination
+(`diffgraph.html` by default), and browser-opening behavior remain unchanged;
+HTML migration will happen separately rather than mixing legacy and canonical
+artifact construction here.
 
 ### Artifact compatibility
 

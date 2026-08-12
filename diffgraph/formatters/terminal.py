@@ -22,7 +22,7 @@ import sys
 from dataclasses import dataclass, field
 from typing import Optional
 
-from diffgraph.contract import validate_artifact
+from diffgraph.contract import ValidatedArtifact
 
 
 # ---------------------------------------------------------------------------
@@ -136,14 +136,19 @@ class TerminalFormatter:
     DEFAULT_MAX_ITEMS = 10
     def __init__(
         self,
-        diffgraph: dict,
+        diffgraph: dict | ValidatedArtifact,
         *,
         compact: bool = False,
         max_items: Optional[int] = DEFAULT_MAX_ITEMS,
         color: Optional[bool] = None,
     ):
-        validate_artifact(diffgraph)
-        self.dg = diffgraph
+        validated = (
+            diffgraph
+            if isinstance(diffgraph, ValidatedArtifact)
+            else ValidatedArtifact.from_value(diffgraph)
+        )
+        self.artifact = validated
+        self.dg = validated.value
         self.compact = compact
         self.max_items = max_items
         self._color_override = color
@@ -161,6 +166,8 @@ class TerminalFormatter:
         ranked = self._rank_symbols()
         self._write_header(out, color)
         self._write_warnings(out, color)
+        if not self.dg.get("files"):
+            out.write("No changes in the selected snapshot.\n\n")
         self._write_section("REVIEW FIRST", ranked.review_first, out, color, section_style="bold_yellow")
         self._write_section("REVIEW NEXT", ranked.review_next, out, color, section_style="bold")
         if not self.compact:

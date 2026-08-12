@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import json
 import re
+from dataclasses import dataclass
 from importlib import resources
 from typing import Any, Mapping, Tuple
 
@@ -19,6 +20,25 @@ _VERSION_PATTERN = re.compile(r"^(0|[1-9]\d*)\.(0|[1-9]\d*)$")
 
 class DiffGraphContractError(ValueError):
     """Raised when an artifact cannot be proven to satisfy the contract."""
+
+
+@dataclass(frozen=True, init=False)
+class ValidatedArtifact:
+    """An artifact that has passed the packaged canonical contract.
+
+    Construction is intentionally restricted to :meth:`from_value` so callers
+    cannot brand an unvalidated dictionary and bypass consumer checks.
+    """
+
+    value: dict
+
+    @classmethod
+    def from_value(cls, artifact: dict) -> "ValidatedArtifact":
+        """Validate an existing value once and brand it for trusted consumers."""
+        validate_artifact(artifact)
+        validated = object.__new__(cls)
+        object.__setattr__(validated, "value", artifact)
+        return validated
 
 
 def schema_version(value: object) -> Tuple[int, int]:

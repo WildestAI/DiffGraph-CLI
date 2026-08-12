@@ -1,16 +1,21 @@
-import json
 import subprocess
 import sys
 from pathlib import Path
 import click
+from click.core import ParameterSource
 from typing import List, Dict
 import os
 from diffgraph import __version__
+from diffgraph.artifact import (
+    build_validated_artifact,
+    render_canonical_json,
+    write_canonical_json,
+)
 from diffgraph.contract import DiffGraphContractError, validate_artifact
 from diffgraph.env_loader import load_env_file, debug_environment
 from diffgraph.git_snapshot import GitSnapshotError
 from diffgraph.utils import sanitize_diff_args, involves_working_tree
-from diffgraph.structural import StructuralDependencyError, analyze_local_diff
+from diffgraph.structural import StructuralDependencyError
 
 # Load environment variables
 load_env_file()
@@ -154,7 +159,7 @@ def _structural_scope(diff_args: List[str], separator_present: bool = False):
 
 
 def _validate_structural_artifact(artifact):
-    """Translate canonical contract failures into user-facing CLI errors."""
+    """Backward-compatible validation helper for callers outside the CLI path."""
     try:
         validate_artifact(artifact)
     except DiffGraphContractError as error:
@@ -211,14 +216,17 @@ def load_file_contents(changed_files: List[Dict[str, str]], diff_args: List[str]
 @click.version_option(package_name='wild')
 @click.argument('args', nargs=-1, type=click.UNPROCESSED)
 @click.option('--api-key', envvar='OPENAI_API_KEY', help='OpenAI API key')
-@click.option('--output', '-o', default='diffgraph.html', help='Output HTML file path')
+@click.option(
+    '--output', '-o', default=None,
+    help='Output path (HTML default: diffgraph.html; JSON default: stdout)',
+)
 @click.option(
     '--format',
     'output_format',
-    type=click.Choice(['html', 'terminal'], case_sensitive=False),
+    type=click.Choice(['html', 'terminal', 'json'], case_sensitive=False),
     default='html',
     show_default=True,
-    help='Render the legacy HTML report or a local structural terminal review',
+    help='Render legacy HTML or a canonical local terminal/JSON artifact',
 )
 @click.option('--no-open', is_flag=True, help='Do not open the HTML report automatically')
 @click.option('--debug-env', is_flag=True, help='Debug environment variable loading')
@@ -238,12 +246,20 @@ def main(
 ):
     """wild - Git wrapper CLI with DiffGraph for diff commands."""
 
+    context = click.get_current_context()
+    format_was_explicit = (
+        context.get_parameter_source("output_format") != ParameterSource.DEFAULT
+    )
     if structural_json is not None and (not args or args[0] != "diff"):
         raise click.UsageError("--structural-json can only be used with 'diff'")
-    if output_format == "terminal" and (not args or args[0] != "diff"):
-        raise click.UsageError("--format terminal can only be used with 'diff'")
-    if output_format == "terminal" and structural_json is not None:
-        raise click.UsageError("--format terminal cannot be combined with --structural-json")
+    if output_format in ("terminal", "json") and (not args or args[0] != "diff"):
+        raise click.UsageError(f"--format {output_format} can only be used with 'diff'")
+    if structural_json is not None and format_was_explicit:
+        raise click.UsageError("--structural-json cannot be combined with --format")
+    if structural_json is not None and output is not None:
+        raise click.UsageError("--structural-json cannot be combined with --output")
+    if output_format == "terminal" and output is not None:
+        raise click.UsageError("--format terminal writes to stdout and cannot use --output")
 
     # Check if this is a diff command
     if args and args[0] == 'diff':
@@ -259,7 +275,7 @@ def main(
             click.echo("❌ Error: Not a git repository", err=True)
             sys.exit(1)
 
-        if structural_json is not None or output_format == "terminal":
+        if structural_json is not None or output_format in ("terminal", "json"):
             compact = False
             show_all = False
             if output_format == "terminal":
@@ -269,12 +285,15 @@ def main(
                 diff_args, separator_present=_separator_follows_diff(raw_args)
             )
             try:
-                artifact = analyze_local_diff(
+                artifact = build_validated_artifact(
                     ".", staged=staged, pathspecs=pathspecs, wild_version=__version__
                 )
-            except (GitSnapshotError, StructuralDependencyError) as error:
+            except (
+                GitSnapshotError,
+                StructuralDependencyError,
+                DiffGraphContractError,
+            ) as error:
                 raise click.ClickException(str(error)) from error
-            _validate_structural_artifact(artifact)
             if output_format == "terminal":
                 from diffgraph.formatters.terminal import TerminalFormatter
 
@@ -289,17 +308,20 @@ def main(
                 except ValueError as error:
                     raise click.ClickException(str(error)) from error
             else:
-                rendered = json.dumps(artifact, indent=2, sort_keys=True) + "\n"
-                if str(structural_json) == "-":
+                destination = structural_json if structural_json is not None else output
+                if destination is None or str(destination) == "-":
+                    rendered = render_canonical_json(artifact)
                     click.echo(rendered, nl=False)
                 else:
+                    destination = Path(destination)
                     try:
-                        structural_json.write_text(rendered, encoding="utf-8")
+                        write_canonical_json(artifact, destination)
                     except OSError as error:
                         raise click.ClickException(
-                            f"could not write {structural_json}: {error}"
+                            f"could not write {destination}: {error}"
                         ) from error
-                    click.echo(f"✅ Structural DiffGraph written: {structural_json}", err=True)
+                    label = "Structural" if structural_json is not None else "Canonical"
+                    click.echo(f"✅ {label} DiffGraph written: {destination}", err=True)
             return
 
         # Keep the legacy AI/HTML path lazy so local structural output never
@@ -364,7 +386,7 @@ def main(
 
             # Generate HTML report
             click.echo("🖨️ Generating HTML report...")
-            html_path = generate_html_report(analysis_result, output)
+            html_path = generate_html_report(analysis_result, output or "diffgraph.html")
             click.echo(f"✅ HTML report generated: {html_path}")
 
             # Open the HTML report in the default browser

@@ -14,6 +14,7 @@ from diffgraph.contract import (
     CURRENT_SCHEMA_VERSION,
     SUPPORTED_SCHEMA_MAJOR,
     DiffGraphContractError,
+    ValidatedArtifact,
     load_schema,
     schema_version,
     validate_artifact,
@@ -35,6 +36,11 @@ def test_packaged_schema_and_complete_golden_validate(golden_artifact):
     assert CURRENT_SCHEMA_VERSION == "2.0"
     assert SUPPORTED_SCHEMA_MAJOR == 2
     validate_artifact(golden_artifact)
+
+
+def test_validated_artifact_cannot_bypass_validation():
+    with pytest.raises(TypeError):
+        ValidatedArtifact({})
 
 
 def test_golden_contains_only_local_structural_claims(golden_artifact):
