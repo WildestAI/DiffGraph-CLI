@@ -17,11 +17,12 @@ Flags (set via constructor):
 from __future__ import annotations
 
 import os
-import re
 import shutil
 import sys
 from dataclasses import dataclass, field
 from typing import Optional
+
+from diffgraph.contract import ValidatedArtifact
 
 
 # ---------------------------------------------------------------------------
@@ -133,37 +134,24 @@ class TerminalFormatter:
     """
 
     DEFAULT_MAX_ITEMS = 10
-    SUPPORTED_SCHEMA_MAJOR = 2
-
     def __init__(
         self,
-        diffgraph: dict,
+        diffgraph: dict | ValidatedArtifact,
         *,
         compact: bool = False,
         max_items: Optional[int] = DEFAULT_MAX_ITEMS,
         color: Optional[bool] = None,
     ):
-        self._validate_schema_version(diffgraph.get("schema_version"))
-        self.dg = diffgraph
+        validated = (
+            diffgraph
+            if isinstance(diffgraph, ValidatedArtifact)
+            else ValidatedArtifact.from_value(diffgraph)
+        )
+        self.artifact = validated
+        self.dg = validated.value
         self.compact = compact
         self.max_items = max_items
         self._color_override = color
-
-    @classmethod
-    def _validate_schema_version(cls, schema_version: object) -> None:
-        """Reject malformed or unsupported DiffGraph schema versions."""
-        if not isinstance(schema_version, str) or not re.fullmatch(r"\d+\.\d+", schema_version):
-            raise ValueError(
-                "DiffGraph schema_version must use MAJOR.MINOR format; "
-                f"received {schema_version!r}"
-            )
-
-        major = int(schema_version.split(".", 1)[0])
-        if major != cls.SUPPORTED_SCHEMA_MAJOR:
-            raise ValueError(
-                f"Unsupported DiffGraph schema major {major}; "
-                f"TerminalFormatter supports major {cls.SUPPORTED_SCHEMA_MAJOR}"
-            )
 
     # ------------------------------------------------------------------
     # Public API
@@ -178,6 +166,8 @@ class TerminalFormatter:
         ranked = self._rank_symbols()
         self._write_header(out, color)
         self._write_warnings(out, color)
+        if not self.dg.get("files"):
+            out.write("No changes in the selected snapshot.\n\n")
         self._write_section("REVIEW FIRST", ranked.review_first, out, color, section_style="bold_yellow")
         self._write_section("REVIEW NEXT", ranked.review_next, out, color, section_style="bold")
         if not self.compact:
@@ -323,9 +313,8 @@ class TerminalFormatter:
                 out.write(bold("▶ FILES CHANGED", color) + "\n")
                 for f in changed_files:
                     path = f.get("path", f.get("id", "?"))
-                    stats = f.get("stats", {})
-                    additions = stats.get("additions", 0)
-                    deletions = stats.get("deletions", 0)
+                    additions = f.get("lines_added") or 0
+                    deletions = f.get("lines_removed") or 0
                     out.write(f"  {path}  +{additions} / -{deletions}\n")
                 out.write("\n")
 

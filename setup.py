@@ -4,7 +4,12 @@ setup(
     name="wild",
     version="1.1.0",
     packages=find_packages(),
-    package_data={"diffgraph": ["schema/*.json"]},
+    package_data={
+        "diffgraph": [
+            "schema/diffgraph-v2.schema.json",
+            "schema/diffgraph-v2.structural.example.json",
+        ]
+    },
     install_requires=[
         "click>=8.1.7",
         "click-spinner>=0.1.10",

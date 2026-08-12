@@ -1,11 +1,11 @@
 # DiffGraph-CLI
 
-DiffGraph-CLI is a powerful command-line tool that visualizes code changes using AI. It reads your current git diffs and untracked files, uses AI to understand the implications of your changes, and generates a beautiful, shareable HTML report with a dependency graph.
+DiffGraph-CLI visualizes code changes from a validated canonical artifact. Its default HTML, terminal, and JSON reports are deterministic and local; the former AI-driven HTML report remains available for one compatibility release under an explicit deprecated option.
 
 ## 🌟 Features
 
 - 📊 Visualizes code changes as a dependency graph
-- 🤖 AI-powered analysis of code changes
+- 🤖 Deprecated AI HTML compatibility mode for one release
 - 🌙 Dark mode support
 - 📝 Markdown-formatted summaries
 - 🔍 Syntax highlighting for code blocks
@@ -44,38 +44,51 @@ Add your OpenAI API key to the .env file
 
 Basic usage:
 ```bash
-wild
+wild diff
 ```
 
 This will:
-1. Read your current git changes
-2. Analyze them using AI
-3. Generate an HTML report (`diffgraph.html`)
-4. Open the report in your default browser
+1. Resolve the selected local Git snapshot once
+2. Build and validate one canonical DiffGraph artifact
+3. Generate an HTML report (`diffgraph.html`) from that artifact
+4. Open the complete report in your default browser
 
 ### Command-line Options
 
-- `--api-key`: Specify your OpenAI API key (defaults to OPENAI_API_KEY environment variable)
-- `--output` or `-o`: Specify the output HTML file path (default: diffgraph.html)
+- `--api-key`: Specify the OpenAI API key used only by `--format legacy-html`
+  (defaults to `OPENAI_API_KEY`)
+- `--format`: Select canonical `html` (default), `terminal`, or `json` output. `legacy-html` temporarily selects the deprecated AI report.
+- `--output` or `-o`: Specify the HTML or JSON output path. HTML defaults to
+  `diffgraph.html`; JSON defaults to stdout. Terminal output is always stdout.
 - `--no-open`: Don't automatically open the HTML report in browser
 - `--structural-json`: Write a local Python structural DiffGraph v2 artifact to the given path (`-` for stdout). Applies to `wild diff` only.
 - `--version`: Show version information
 
 Example:
 ```bash
-wild --output my-report.html --no-open
+wild diff --output my-report.html --no-open
 ```
 
-### Local structural JSON (experimental)
+### Canonical local output (experimental)
 
-A deterministic, network-free Python baseline can be written as a validated
-DiffGraph v2 artifact without changing the existing AI/HTML default:
+A deterministic, network-free Python baseline can be rendered from one validated
+DiffGraph v2 artifact:
 
 ```bash
+wild diff --format html --no-open
+wild diff --format json
+wild diff --format json --output diffgraph.json
+wild diff --format terminal
+# Compatibility spelling retained for existing scripts:
 wild --structural-json diffgraph.json diff
 wild --structural-json staged.json diff --staged -- src/
 wild --structural-json - diff -- path/to/file.py
 ```
+
+`--structural-json PATH` remains a compatibility alias for canonical JSON with
+that destination. Do not combine it with `--format` or `--output`; ambiguous
+combinations are usage errors. Likewise, `--format terminal` cannot use
+`--output`. Terminal-only `--compact` and `--all` flags follow `diff`.
 
 This increment intentionally supports only local unstaged (`index` → working
 tree) and staged (`HEAD` → index) snapshots. Put pathspecs after `--`.
@@ -92,14 +105,61 @@ is claimed. Every file records old/new paths, modes, Git object IDs, and content
 SHA-256 values in structural evidence, while symbol/relationship evidence names
 the parser package, query revision, and source blob identity.
 
+#### CLI and offline contract
+
+- Each canonical invocation resolves the requested Git snapshot once, builds
+  one artifact, validates it against the packaged schema, and passes that same
+  validated object to the HTML, JSON, or terminal consumer. Consumers never
+  re-read repository files or rebuild the artifact.
+- JSON sent to stdout contains only the artifact. Terminal output also uses
+  stdout. A successful JSON file write reports its path on stderr; diagnostics,
+  usage help, and errors use stderr. Explicit JSON paths are replaced atomically
+  and parent directories are not created implicitly.
+- Exit code `0` means success, including a snapshot with no changes. Empty JSON
+  has empty `files`, `symbols`, and `relationships` arrays; terminal output says
+  that the selected snapshot has no changes. Runtime, validation, output, and
+  cancellation failures return `1`; option/command usage errors return `2`.
+  Ctrl-C prints Click's `Aborted!` diagnostic and does not dispatch an artifact
+  or print a success message.
+- Canonical HTML, JSON, and terminal modes are local/offline. They import or
+  invoke no AI or network module, make no network calls, report
+  `privacy_tier: local` and `llm_calls: 0`, and use only local
+  Git/object/worktree data plus packaged parser/schema resources. Canonical HTML
+  is self-contained and has no external asset dependency.
+
+#### Deprecated AI HTML compatibility
+
+For this compatibility release only, `wild diff --format legacy-html` retains
+old AI analysis, progress output, default `diffgraph.html` destination,
+`--output`, `--no-open`, and browser-opening behavior. This option is deprecated
+and scheduled for removal after one release. It may call the configured AI
+provider, and its old renderer is isolated in `diffgraph/html_report.py`; that
+legacy renderer still loads Mermaid, Tailwind, Highlight.js, and Marked from
+external CDNs. Canonical `--format html` does not import that module or any AI
+SDK.
+
+### Artifact compatibility
+
+DiffGraph artifacts use a `MAJOR.MINOR` `schema_version`. Consumers reject
+malformed versions and unknown major versions. Minor releases within major 2
+are additive: a consumer accepts them only when the complete artifact still
+validates against its packaged v2 schema. This fail-closed rule lets producers
+add optional data without weakening validation for existing consumers. The
+canonical schema and a complete local-only example are packaged under
+`diffgraph/schema/`; neither contains AI-derived symbols or relationships.
+
 ## 📊 Example Output
 
-The generated HTML report includes:
-- A summary of code changes
-- A Mermaid.js dependency graph
-- Syntax-highlighted code blocks
+The canonical HTML report includes:
+- Exact artifact metadata and optional canonical summary
+- Files, symbols, warnings, and relationship evidence
+- Deterministically ordered relationship topology
 - Dark mode support
-- Responsive design for all screen sizes
+- Responsive, self-contained styling
+
+The deprecated `legacy-html` report retains its Mermaid.js diagram,
+syntax-highlighted code blocks, and AI-generated summary during the one-release
+compatibility window.
 
 ## 🤝 Contributing
 

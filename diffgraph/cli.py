@@ -1,15 +1,21 @@
-import json
 import subprocess
 import sys
 from pathlib import Path
 import click
+from click.core import ParameterSource
 from typing import List, Dict
 import os
 from diffgraph import __version__
+from diffgraph.artifact import (
+    build_validated_artifact,
+    render_canonical_json,
+    write_canonical_json,
+)
+from diffgraph.contract import DiffGraphContractError, validate_artifact
 from diffgraph.env_loader import load_env_file, debug_environment
 from diffgraph.git_snapshot import GitSnapshotError
 from diffgraph.utils import sanitize_diff_args, involves_working_tree
-from diffgraph.structural import StructuralDependencyError, analyze_local_diff
+from diffgraph.structural import StructuralDependencyError
 
 # Load environment variables
 load_env_file()
@@ -26,6 +32,29 @@ def is_git_repo() -> bool:
         return True
     except subprocess.CalledProcessError:
         return False
+
+
+def _open_html_report(html_path: Path) -> None:
+    """Best-effort browser launch; report failures without failing generation."""
+    try:
+        if sys.platform == 'darwin':
+            result = subprocess.run(['open', str(html_path)], check=False)
+        elif sys.platform == 'win32':
+            os.startfile(html_path)
+            return
+        else:
+            result = subprocess.run(['xdg-open', str(html_path)], check=False)
+    except OSError as error:
+        click.echo(f"⚠️ Could not open report in browser: {error}", err=True)
+        return
+
+    if result.returncode != 0:
+        click.echo(
+            "⚠️ Could not open report in browser: "
+            f"opener exited with status {result.returncode}",
+            err=True,
+        )
+
 
 def get_changed_files(diff_args: List[str] = None) -> List[Dict[str, str]]:
     """
@@ -153,23 +182,10 @@ def _structural_scope(diff_args: List[str], separator_present: bool = False):
 
 
 def _validate_structural_artifact(artifact):
-    """Fail closed when the canonical v2 schema cannot validate the artifact."""
+    """Backward-compatible validation helper for callers outside the CLI path."""
     try:
-        import jsonschema
-    except ImportError as error:
-        raise click.ClickException(
-            "jsonschema is required to validate --structural-json output"
-        ) from error
-    schema_path = Path(__file__).parent / "schema" / "diffgraph-v2.schema.json"
-    try:
-        schema = json.loads(schema_path.read_text(encoding="utf-8"))
-        jsonschema.validate(artifact, schema)
-    except (
-        OSError,
-        json.JSONDecodeError,
-        jsonschema.ValidationError,
-        jsonschema.SchemaError,
-    ) as error:
+        validate_artifact(artifact)
+    except DiffGraphContractError as error:
         raise click.ClickException(f"structural artifact validation failed: {error}") from error
 
 
@@ -222,15 +238,27 @@ def load_file_contents(changed_files: List[Dict[str, str]], diff_args: List[str]
 )
 @click.version_option(package_name='wild')
 @click.argument('args', nargs=-1, type=click.UNPROCESSED)
-@click.option('--api-key', envvar='OPENAI_API_KEY', help='OpenAI API key')
-@click.option('--output', '-o', default='diffgraph.html', help='Output HTML file path')
+@click.option(
+    '--api-key',
+    envvar='OPENAI_API_KEY',
+    help='OpenAI API key (legacy-html only)',
+)
+@click.option(
+    '--output', '-o', default=None,
+    help='Output path (HTML default: diffgraph.html; JSON default: stdout)',
+)
 @click.option(
     '--format',
     'output_format',
-    type=click.Choice(['html', 'terminal'], case_sensitive=False),
+    type=click.Choice(
+        ['html', 'terminal', 'json', 'legacy-html'], case_sensitive=False
+    ),
     default='html',
     show_default=True,
-    help='Render the legacy HTML report or a local structural terminal review',
+    help=(
+        'Render a canonical local HTML, terminal, or JSON artifact; '
+        'legacy-html retains the deprecated AI report for one compatibility release'
+    ),
 )
 @click.option('--no-open', is_flag=True, help='Do not open the HTML report automatically')
 @click.option('--debug-env', is_flag=True, help='Debug environment variable loading')
@@ -250,12 +278,31 @@ def main(
 ):
     """wild - Git wrapper CLI with DiffGraph for diff commands."""
 
+    context = click.get_current_context()
+    format_was_explicit = (
+        context.get_parameter_source("output_format") != ParameterSource.DEFAULT
+    )
     if structural_json is not None and (not args or args[0] != "diff"):
         raise click.UsageError("--structural-json can only be used with 'diff'")
-    if output_format == "terminal" and (not args or args[0] != "diff"):
-        raise click.UsageError("--format terminal can only be used with 'diff'")
-    if output_format == "terminal" and structural_json is not None:
-        raise click.UsageError("--format terminal cannot be combined with --structural-json")
+    if (
+        output_format in ("terminal", "json", "legacy-html")
+        or (output_format == "html" and format_was_explicit)
+    ) and (not args or args[0] != "diff"):
+        raise click.UsageError(f"--format {output_format} can only be used with 'diff'")
+    if structural_json is not None and format_was_explicit:
+        raise click.UsageError("--structural-json cannot be combined with --format")
+    if structural_json is not None and output is not None:
+        raise click.UsageError("--structural-json cannot be combined with --output")
+    if output_format == "terminal" and output is not None:
+        raise click.UsageError("--format terminal writes to stdout and cannot use --output")
+    if debug_env and (
+        structural_json is not None
+        or output_format in ("terminal", "json")
+        or (output_format == "html" and format_was_explicit)
+    ):
+        raise click.UsageError(
+            "--debug-env cannot be combined with canonical artifact output"
+        )
 
     # Check if this is a diff command
     if args and args[0] == 'diff':
@@ -271,7 +318,7 @@ def main(
             click.echo("❌ Error: Not a git repository", err=True)
             sys.exit(1)
 
-        if structural_json is not None or output_format == "terminal":
+        if structural_json is not None or output_format in ("html", "terminal", "json"):
             compact = False
             show_all = False
             if output_format == "terminal":
@@ -281,13 +328,16 @@ def main(
                 diff_args, separator_present=_separator_follows_diff(raw_args)
             )
             try:
-                artifact = analyze_local_diff(
+                artifact = build_validated_artifact(
                     ".", staged=staged, pathspecs=pathspecs, wild_version=__version__
                 )
-            except (GitSnapshotError, StructuralDependencyError) as error:
+            except (
+                GitSnapshotError,
+                StructuralDependencyError,
+                DiffGraphContractError,
+            ) as error:
                 raise click.ClickException(str(error)) from error
-            _validate_structural_artifact(artifact)
-            if output_format == "terminal":
+            if structural_json is None and output_format == "terminal":
                 from diffgraph.formatters.terminal import TerminalFormatter
 
                 try:
@@ -300,22 +350,39 @@ def main(
                     ).render()
                 except ValueError as error:
                     raise click.ClickException(str(error)) from error
+            elif structural_json is None and output_format == "html":
+                from diffgraph.formatters.html import HtmlFormatter
+
+                destination = Path(output or "diffgraph.html")
+                try:
+                    html_path = HtmlFormatter(artifact).write(destination)
+                except (OSError, TypeError, ValueError) as error:
+                    raise click.ClickException(
+                        f"could not write {destination}: {error}"
+                    ) from error
+                click.echo(f"✅ HTML report generated: {html_path}")
+                if not no_open:
+                    click.echo("🌐 Opening report in browser...")
+                    _open_html_report(html_path)
             else:
-                rendered = json.dumps(artifact, indent=2, sort_keys=True) + "\n"
-                if str(structural_json) == "-":
+                destination = structural_json if structural_json is not None else output
+                if destination is None or str(destination) == "-":
+                    rendered = render_canonical_json(artifact)
                     click.echo(rendered, nl=False)
                 else:
+                    destination = Path(destination)
                     try:
-                        structural_json.write_text(rendered, encoding="utf-8")
+                        write_canonical_json(artifact, destination)
                     except OSError as error:
                         raise click.ClickException(
-                            f"could not write {structural_json}: {error}"
+                            f"could not write {destination}: {error}"
                         ) from error
-                    click.echo(f"✅ Structural DiffGraph written: {structural_json}", err=True)
+                    label = "Structural" if structural_json is not None else "Canonical"
+                    click.echo(f"✅ {label} DiffGraph written: {destination}", err=True)
             return
 
-        # Keep the legacy AI/HTML path lazy so local structural output never
-        # imports a network-capable SDK.
+        # One-release compatibility path. Keep it lazy so canonical output never
+        # imports a network-capable SDK. Remove after the documented transition.
         try:
             from click_spinner import spinner
             from diffgraph.ai_analysis import CodeAnalysisAgent
@@ -376,7 +443,7 @@ def main(
 
             # Generate HTML report
             click.echo("🖨️ Generating HTML report...")
-            html_path = generate_html_report(analysis_result, output)
+            html_path = generate_html_report(analysis_result, output or "diffgraph.html")
             click.echo(f"✅ HTML report generated: {html_path}")
 
             # Open the HTML report in the default browser

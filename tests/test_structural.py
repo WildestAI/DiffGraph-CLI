@@ -146,6 +146,27 @@ def test_unsupported_language_is_explicit_and_not_overclaimed(tmp_path):
     assert "Python" in artifact["metadata"]["warnings"][0]["detail"]
 
 
+def test_file_fallback_reports_structural_line_statistics(tmp_path, monkeypatch):
+    from click.testing import CliRunner
+    from diffgraph.cli import main
+
+    root = repo(tmp_path)
+    write(root, "notes.txt", "first\nsecond\n")
+    commit(root)
+    write(root, "notes.txt", "changed\nsecond\nthird\n")
+
+    artifact = analyze_local_diff(str(root))
+    file_entry = artifact["files"][0]
+    assert file_entry["lines_added"] == 2
+    assert file_entry["lines_removed"] == 1
+
+    monkeypatch.chdir(root)
+    result = CliRunner().invoke(main, ["diff", "--format", "terminal"])
+
+    assert result.exit_code == 0, result.output
+    assert "notes.txt  +2 / -1" in result.stdout
+
+
 def test_parse_failure_is_scoped_and_does_not_invent_symbol_changes(tmp_path):
     root = repo(tmp_path)
     write(root, "broken.py", "def valid():\n    return 1\n")
@@ -265,7 +286,21 @@ def test_cli_git_passthrough_preserves_all(monkeypatch):
     assert calls == [["git", "branch", "--all"]]
 
 
-def test_cli_default_format_keeps_legacy_html_path(monkeypatch):
+def test_cli_default_format_uses_canonical_html(tmp_path, monkeypatch):
+    from click.testing import CliRunner
+    import diffgraph.cli as cli
+
+    root = repo(tmp_path)
+    monkeypatch.chdir(root)
+
+    result = CliRunner().invoke(cli.main, ["diff", "--no-open"])
+
+    assert result.exit_code == 0, result.output
+    assert "HTML report generated" in result.stdout
+    assert (root / "diffgraph.html").exists()
+
+
+def test_cli_legacy_html_retains_no_change_compatibility(monkeypatch):
     import sys
     from types import ModuleType
 
@@ -285,7 +320,7 @@ def test_cli_default_format_keeps_legacy_html_path(monkeypatch):
     monkeypatch.setattr(cli, "is_git_repo", lambda: True)
     monkeypatch.setattr(cli, "get_changed_files", lambda diff_args: [])
 
-    result = CliRunner().invoke(cli.main, ["diff"])
+    result = CliRunner().invoke(cli.main, ["diff", "--format", "legacy-html"])
 
     assert result.exit_code == 0, result.output
     assert "No changes to analyze" in result.output
@@ -509,16 +544,16 @@ def test_cli_missing_structural_output_parent_is_a_click_error(tmp_path, monkeyp
 
 
 def test_schema_errors_become_click_errors(monkeypatch):
-    import jsonschema as jsonschema_module
     from click import ClickException
-    from diffgraph.cli import _validate_structural_artifact
+    from diffgraph.contract import DiffGraphContractError
+    import diffgraph.cli as cli
 
-    def invalid_schema(*args, **kwargs):
-        raise jsonschema_module.SchemaError("invalid schema")
+    def invalid_artifact(*args, **kwargs):
+        raise DiffGraphContractError("invalid schema")
 
-    monkeypatch.setattr(jsonschema_module, "validate", invalid_schema)
+    monkeypatch.setattr(cli, "validate_artifact", invalid_artifact)
     with pytest.raises(ClickException, match="structural artifact validation failed"):
-        _validate_structural_artifact({})
+        cli._validate_structural_artifact({})
 
 
 def test_missing_parser_dependency_is_a_run_level_cli_error(tmp_path, monkeypatch):
@@ -558,7 +593,7 @@ def test_missing_ai_dependency_is_a_click_error(tmp_path, monkeypatch):
         return real_import(name, *args, **kwargs)
 
     monkeypatch.setattr(builtins, "__import__", without_spinner)
-    result = CliRunner().invoke(main, ["diff"])
+    result = CliRunner().invoke(main, ["diff", "--format", "legacy-html"])
     assert result.exit_code == 1
     assert "requires additional dependencies" in result.output
     assert "Traceback" not in result.output
