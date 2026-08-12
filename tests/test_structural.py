@@ -509,16 +509,16 @@ def test_cli_missing_structural_output_parent_is_a_click_error(tmp_path, monkeyp
 
 
 def test_schema_errors_become_click_errors(monkeypatch):
-    import jsonschema as jsonschema_module
     from click import ClickException
-    from diffgraph.cli import _validate_structural_artifact
+    from diffgraph.contract import DiffGraphContractError
+    import diffgraph.cli as cli
 
-    def invalid_schema(*args, **kwargs):
-        raise jsonschema_module.SchemaError("invalid schema")
+    def invalid_artifact(*args, **kwargs):
+        raise DiffGraphContractError("invalid schema")
 
-    monkeypatch.setattr(jsonschema_module, "validate", invalid_schema)
+    monkeypatch.setattr(cli, "validate_artifact", invalid_artifact)
     with pytest.raises(ClickException, match="structural artifact validation failed"):
-        _validate_structural_artifact({})
+        cli._validate_structural_artifact({})
 
 
 def test_missing_parser_dependency_is_a_run_level_cli_error(tmp_path, monkeypatch):

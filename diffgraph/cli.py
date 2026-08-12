@@ -6,6 +6,7 @@ import click
 from typing import List, Dict
 import os
 from diffgraph import __version__
+from diffgraph.contract import DiffGraphContractError, validate_artifact
 from diffgraph.env_loader import load_env_file, debug_environment
 from diffgraph.git_snapshot import GitSnapshotError
 from diffgraph.utils import sanitize_diff_args, involves_working_tree
@@ -153,23 +154,10 @@ def _structural_scope(diff_args: List[str], separator_present: bool = False):
 
 
 def _validate_structural_artifact(artifact):
-    """Fail closed when the canonical v2 schema cannot validate the artifact."""
+    """Translate canonical contract failures into user-facing CLI errors."""
     try:
-        import jsonschema
-    except ImportError as error:
-        raise click.ClickException(
-            "jsonschema is required to validate --structural-json output"
-        ) from error
-    schema_path = Path(__file__).parent / "schema" / "diffgraph-v2.schema.json"
-    try:
-        schema = json.loads(schema_path.read_text(encoding="utf-8"))
-        jsonschema.validate(artifact, schema)
-    except (
-        OSError,
-        json.JSONDecodeError,
-        jsonschema.ValidationError,
-        jsonschema.SchemaError,
-    ) as error:
+        validate_artifact(artifact)
+    except DiffGraphContractError as error:
         raise click.ClickException(f"structural artifact validation failed: {error}") from error
 
 

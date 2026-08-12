@@ -18,6 +18,7 @@ from pathlib import Path
 from typing import Dict, List, Optional, Sequence, Tuple
 
 from diffgraph import __version__ as package_version
+from diffgraph.contract import CURRENT_SCHEMA_VERSION
 from diffgraph.git_snapshot import (
     GitSnapshotError,
     ResolutionWarning,
@@ -426,7 +427,7 @@ def analyze_local_diff(
     relationships.sort(key=lambda item: (item["id"], item["kind"]))
     warnings.sort(key=lambda item: (item.get("file", ""), item["code"], item.get("detail", "")))
     return {
-        "schema_version": "2.0",
+        "schema_version": CURRENT_SCHEMA_VERSION,
         "generated_at": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
         "wild_version": wild_version,
         "diff_ref": {

@@ -1,0 +1,103 @@
+{
+  "schema_version": "2.0",
+  "generated_at": "2026-08-12T10:00:00Z",
+  "wild_version": "1.1.0",
+  "diff_ref": {
+    "kind": "unstaged",
+    "base_ref": null,
+    "head_ref": null,
+    "pathspecs": [],
+    "repo_root": "/example/repository"
+  },
+  "files": [
+    {
+      "id": "file::src/greeting.py",
+      "path": "src/greeting.py",
+      "old_path": null,
+      "language": "python",
+      "change_kind": "modified",
+      "lines_added": 2,
+      "lines_removed": 1,
+      "analysis_source": "structural",
+      "evidence": [
+        {
+          "kind": "git_diff_name_status",
+          "detail": "status=M; source=git"
+        }
+      ],
+      "classification": {
+        "is_test": false,
+        "analysis_source": "structural",
+        "evidence": [
+          {
+            "kind": "path_pattern",
+            "pattern": "src/**"
+          }
+        ]
+      }
+    }
+  ],
+  "symbols": [
+    {
+      "id": "sym::src/greeting.py::greet",
+      "name": "greet",
+      "qualified_name": "greet",
+      "file_id": "file::src/greeting.py",
+      "kind": "function",
+      "parent_id": null,
+      "change_kind": "modified",
+      "analysis_source": "structural",
+      "location": {
+        "file": "src/greeting.py",
+        "line_start": 1,
+        "line_end": 2
+      },
+      "evidence": [
+        {
+          "kind": "ast_parse",
+          "file": "src/greeting.py",
+          "line_start": 1,
+          "line_end": 2,
+          "snippet": "def greet(name):"
+        }
+      ]
+    }
+  ],
+  "relationships": [
+    {
+      "id": "rel::file::src/greeting.py->sym::src/greeting.py::greet",
+      "kind": "defines",
+      "source_id": "file::src/greeting.py",
+      "target_id": "sym::src/greeting.py::greet",
+      "analysis_source": "structural",
+      "confidence": null,
+      "resolution_method": null,
+      "evidence": [
+        {
+          "kind": "ast_parse",
+          "file": "src/greeting.py",
+          "line_start": 1,
+          "line_end": 2
+        }
+      ],
+      "label": null
+    }
+  ],
+  "summary": null,
+  "metadata": {
+    "privacy_tier": "local",
+    "cloud_providers_used": [],
+    "analysis_duration_ms": 12,
+    "languages_detected": [
+      "python"
+    ],
+    "files_analyzed": 1,
+    "files_skipped": 0,
+    "llm_calls": 0,
+    "llm_model": null,
+    "tiers_used": [
+      "structural"
+    ],
+    "warnings": []
+  }
+}

@@ -92,6 +92,16 @@ is claimed. Every file records old/new paths, modes, Git object IDs, and content
 SHA-256 values in structural evidence, while symbol/relationship evidence names
 the parser package, query revision, and source blob identity.
 
+### Artifact compatibility
+
+DiffGraph artifacts use a `MAJOR.MINOR` `schema_version`. Consumers reject
+malformed versions and unknown major versions. Minor releases within major 2
+are additive: a consumer accepts them only when the complete artifact still
+validates against its packaged v2 schema. This fail-closed rule lets producers
+add optional data without weakening validation for existing consumers. The
+canonical schema and a complete local-only example are packaged under
+`diffgraph/schema/`; neither contains AI-derived symbols or relationships.
+
 ## 📊 Example Output
 
 The generated HTML report includes:

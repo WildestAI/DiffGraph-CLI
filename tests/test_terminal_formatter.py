@@ -32,11 +32,13 @@ from diffgraph.formatters.terminal import TerminalFormatter, RankedSymbols
 
 def _make_file(file_id: str, path: str, change_kind: str = "modified", language: str = "Python") -> dict:
     return {
-        "id": file_id,
+        "id": f"file::{file_id}",
         "path": path,
         "change_kind": change_kind,
-        "language": language,
-        "stats": {"additions": 10, "deletions": 3},
+        "language": language.lower(),
+        "lines_added": 10,
+        "lines_removed": 3,
+        "analysis_source": "structural",
     }
 
 
@@ -49,20 +51,26 @@ def _make_symbol(
     line_end: int = 10,
 ) -> dict:
     return {
-        "id": sym_id,
+        "id": f"sym::fixture.py::{sym_id}",
         "name": name,
-        "file_id": file_id,
+        "qualified_name": name,
+        "file_id": f"file::{file_id}",
         "kind": "function",
         "change_kind": change_kind,
-        "location": {"line_start": line_start, "line_end": line_end},
+        "analysis_source": "structural",
+        "location": {
+            "file": "fixture.py",
+            "line_start": max(1, line_start),
+            "line_end": max(1, line_end),
+        } if change_kind != "deleted" else None,
     }
 
 
 def _make_import_rel(rel_id: str, source_id: str, target_id: str) -> dict:
     return {
-        "id": rel_id,
-        "source_id": source_id,
-        "target_id": target_id,
+        "id": f"rel::{rel_id}->fixture",
+        "source_id": f"file::{source_id}",
+        "target_id": f"file::{target_id}",
         "kind": "imports",
         "analysis_source": "structural",
     }
@@ -78,12 +86,12 @@ def _make_diffgraph(
     return {
         "schema_version": "2.0",
         "generated_at": "2026-07-10T16:30:00Z",
+        "wild_version": "1.1.0",
         "diff_ref": diff_ref or {"kind": "unstaged"},
         "files": files or [],
         "symbols": symbols or [],
         "relationships": relationships or [],
         "metadata": metadata or {
-            "analysis_source": "structural",
             "privacy_tier": "local",
             "analysis_duration_ms": 840,
         },
@@ -384,6 +392,7 @@ def test_render_no_symbols_file_fallback():
     assert "FILES CHANGED" in output
     assert "legacy/mystery.py" in output
     assert "legacy/helper.py" in output
+    assert "+10 / -3" in output
     assert "symbol extraction unavailable" in output
 
 
@@ -395,7 +404,6 @@ def test_render_footer_shows_duration():
     files = [_make_file("f1", "auth/validator.py", change_kind="modified")]
     symbols = [_make_symbol("s1", "fn", "f1", "modified", 1, 5)]
     metadata = {
-        "analysis_source": "structural",
         "privacy_tier": "local",
         "analysis_duration_ms": 1234,
     }
