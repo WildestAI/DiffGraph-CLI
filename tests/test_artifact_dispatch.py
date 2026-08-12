@@ -186,6 +186,23 @@ def test_canonical_option_conflicts_are_usage_errors(arguments, message):
     assert message in result.stderr
 
 
+@pytest.mark.parametrize(
+    "arguments",
+    [
+        ["diff", "--format", "json", "--debug-env"],
+        ["diff", "--format", "terminal", "--debug-env"],
+        ["diff", "--format", "html", "--debug-env"],
+        ["diff", "--structural-json", "-", "--debug-env"],
+    ],
+)
+def test_debug_env_cannot_preempt_canonical_artifact_output(arguments):
+    result = CliRunner().invoke(cli.main, arguments)
+
+    assert result.exit_code == 2
+    assert result.stdout == ""
+    assert "--debug-env cannot be combined with canonical artifact output" in result.stderr
+
+
 def test_no_change_json_and_terminal_succeed(tmp_path, monkeypatch):
     root = changed_repo(tmp_path)
     git(root, "checkout", "--", "app.py")

@@ -33,6 +33,29 @@ def is_git_repo() -> bool:
     except subprocess.CalledProcessError:
         return False
 
+
+def _open_html_report(html_path: Path) -> None:
+    """Best-effort browser launch; report failures without failing generation."""
+    try:
+        if sys.platform == 'darwin':
+            result = subprocess.run(['open', str(html_path)], check=False)
+        elif sys.platform == 'win32':
+            os.startfile(html_path)
+            return
+        else:
+            result = subprocess.run(['xdg-open', str(html_path)], check=False)
+    except OSError as error:
+        click.echo(f"⚠️ Could not open report in browser: {error}", err=True)
+        return
+
+    if result.returncode != 0:
+        click.echo(
+            "⚠️ Could not open report in browser: "
+            f"opener exited with status {result.returncode}",
+            err=True,
+        )
+
+
 def get_changed_files(diff_args: List[str] = None) -> List[Dict[str, str]]:
     """
     Get list of changed and untracked files.
@@ -215,7 +238,11 @@ def load_file_contents(changed_files: List[Dict[str, str]], diff_args: List[str]
 )
 @click.version_option(package_name='wild')
 @click.argument('args', nargs=-1, type=click.UNPROCESSED)
-@click.option('--api-key', envvar='OPENAI_API_KEY', help='OpenAI API key')
+@click.option(
+    '--api-key',
+    envvar='OPENAI_API_KEY',
+    help='OpenAI API key (legacy-html only)',
+)
 @click.option(
     '--output', '-o', default=None,
     help='Output path (HTML default: diffgraph.html; JSON default: stdout)',
@@ -268,6 +295,14 @@ def main(
         raise click.UsageError("--structural-json cannot be combined with --output")
     if output_format == "terminal" and output is not None:
         raise click.UsageError("--format terminal writes to stdout and cannot use --output")
+    if debug_env and (
+        structural_json is not None
+        or output_format in ("terminal", "json")
+        or (output_format == "html" and format_was_explicit)
+    ):
+        raise click.UsageError(
+            "--debug-env cannot be combined with canonical artifact output"
+        )
 
     # Check if this is a diff command
     if args and args[0] == 'diff':
@@ -328,12 +363,7 @@ def main(
                 click.echo(f"✅ HTML report generated: {html_path}")
                 if not no_open:
                     click.echo("🌐 Opening report in browser...")
-                    if sys.platform == 'darwin':
-                        subprocess.run(['open', str(html_path)])
-                    elif sys.platform == 'win32':
-                        os.startfile(html_path)
-                    else:
-                        subprocess.run(['xdg-open', str(html_path)])
+                    _open_html_report(html_path)
             else:
                 destination = structural_json if structural_json is not None else output
                 if destination is None or str(destination) == "-":

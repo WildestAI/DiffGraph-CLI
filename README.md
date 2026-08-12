@@ -55,7 +55,8 @@ This will:
 
 ### Command-line Options
 
-- `--api-key`: Specify your OpenAI API key (defaults to OPENAI_API_KEY environment variable)
+- `--api-key`: Specify the OpenAI API key used only by `--format legacy-html`
+  (defaults to `OPENAI_API_KEY`)
 - `--format`: Select canonical `html` (default), `terminal`, or `json` output. `legacy-html` temporarily selects the deprecated AI report.
 - `--output` or `-o`: Specify the HTML or JSON output path. HTML defaults to
   `diffgraph.html`; JSON defaults to stdout. Terminal output is always stdout.

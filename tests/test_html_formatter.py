@@ -7,6 +7,7 @@ import subprocess
 import sys
 from pathlib import Path
 
+import pytest
 from click.testing import CliRunner
 
 import diffgraph.cli as cli
@@ -99,6 +100,32 @@ def test_canonical_html_cli_is_atomic_honors_output_and_no_open(tmp_path, monkey
     assert not list(root.glob(".report.html.*.tmp"))
     assert "HTML report generated" in result.stdout
     assert result.stderr == ""
+
+
+@pytest.mark.parametrize("failure", [OSError("missing opener"), 3])
+def test_canonical_html_browser_launch_failure_is_a_warning(
+    failure, tmp_path, monkeypatch
+):
+    root = changed_repo(tmp_path)
+    monkeypatch.chdir(root)
+    real_run = cli.subprocess.run
+
+    def run(command, *args, **kwargs):
+        if command[0] == "xdg-open":
+            if isinstance(failure, OSError):
+                raise failure
+            return type("Result", (), {"returncode": failure})()
+        return real_run(command, *args, **kwargs)
+
+    monkeypatch.setattr(cli.sys, "platform", "linux")
+    monkeypatch.setattr(cli.subprocess, "run", run)
+
+    result = CliRunner().invoke(cli.main, ["diff", "--format", "html"])
+
+    assert result.exit_code == 0, result.output
+    assert "HTML report generated" in result.stdout
+    assert "Could not open report in browser" in result.stderr
+    assert (root / "diffgraph.html").exists()
 
 
 def test_canonical_html_no_change_writes_a_complete_report(tmp_path, monkeypatch):

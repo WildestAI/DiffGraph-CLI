@@ -10,6 +10,7 @@ import hashlib
 import json
 import threading
 import time
+from difflib import SequenceMatcher
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from functools import lru_cache
@@ -69,6 +70,30 @@ def _worktree_bytes(repository: str, entry: SnapshotEntry) -> Optional[bytes]:
     return read_worktree_blob(
         repository, entry.new_path, entry.new_mode, expected_oid=entry.new_oid
     )
+
+
+def _line_counts(
+    old: Optional[bytes], new: Optional[bytes]
+) -> Tuple[Optional[int], Optional[int]]:
+    """Return deterministic added/removed line counts, or nulls for binaries."""
+    old_bytes = old or b""
+    new_bytes = new or b""
+    if b"\0" in old_bytes or b"\0" in new_bytes:
+        return None, None
+
+    matcher = SequenceMatcher(
+        None,
+        old_bytes.splitlines(keepends=True),
+        new_bytes.splitlines(keepends=True),
+        autojunk=False,
+    )
+    added = removed = 0
+    for tag, old_start, old_end, new_start, new_end in matcher.get_opcodes():
+        if tag in ("replace", "delete"):
+            removed += old_end - old_start
+        if tag in ("replace", "insert"):
+            added += new_end - new_start
+    return added, removed
 
 
 def _parser():
@@ -279,11 +304,21 @@ def analyze_local_diff(
             old = new = None
             warnings.append(_warning("PARTIAL_ANALYSIS", path, "snapshot read failed: {}".format(error)))
 
+        snapshot_missing = (
+            old is None and entry.old_oid is not None
+        ) or (
+            new is None and entry.new_oid is not None
+        )
+        lines_added, lines_removed = (
+            (None, None) if snapshot_missing else _line_counts(old, new)
+        )
         file_entry = {
             "id": "file::" + path, "path": path,
             "old_path": entry.old_path if entry.status in ("R", "C") else None,
             "language": "python" if Path(path).suffix.lower() == ".py" else None,
             "change_kind": _change_kind(entry.status, entry.old_oid, entry.new_oid),
+            "lines_added": lines_added,
+            "lines_removed": lines_removed,
             "analysis_source": "structural",
             "evidence": [{"kind": "git_diff_name_status", "detail": _provenance(entry, old, new)}],
         }

@@ -146,6 +146,27 @@ def test_unsupported_language_is_explicit_and_not_overclaimed(tmp_path):
     assert "Python" in artifact["metadata"]["warnings"][0]["detail"]
 
 
+def test_file_fallback_reports_structural_line_statistics(tmp_path, monkeypatch):
+    from click.testing import CliRunner
+    from diffgraph.cli import main
+
+    root = repo(tmp_path)
+    write(root, "notes.txt", "first\nsecond\n")
+    commit(root)
+    write(root, "notes.txt", "changed\nsecond\nthird\n")
+
+    artifact = analyze_local_diff(str(root))
+    file_entry = artifact["files"][0]
+    assert file_entry["lines_added"] == 2
+    assert file_entry["lines_removed"] == 1
+
+    monkeypatch.chdir(root)
+    result = CliRunner().invoke(main, ["diff", "--format", "terminal"])
+
+    assert result.exit_code == 0, result.output
+    assert "notes.txt  +2 / -1" in result.stdout
+
+
 def test_parse_failure_is_scoped_and_does_not_invent_symbol_changes(tmp_path):
     root = repo(tmp_path)
     write(root, "broken.py", "def valid():\n    return 1\n")
