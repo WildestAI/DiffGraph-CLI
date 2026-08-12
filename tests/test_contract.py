@@ -43,6 +43,17 @@ def test_validated_artifact_cannot_bypass_validation():
         ValidatedArtifact({})
 
 
+def test_validated_artifact_isolated_from_mutation(golden_artifact):
+    artifact = ValidatedArtifact.from_value(golden_artifact)
+    original_path = artifact.value["files"][0]["path"]
+
+    golden_artifact["files"][0]["path"] = "mutated-source.py"
+    exposed_value = artifact.value
+    exposed_value["files"][0]["path"] = "mutated-copy.py"
+
+    assert artifact.value["files"][0]["path"] == original_path
+
+
 def test_golden_contains_only_local_structural_claims(golden_artifact):
     assert golden_artifact["summary"] is None
     assert golden_artifact["metadata"]["privacy_tier"] == "local"

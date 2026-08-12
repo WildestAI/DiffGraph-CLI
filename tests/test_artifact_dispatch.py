@@ -45,7 +45,8 @@ def test_builder_constructs_and_validates_once_then_consumers_share_wrapper(monk
 
     def validate(candidate):
         calls.append(("validate", candidate))
-        assert candidate is value
+        assert candidate == value
+        assert candidate is not value
 
     monkeypatch.setattr(artifact_service, "analyze_local_diff", analyze)
     monkeypatch.setattr("diffgraph.contract.validate_artifact", validate)
@@ -54,7 +55,8 @@ def test_builder_constructs_and_validates_once_then_consumers_share_wrapper(monk
         ".", staged=True, pathspecs=("src",), wild_version="test"
     )
 
-    assert artifact.value is value
+    assert artifact.value == value
+    assert artifact.value is not value
     assert [call[0] for call in calls] == ["build", "validate"]
     assert TerminalFormatter.__new__(TerminalFormatter) is not None  # class is importable locally
     assert artifact_service.render_canonical_json(artifact).endswith("\n")
@@ -128,7 +130,7 @@ def test_terminal_consumer_does_not_revalidate_branded_artifact(golden_artifact,
     formatter = TerminalFormatter(artifact, color=False)
 
     assert formatter.artifact is artifact
-    assert formatter.dg is artifact.value
+    assert formatter.dg == artifact.value
 
 
 @pytest.fixture

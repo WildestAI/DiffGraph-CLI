@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import json
 import re
+from copy import deepcopy
 from dataclasses import dataclass
 from importlib import resources
 from typing import Any, Mapping, Tuple
@@ -30,15 +31,21 @@ class ValidatedArtifact:
     cannot brand an unvalidated dictionary and bypass consumer checks.
     """
 
-    value: dict
+    _value: dict
 
     @classmethod
     def from_value(cls, artifact: dict) -> "ValidatedArtifact":
         """Validate an existing value once and brand it for trusted consumers."""
-        validate_artifact(artifact)
+        artifact_copy = deepcopy(artifact)
+        validate_artifact(artifact_copy)
         validated = object.__new__(cls)
-        object.__setattr__(validated, "value", artifact)
+        object.__setattr__(validated, "_value", artifact_copy)
         return validated
+
+    @property
+    def value(self) -> dict:
+        """Return a defensive copy without exposing the validated state."""
+        return deepcopy(self._value)
 
 
 def schema_version(value: object) -> Tuple[int, int]:
