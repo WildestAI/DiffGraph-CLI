@@ -265,7 +265,21 @@ def test_cli_git_passthrough_preserves_all(monkeypatch):
     assert calls == [["git", "branch", "--all"]]
 
 
-def test_cli_default_format_keeps_legacy_html_path(monkeypatch):
+def test_cli_default_format_uses_canonical_html(tmp_path, monkeypatch):
+    from click.testing import CliRunner
+    import diffgraph.cli as cli
+
+    root = repo(tmp_path)
+    monkeypatch.chdir(root)
+
+    result = CliRunner().invoke(cli.main, ["diff", "--no-open"])
+
+    assert result.exit_code == 0, result.output
+    assert "HTML report generated" in result.stdout
+    assert (root / "diffgraph.html").exists()
+
+
+def test_cli_legacy_html_retains_no_change_compatibility(monkeypatch):
     import sys
     from types import ModuleType
 
@@ -285,7 +299,7 @@ def test_cli_default_format_keeps_legacy_html_path(monkeypatch):
     monkeypatch.setattr(cli, "is_git_repo", lambda: True)
     monkeypatch.setattr(cli, "get_changed_files", lambda diff_args: [])
 
-    result = CliRunner().invoke(cli.main, ["diff"])
+    result = CliRunner().invoke(cli.main, ["diff", "--format", "legacy-html"])
 
     assert result.exit_code == 0, result.output
     assert "No changes to analyze" in result.output
@@ -558,7 +572,7 @@ def test_missing_ai_dependency_is_a_click_error(tmp_path, monkeypatch):
         return real_import(name, *args, **kwargs)
 
     monkeypatch.setattr(builtins, "__import__", without_spinner)
-    result = CliRunner().invoke(main, ["diff"])
+    result = CliRunner().invoke(main, ["diff", "--format", "legacy-html"])
     assert result.exit_code == 1
     assert "requires additional dependencies" in result.output
     assert "Traceback" not in result.output

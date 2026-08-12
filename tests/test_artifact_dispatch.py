@@ -60,6 +60,64 @@ def test_builder_constructs_and_validates_once_then_consumers_share_wrapper(monk
     assert artifact_service.render_canonical_json(artifact).endswith("\n")
 
 
+def test_json_terminal_and_html_receive_the_exact_once_built_artifact(
+    golden_artifact, monkeypatch, tmp_path
+):
+    artifact = ValidatedArtifact.from_value(golden_artifact)
+    build_calls = []
+    received = {}
+
+    def build(*args, **kwargs):
+        build_calls.append((args, kwargs))
+        return artifact
+
+    class RecordingTerminal:
+        DEFAULT_MAX_ITEMS = 10
+
+        def __init__(self, candidate, **kwargs):
+            received["terminal"] = candidate
+
+        def render(self):
+            pass
+
+    class RecordingHtml:
+        def __init__(self, candidate):
+            received["html"] = candidate
+
+        def write(self, destination):
+            return Path(destination).absolute()
+
+    def render_json(candidate):
+        received["json"] = candidate
+        return "{}\n"
+
+    monkeypatch.setattr(cli, "is_git_repo", lambda: True)
+    monkeypatch.setattr(cli, "build_validated_artifact", build)
+    monkeypatch.setattr(cli, "render_canonical_json", render_json)
+    monkeypatch.setattr("diffgraph.formatters.terminal.TerminalFormatter", RecordingTerminal)
+    monkeypatch.setattr("diffgraph.formatters.html.HtmlFormatter", RecordingHtml)
+
+    invocations = [
+        ["diff", "--format", "json"],
+        ["diff", "--format", "terminal"],
+        [
+            "diff",
+            "--format",
+            "html",
+            "--output",
+            str(tmp_path / "report.html"),
+            "--no-open",
+        ],
+    ]
+    for arguments in invocations:
+        result = CliRunner().invoke(cli.main, arguments)
+        assert result.exit_code == 0, result.output
+
+    assert len(build_calls) == 3
+    assert received == {"json": artifact, "terminal": artifact, "html": artifact}
+    assert all(candidate is artifact for candidate in received.values())
+
+
 def test_terminal_consumer_does_not_revalidate_branded_artifact(golden_artifact, monkeypatch):
     artifact = ValidatedArtifact.from_value(golden_artifact)
 

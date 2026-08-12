@@ -223,10 +223,15 @@ def load_file_contents(changed_files: List[Dict[str, str]], diff_args: List[str]
 @click.option(
     '--format',
     'output_format',
-    type=click.Choice(['html', 'terminal', 'json'], case_sensitive=False),
+    type=click.Choice(
+        ['html', 'terminal', 'json', 'legacy-html'], case_sensitive=False
+    ),
     default='html',
     show_default=True,
-    help='Render legacy HTML or a canonical local terminal/JSON artifact',
+    help=(
+        'Render a canonical local HTML, terminal, or JSON artifact; '
+        'legacy-html retains the deprecated AI report for one compatibility release'
+    ),
 )
 @click.option('--no-open', is_flag=True, help='Do not open the HTML report automatically')
 @click.option('--debug-env', is_flag=True, help='Debug environment variable loading')
@@ -252,7 +257,10 @@ def main(
     )
     if structural_json is not None and (not args or args[0] != "diff"):
         raise click.UsageError("--structural-json can only be used with 'diff'")
-    if output_format in ("terminal", "json") and (not args or args[0] != "diff"):
+    if (
+        output_format in ("terminal", "json", "legacy-html")
+        or (output_format == "html" and format_was_explicit)
+    ) and (not args or args[0] != "diff"):
         raise click.UsageError(f"--format {output_format} can only be used with 'diff'")
     if structural_json is not None and format_was_explicit:
         raise click.UsageError("--structural-json cannot be combined with --format")
@@ -275,7 +283,7 @@ def main(
             click.echo("❌ Error: Not a git repository", err=True)
             sys.exit(1)
 
-        if structural_json is not None or output_format in ("terminal", "json"):
+        if structural_json is not None or output_format in ("html", "terminal", "json"):
             compact = False
             show_all = False
             if output_format == "terminal":
@@ -294,7 +302,7 @@ def main(
                 DiffGraphContractError,
             ) as error:
                 raise click.ClickException(str(error)) from error
-            if output_format == "terminal":
+            if structural_json is None and output_format == "terminal":
                 from diffgraph.formatters.terminal import TerminalFormatter
 
                 try:
@@ -307,6 +315,25 @@ def main(
                     ).render()
                 except ValueError as error:
                     raise click.ClickException(str(error)) from error
+            elif structural_json is None and output_format == "html":
+                from diffgraph.formatters.html import HtmlFormatter
+
+                destination = Path(output or "diffgraph.html")
+                try:
+                    html_path = HtmlFormatter(artifact).write(destination)
+                except (OSError, TypeError, ValueError) as error:
+                    raise click.ClickException(
+                        f"could not write {destination}: {error}"
+                    ) from error
+                click.echo(f"✅ HTML report generated: {html_path}")
+                if not no_open:
+                    click.echo("🌐 Opening report in browser...")
+                    if sys.platform == 'darwin':
+                        subprocess.run(['open', str(html_path)])
+                    elif sys.platform == 'win32':
+                        os.startfile(html_path)
+                    else:
+                        subprocess.run(['xdg-open', str(html_path)])
             else:
                 destination = structural_json if structural_json is not None else output
                 if destination is None or str(destination) == "-":
@@ -324,8 +351,8 @@ def main(
                     click.echo(f"✅ {label} DiffGraph written: {destination}", err=True)
             return
 
-        # Keep the legacy AI/HTML path lazy so local structural output never
-        # imports a network-capable SDK.
+        # One-release compatibility path. Keep it lazy so canonical output never
+        # imports a network-capable SDK. Remove after the documented transition.
         try:
             from click_spinner import spinner
             from diffgraph.ai_analysis import CodeAnalysisAgent
