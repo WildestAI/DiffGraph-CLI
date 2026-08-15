@@ -1,7 +1,11 @@
 import os
 import subprocess
 
-from diffgraph.git_snapshot import resolve_staged, resolve_unstaged
+from diffgraph.git_snapshot import (
+    resolve_commit_range,
+    resolve_staged,
+    resolve_unstaged,
+)
 
 
 def git(repo, *args, input_bytes=None):
@@ -288,3 +292,112 @@ def test_unstaged_symlink_hashes_raw_target_without_attributes(tmp_path):
     assert entry.new_oid == git(
         repo, "hash-object", "--stdin", input_bytes=b"replacement.py"
     ).decode("ascii").strip()
+
+
+def test_two_dot_range_records_exact_endpoints_and_tree_identities(tmp_path):
+    repo = make_repo(tmp_path)
+    write(repo, "shared.txt", b"common\n")
+    commit_all(repo, "common")
+    git(repo, "branch", "base")
+
+    write(repo, "head-only.txt", b"head\n")
+    commit_all(repo, "head change")
+    git(repo, "branch", "head")
+    head_oid = oid(repo, "head")
+
+    git(repo, "switch", "base")
+    write(repo, "base-only.txt", b"base\n")
+    commit_all(repo, "base change")
+    base_oid = oid(repo, "base")
+
+    result = resolve_commit_range(str(repo), "base", "head")
+    entries = {entry.new_path or entry.old_path: entry for entry in result.entries}
+
+    assert result.warnings == ()
+    assert result.base_oid == result.comparison_base_oid == base_oid
+    assert result.head_oid == head_oid
+    assert result.three_dot is False
+    assert set(entries) == {"base-only.txt", "head-only.txt"}
+    assert entries["base-only.txt"].status == "D"
+    assert entries["base-only.txt"].old_oid == oid(repo, "base:base-only.txt")
+    assert entries["base-only.txt"].new_oid is None
+    assert entries["head-only.txt"].status == "A"
+    assert entries["head-only.txt"].old_oid is None
+    assert entries["head-only.txt"].new_oid == oid(repo, "head:head-only.txt")
+
+
+def test_three_dot_range_uses_merge_base_and_excludes_base_only_changes(tmp_path):
+    repo = make_repo(tmp_path)
+    write(repo, "shared.txt", b"common\n")
+    commit_all(repo, "common")
+    common_oid = oid(repo, "HEAD")
+    git(repo, "branch", "base")
+
+    write(repo, "head-only.txt", b"head\n")
+    commit_all(repo, "head change")
+    git(repo, "branch", "head")
+
+    git(repo, "switch", "base")
+    write(repo, "base-only.txt", b"base\n")
+    commit_all(repo, "base change")
+
+    result = resolve_commit_range(str(repo), "base", "head", three_dot=True)
+
+    assert result.warnings == ()
+    assert result.comparison_base_oid == common_oid
+    assert result.base_oid == oid(repo, "base")
+    assert result.head_oid == oid(repo, "head")
+    assert result.three_dot is True
+    assert [entry.new_path or entry.old_path for entry in result.entries] == [
+        "head-only.txt"
+    ]
+
+
+def test_commit_range_pathspec_is_relative_to_calling_subdirectory(tmp_path):
+    repo = make_repo(tmp_path)
+    write(repo, "inside/a.txt", b"old a\n")
+    write(repo, "outside/b.txt", b"old b\n")
+    commit_all(repo)
+    git(repo, "branch", "before")
+    write(repo, "inside/a.txt", b"new a\n")
+    write(repo, "outside/b.txt", b"new b\n")
+    commit_all(repo, "both changed")
+
+    result = resolve_commit_range(
+        str(repo / "inside"), "before", "HEAD", pathspecs=["a.txt"]
+    )
+
+    assert result.warnings == ()
+    assert [entry.new_path for entry in result.entries] == ["inside/a.txt"]
+
+
+def test_invalid_commit_range_ref_is_a_warning_not_a_change(tmp_path):
+    repo = make_repo(tmp_path)
+    write(repo, "tracked.txt", b"content\n")
+    commit_all(repo)
+
+    result = resolve_commit_range(str(repo), "missing-ref", "HEAD")
+
+    assert result.entries == ()
+    assert result.base_oid is None
+    assert result.head_oid == oid(repo, "HEAD")
+    assert [warning.code for warning in result.warnings] == ["invalid_base_ref"]
+
+
+def test_three_dot_without_merge_base_is_a_warning_not_a_change(tmp_path):
+    repo = make_repo(tmp_path)
+    write(repo, "first.txt", b"first\n")
+    commit_all(repo)
+    git(repo, "branch", "first")
+    git(repo, "switch", "--orphan", "second")
+    first_path = repo / "first.txt"
+    if first_path.exists():
+        first_path.unlink()
+    write(repo, "second.txt", b"second\n")
+    commit_all(repo, "unrelated root")
+
+    result = resolve_commit_range(str(repo), "first", "second", three_dot=True)
+
+    assert result.entries == ()
+    assert result.comparison_base_oid is None
+    assert [warning.code for warning in result.warnings] == ["merge_base_failed"]

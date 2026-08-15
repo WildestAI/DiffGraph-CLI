@@ -1,13 +1,14 @@
 """Resolve exact Git object identities for index and working-tree changes.
 
-This module deliberately models only the two local snapshot pairs:
+This module models the two local snapshot pairs and immutable commit ranges:
 
 * staged: ``HEAD`` -> index
 * unstaged: index -> working tree
+* two-dot: the requested base commit -> the requested head commit
+* three-dot: the merge base of the requested commits -> the requested head
 
-Commit/range resolution belongs to a separate layer.  Paths returned by Git are
-read using its NUL-delimited raw format, so tabs, newlines, and other unusual
-filename bytes are not delimiters.
+Paths returned by Git are read using its NUL-delimited raw format, so tabs,
+newlines, and other unusual filename bytes are not delimiters.
 """
 
 from __future__ import annotations
@@ -55,6 +56,25 @@ class SnapshotResolution:
     warnings: Tuple[ResolutionWarning, ...]
 
 
+@dataclass(frozen=True)
+class CommitRangeResolution:
+    """Exact endpoints and entries for a two-dot or three-dot comparison.
+
+    ``comparison_base_oid`` equals ``base_oid`` for two-dot comparisons and
+    the resolved merge-base object ID for three-dot comparisons. Recording
+    both prevents display refs from being mistaken for immutable provenance.
+    """
+
+    entries: Tuple[SnapshotEntry, ...]
+    warnings: Tuple[ResolutionWarning, ...]
+    base_ref: str
+    head_ref: str
+    base_oid: Optional[str]
+    head_oid: Optional[str]
+    comparison_base_oid: Optional[str]
+    three_dot: bool
+
+
 class GitSnapshotError(RuntimeError):
     """A Git or working-tree operation required for exact snapshots failed."""
 
@@ -95,6 +115,129 @@ def resolve_unstaged(
     """
 
     return _resolve(repository, pathspecs, staged=False)
+
+
+def resolve_commit_range(
+    repository: str,
+    base_ref: str,
+    head_ref: str,
+    *,
+    three_dot: bool = False,
+    pathspecs: Optional[Sequence[str]] = None,
+) -> CommitRangeResolution:
+    """Resolve exact tree identities for a two-dot or three-dot comparison.
+
+    Refs are resolved to commits before diffing. Two-dot compares those two
+    commits directly; three-dot compares their merge base with the resolved
+    head, matching ``git diff base...head`` semantics. Failures are returned
+    as structured warnings and never as fabricated changes.
+    """
+
+    warnings: List[ResolutionWarning] = []
+    root = _repository_root(repository, warnings)
+    if root is None:
+        return _commit_range_result(base_ref, head_ref, three_dot, warnings=warnings)
+
+    base_oid = _resolve_commit(root, base_ref, "invalid_base_ref", warnings)
+    head_oid = _resolve_commit(root, head_ref, "invalid_head_ref", warnings)
+    if base_oid is None or head_oid is None:
+        return _commit_range_result(
+            base_ref, head_ref, three_dot, warnings=warnings,
+            base_oid=base_oid, head_oid=head_oid,
+        )
+
+    comparison_base_oid = base_oid
+    if three_dot:
+        output = _run(
+            ["git", "merge-base", base_oid, head_oid], root, warnings,
+            "merge_base_failed",
+        )
+        if output is None:
+            return _commit_range_result(
+                base_ref, head_ref, three_dot, warnings=warnings,
+                base_oid=base_oid, head_oid=head_oid,
+            )
+        comparison_base_oid = os.fsdecode(output).strip()
+        if not _is_hex_oid(comparison_base_oid):
+            warnings.append(ResolutionWarning(
+                "malformed_merge_base",
+                "Git returned an invalid merge-base object ID",
+            ))
+            return _commit_range_result(
+                base_ref, head_ref, three_dot, warnings=warnings,
+                base_oid=base_oid, head_oid=head_oid,
+            )
+
+    command = [
+        "git", "diff", "--raw", "-z", "--no-abbrev", "--no-ext-diff",
+        "--find-renames=50%", comparison_base_oid, head_oid,
+    ]
+    scoped_pathspecs = _root_relative_pathspecs(repository, root, pathspecs)
+    if scoped_pathspecs:
+        command.append("--")
+        command.extend(scoped_pathspecs)
+    output = _run(command, root, warnings, "git_diff_failed")
+    entries: List[SnapshotEntry] = []
+    if output is not None:
+        for raw in _parse_raw(output, warnings):
+            entry = _exact_staged_entry(raw, warnings)
+            if entry is not None:
+                entries.append(entry)
+        entries.sort(key=_entry_sort_key)
+
+    return _commit_range_result(
+        base_ref, head_ref, three_dot, entries=entries, warnings=warnings,
+        base_oid=base_oid, head_oid=head_oid,
+        comparison_base_oid=comparison_base_oid,
+    )
+
+
+def _commit_range_result(
+    base_ref: str,
+    head_ref: str,
+    three_dot: bool,
+    *,
+    entries: Sequence[SnapshotEntry] = (),
+    warnings: Sequence[ResolutionWarning] = (),
+    base_oid: Optional[str] = None,
+    head_oid: Optional[str] = None,
+    comparison_base_oid: Optional[str] = None,
+) -> CommitRangeResolution:
+    return CommitRangeResolution(
+        tuple(entries), tuple(warnings), base_ref, head_ref, base_oid, head_oid,
+        comparison_base_oid, three_dot,
+    )
+
+
+def _resolve_commit(
+    root: str, ref: str, warning_code: str,
+    warnings: List[ResolutionWarning],
+) -> Optional[str]:
+    output = _run(
+        [
+            "git",
+            "rev-parse",
+            "--verify",
+            "--end-of-options",
+            "{}^{{commit}}".format(ref),
+        ],
+        root, warnings, warning_code,
+    )
+    if output is None:
+        return None
+    oid = os.fsdecode(output).strip()
+    if not _is_hex_oid(oid):
+        warnings.append(ResolutionWarning(
+            warning_code, "Git returned an invalid commit object ID"
+        ))
+        return None
+    return oid
+
+
+def _is_hex_oid(value: str) -> bool:
+    return bool(value) and all(
+        character in "0123456789abcdef" for character in value
+    )
 
 
 def _resolve(
