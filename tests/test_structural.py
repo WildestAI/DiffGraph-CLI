@@ -184,6 +184,49 @@ def test_binary_python_snapshot_preserves_identity_without_parsing(tmp_path, sta
     }]
 
 
+@pytest.mark.parametrize(
+    ("old_content", "new_content", "binary_sides"),
+    [
+        (b"\x00old-binary\xff\n", b"def readable():\n    return 1\n", "pre-change"),
+        (b"\x00old-binary\xff\n", b"\x00new-binary\xfe\n", "pre-change and post-change"),
+    ],
+    ids=["binary-to-text", "binary-to-binary"],
+)
+def test_pre_change_binary_snapshots_skip_all_source_analysis(
+    tmp_path, old_content, new_content, binary_sides
+):
+    root = repo(tmp_path)
+    path = root / "payload.py"
+    path.write_bytes(old_content)
+    commit(root)
+    path.write_bytes(new_content)
+
+    artifact = analyze_local_diff(str(root))
+
+    assert_valid(artifact)
+    assert artifact["symbols"] == []
+    assert artifact["relationships"] == []
+    assert artifact["metadata"]["files_analyzed"] == 0
+    assert artifact["metadata"]["files_skipped"] == 1
+    file_entry = artifact["files"][0]
+    assert file_entry["language"] is None
+    assert file_entry["lines_added"] is None
+    assert file_entry["lines_removed"] is None
+    provenance = json.loads(file_entry["evidence"][0]["detail"])
+    assert provenance["old_oid"] == git(root, "rev-parse", "HEAD:payload.py")
+    assert provenance["new_oid"] == git(root, "hash-object", "--path=payload.py", "payload.py")
+    assert provenance["old_sha256"] == hashlib.sha256(old_content).hexdigest()
+    assert provenance["new_sha256"] == hashlib.sha256(new_content).hexdigest()
+    assert artifact["metadata"]["warnings"] == [{
+        "code": "PARTIAL_ANALYSIS",
+        "file": "payload.py",
+        "detail": (
+            f"Binary content detected in {binary_sides} snapshot; "
+            "structural parsing and line counts were skipped."
+        ),
+    }]
+
+
 def test_file_fallback_reports_structural_line_statistics(tmp_path, monkeypatch):
     from click.testing import CliRunner
     from diffgraph.cli import main
