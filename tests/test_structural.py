@@ -1,3 +1,4 @@
+import hashlib
 import json
 import os
 import subprocess
@@ -144,6 +145,43 @@ def test_unsupported_language_is_explicit_and_not_overclaimed(tmp_path):
     assert artifact["metadata"]["files_skipped"] == 1
     assert artifact["metadata"]["warnings"][0]["code"] == "UNSUPPORTED_LANGUAGE"
     assert "Python" in artifact["metadata"]["warnings"][0]["detail"]
+
+
+@pytest.mark.parametrize("staged", [False, True])
+def test_binary_python_snapshot_preserves_identity_without_parsing(tmp_path, staged):
+    root = repo(tmp_path)
+    write(root, "payload.py", "def previous():\n    return 1\n")
+    commit(root)
+    original = b"def previous():\n    return 1\n"
+    binary = b"\x89PNG\r\n\x1a\n\x00not-python\xff\n"
+    (root / "payload.py").write_bytes(binary)
+    if staged:
+        git(root, "add", "--", "payload.py")
+
+    artifact = analyze_local_diff(str(root), staged=staged)
+
+    assert_valid(artifact)
+    assert artifact["schema_version"] == "2.0"
+    assert artifact["symbols"] == []
+    assert artifact["relationships"] == []
+    assert artifact["metadata"]["files_analyzed"] == 0
+    assert artifact["metadata"]["files_skipped"] == 1
+    file_entry = artifact["files"][0]
+    assert file_entry["language"] is None
+    assert file_entry["lines_added"] is None
+    assert file_entry["lines_removed"] is None
+    provenance = json.loads(file_entry["evidence"][0]["detail"])
+    assert provenance["old_oid"] == git(root, "rev-parse", "HEAD:payload.py")
+    assert provenance["new_oid"] == git(root, "hash-object", "--path=payload.py", "payload.py")
+    assert provenance["old_mode"] == "100644"
+    assert provenance["new_mode"] == "100644"
+    assert provenance["old_sha256"] == hashlib.sha256(original).hexdigest()
+    assert provenance["new_sha256"] == hashlib.sha256(binary).hexdigest()
+    assert artifact["metadata"]["warnings"] == [{
+        "code": "PARTIAL_ANALYSIS",
+        "file": "payload.py",
+        "detail": "Binary content detected in post-change snapshot; structural parsing and line counts were skipped.",
+    }]
 
 
 def test_file_fallback_reports_structural_line_statistics(tmp_path, monkeypatch):
