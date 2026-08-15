@@ -1,9 +1,10 @@
 import subprocess
 import sys
+from dataclasses import dataclass
 from pathlib import Path
 import click
 from click.core import ParameterSource
-from typing import List, Dict
+from typing import Dict, List, Optional, Tuple
 import os
 from diffgraph import __version__
 from diffgraph.artifact import (
@@ -139,8 +140,8 @@ def _terminal_options(diff_args):
     return remaining, compact, show_all
 
 
-def _separator_follows_diff(raw_args) -> bool:
-    """Return whether the raw CLI placed ``--`` after the ``diff`` operand."""
+def _pathspecs_after_diff_separator(raw_args) -> Optional[Tuple[str, ...]]:
+    """Return raw pathspecs after ``diff --``, preserving range-like names."""
 
     value_options = {"--api-key", "--output", "-o", "--structural-json", "--format"}
     index = 0
@@ -156,29 +157,80 @@ def _separator_follows_diff(raw_args) -> bool:
             index += 1
             continue
         if argument == "diff":
-            return "--" in raw_args[index + 1 :]
+            trailing = raw_args[index + 1 :]
+            if "--" not in trailing:
+                return None
+            separator_index = trailing.index("--")
+            return tuple(trailing[separator_index + 1 :])
         index += 1
-    return False
+    return None
 
 
-def _structural_scope(diff_args: List[str], separator_present: bool = False):
-    """Accept only the exact local snapshot modes implemented by this increment."""
+@dataclass(frozen=True)
+class _StructuralScope:
+    staged: bool = False
+    pathspecs: Tuple[str, ...] = ()
+    base_ref: Optional[str] = None
+    head_ref: Optional[str] = None
+    three_dot: bool = False
+
+
+def _range_operand(argument: str):
+    """Return exact two/three-dot endpoints, or ``None`` for another operand."""
+    separator = "..." if "..." in argument else ".." if ".." in argument else None
+    if separator is None:
+        return None
+    endpoints = argument.split(separator)
+    if len(endpoints) != 2 or not all(endpoints):
+        raise click.UsageError(
+            "commit ranges require explicit non-empty BASE..HEAD or BASE...HEAD refs"
+        )
+    return endpoints[0], endpoints[1], separator == "..."
+
+
+def _structural_scope(
+    diff_args: List[str], explicit_pathspecs: Optional[Tuple[str, ...]] = None
+):
+    """Parse the deterministic local or immutable commit comparison scope."""
+    arguments = list(diff_args)
+    if "--" in arguments:
+        separator_index = arguments.index("--")
+        explicit_pathspecs = tuple(arguments[separator_index + 1 :])
+        arguments = arguments[:separator_index]
+    elif explicit_pathspecs is not None and explicit_pathspecs:
+        count = len(explicit_pathspecs)
+        if tuple(arguments[-count:]) != explicit_pathspecs:
+            raise click.UsageError("could not preserve pathspec scope after '--'")
+        arguments = arguments[:-count]
+
     staged = False
-    pathspecs = []
-    after_separator = separator_present
-    for argument in diff_args:
-        if argument == "--":
-            after_separator = True
-        elif argument in ("--staged", "--cached") and not after_separator:
+    base_ref = head_ref = None
+    three_dot = False
+    for argument in arguments:
+        if argument in ("--staged", "--cached"):
+            if base_ref is not None:
+                raise click.UsageError(
+                    "--staged/--cached cannot be combined with a commit range"
+                )
             staged = True
-        elif after_separator:
-            pathspecs.append(argument)
-        else:
+            continue
+        commit_range = _range_operand(argument)
+        if commit_range is None:
             raise click.UsageError(
-                "--structural-json currently supports only unstaged or --staged/--cached "
-                "local diffs; put pathspecs after '--'"
+                "canonical output supports unstaged, --staged/--cached, or explicit "
+                "BASE..HEAD/BASE...HEAD diffs; put pathspecs after '--'"
             )
-    return staged, pathspecs
+        if staged or base_ref is not None:
+            raise click.UsageError("use exactly one local mode or commit range")
+        base_ref, head_ref, three_dot = commit_range
+
+    return _StructuralScope(
+        staged,
+        explicit_pathspecs or (),
+        base_ref,
+        head_ref,
+        three_dot,
+    )
 
 
 def _validate_structural_artifact(artifact):
@@ -324,12 +376,18 @@ def main(
             if output_format == "terminal":
                 diff_args, compact, show_all = _terminal_options(diff_args)
             raw_args = click.get_current_context().meta.get("raw_args", ())
-            staged, pathspecs = _structural_scope(
-                diff_args, separator_present=_separator_follows_diff(raw_args)
+            scope = _structural_scope(
+                diff_args, explicit_pathspecs=_pathspecs_after_diff_separator(raw_args)
             )
             try:
                 artifact = build_validated_artifact(
-                    ".", staged=staged, pathspecs=pathspecs, wild_version=__version__
+                    ".",
+                    staged=scope.staged,
+                    pathspecs=scope.pathspecs,
+                    base_ref=scope.base_ref,
+                    head_ref=scope.head_ref,
+                    three_dot=scope.three_dot,
+                    wild_version=__version__,
                 )
             except (
                 GitSnapshotError,

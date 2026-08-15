@@ -83,6 +83,8 @@ wild diff --format terminal
 wild --structural-json diffgraph.json diff
 wild --structural-json staged.json diff --staged -- src/
 wild --structural-json - diff -- path/to/file.py
+wild diff --format json HEAD~2..HEAD
+wild diff --format html main...feature -- src/
 ```
 
 `--structural-json PATH` remains a compatibility alias for canonical JSON with
@@ -90,11 +92,17 @@ that destination. Do not combine it with `--format` or `--output`; ambiguous
 combinations are usage errors. Likewise, `--format terminal` cannot use
 `--output`. Terminal-only `--compact` and `--all` flags follow `diff`.
 
-This increment intentionally supports only local unstaged (`index` → working
-tree) and staged (`HEAD` → index) snapshots. Put pathspecs after `--`.
-Pathspecs are interpreted relative to the directory where `wild` is invoked,
-matching Git's command-line behavior. Commit ranges are rejected rather than
-analyzed with guessed semantics.
+Canonical output supports local unstaged (`index` → working tree), staged
+(`HEAD` → index), explicit two-dot (`BASE..HEAD`), and explicit three-dot
+(`BASE...HEAD`) comparisons. Two-dot resolves both refs to immutable commits;
+three-dot resolves their merge base and compares it with the immutable head,
+matching Git diff semantics. The artifact records those exact comparison OIDs
+and every file's pre/post blob identities. Invalid refs and unavailable merge
+bases produce structured warnings instead of false changes.
+
+Put pathspecs after `--`. Pathspecs are interpreted relative to the directory
+where `wild` is invoked, matching Git's command-line behavior. Both endpoints
+of a commit range are required; implicit-ref forms are rejected.
 
 Python (`.py`) is the only language with structural symbol/import extraction in
 this baseline. Other changed files remain in `files[]` and receive a scoped
