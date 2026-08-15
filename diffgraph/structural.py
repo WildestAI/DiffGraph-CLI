@@ -26,6 +26,7 @@ from diffgraph.git_snapshot import (
     SnapshotEntry,
     read_worktree_blob,
     repository_root,
+    resolve_commit_range,
     resolve_staged,
     resolve_unstaged,
     run_git,
@@ -281,12 +282,31 @@ def _keyed_imports(items: List[_Import]) -> Dict[Tuple[str, int], _Import]:
 
 def analyze_local_diff(
     repository: str = ".", *, staged: bool = False,
-    pathspecs: Optional[Sequence[str]] = None, wild_version: str = package_version,
+    pathspecs: Optional[Sequence[str]] = None,
+    base_ref: Optional[str] = None,
+    head_ref: Optional[str] = None,
+    three_dot: bool = False,
+    wild_version: str = package_version,
 ) -> Dict:
-    """Build a schema-v2 structural artifact for HEAD→index or index→worktree."""
+    """Build a schema-v2 artifact for a local snapshot or immutable commit range."""
     started = time.monotonic()
     root = repository_root(repository)
-    resolution = (resolve_staged if staged else resolve_unstaged)(repository, pathspecs)
+    if (base_ref is None) != (head_ref is None):
+        raise ValueError("base_ref and head_ref must be supplied together")
+    is_commit_range = base_ref is not None
+    if is_commit_range and staged:
+        raise ValueError("staged and commit-range comparisons are mutually exclusive")
+    resolution = (
+        resolve_commit_range(
+            repository,
+            base_ref,
+            head_ref,
+            three_dot=three_dot,
+            pathspecs=pathspecs,
+        )
+        if is_commit_range
+        else (resolve_staged if staged else resolve_unstaged)(repository, pathspecs)
+    )
     warnings = [_resolution_warning(item) for item in resolution.warnings]
     files: List[Dict] = []
     symbols: List[Dict] = []
@@ -299,7 +319,11 @@ def analyze_local_diff(
             raise RuntimeError("snapshot entry has neither an old nor a new path")
         try:
             old = _blob(root, entry.old_oid)
-            new = _blob(root, entry.new_oid) if staged else _worktree_bytes(root, entry)
+            new = (
+                _blob(root, entry.new_oid)
+                if staged or is_commit_range
+                else _worktree_bytes(root, entry)
+            )
         except (OSError, GitSnapshotError) as error:
             old = new = None
             warnings.append(_warning("PARTIAL_ANALYSIS", path, "snapshot read failed: {}".format(error)))
@@ -466,8 +490,12 @@ def analyze_local_diff(
         "generated_at": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
         "wild_version": wild_version,
         "diff_ref": {
-            "kind": "staged" if staged else "unstaged", "base_ref": "HEAD" if staged else None,
-            "head_ref": None, "pathspecs": list(pathspecs or []), "repo_root": root,
+            "kind": "commit_range" if is_commit_range else "staged" if staged else "unstaged",
+            "base_ref": (
+                resolution.comparison_base_oid if is_commit_range else "HEAD" if staged else None
+            ),
+            "head_ref": resolution.head_oid if is_commit_range else None,
+            "pathspecs": list(pathspecs or []), "repo_root": root,
         },
         "files": files, "symbols": symbols, "relationships": relationships,
         "summary": None,

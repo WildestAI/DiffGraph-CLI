@@ -11,7 +11,7 @@ import json
 import os
 import tempfile
 from pathlib import Path
-from typing import Sequence
+from typing import Optional, Sequence
 
 from diffgraph.contract import ValidatedArtifact
 from diffgraph.structural import analyze_local_diff
@@ -22,6 +22,9 @@ def build_validated_artifact(
     *,
     staged: bool = False,
     pathspecs: Sequence[str] = (),
+    base_ref: Optional[str] = None,
+    head_ref: Optional[str] = None,
+    three_dot: bool = False,
     wild_version: str,
 ) -> ValidatedArtifact:
     """Construct and validate exactly one local structural artifact."""
@@ -29,6 +32,9 @@ def build_validated_artifact(
         repository,
         staged=staged,
         pathspecs=pathspecs,
+        base_ref=base_ref,
+        head_ref=head_ref,
+        three_dot=three_dot,
         wild_version=wild_version,
     )
     return ValidatedArtifact.from_value(artifact)

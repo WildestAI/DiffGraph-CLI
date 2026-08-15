@@ -268,6 +268,27 @@ def test_cli_terminal_all_disables_review_item_cap(tmp_path, monkeypatch):
     assert "more" not in result.output
 
 
+@pytest.mark.parametrize("pathspec", ["--compact", "--all"])
+def test_cli_terminal_preserves_flag_like_pathspec_after_separator(
+    pathspec, tmp_path, monkeypatch
+):
+    from click.testing import CliRunner
+    from diffgraph.cli import main
+
+    root = repo(tmp_path)
+    write(root, pathspec, "before\n")
+    commit(root)
+    write(root, pathspec, "after\n")
+    monkeypatch.chdir(root)
+
+    result = CliRunner().invoke(
+        main, ["diff", "--format", "terminal", "--", pathspec]
+    )
+
+    assert result.exit_code == 0, result.output
+    assert pathspec in result.output
+
+
 def test_cli_git_passthrough_preserves_all(monkeypatch):
     from click.testing import CliRunner
     import diffgraph.cli as cli
@@ -326,17 +347,129 @@ def test_cli_legacy_html_retains_no_change_compatibility(monkeypatch):
     assert "No changes to analyze" in result.output
 
 
-def test_cli_structural_json_rejects_unimplemented_commit_ranges(tmp_path, monkeypatch):
+def test_cli_structural_json_resolves_immutable_two_dot_range(tmp_path, monkeypatch):
     from click.testing import CliRunner
     from diffgraph.cli import main
 
     root = repo(tmp_path)
     write(root, "cli.py", "def value():\n    return 1\n")
     commit(root)
+    base_oid = git(root, "rev-parse", "HEAD")
+    old_blob = git(root, "rev-parse", "HEAD:cli.py")
+    write(root, "cli.py", "def value():\n    return 2\n")
+    commit(root)
+    head_oid = git(root, "rev-parse", "HEAD")
+    new_blob = git(root, "rev-parse", "HEAD:cli.py")
     monkeypatch.chdir(root)
+
     result = CliRunner().invoke(main, ["--structural-json", "-", "diff", "HEAD~1..HEAD"])
+
+    assert result.exit_code == 0, result.output
+    artifact = json.loads(result.output)
+    assert artifact["diff_ref"]["kind"] == "commit_range"
+    assert artifact["diff_ref"]["base_ref"] == base_oid
+    assert artifact["diff_ref"]["head_ref"] == head_oid
+    provenance = json.loads(artifact["files"][0]["evidence"][0]["detail"])
+    assert provenance["old_oid"] == old_blob
+    assert provenance["new_oid"] == new_blob
+
+
+def test_cli_structural_json_three_dot_uses_merge_base_and_pathspec(tmp_path, monkeypatch):
+    from click.testing import CliRunner
+    from diffgraph.cli import main
+
+    root = repo(tmp_path)
+    write(root, "included.py", "def value():\n    return 1\n")
+    write(root, "ignored.py", "def ignored():\n    return 1\n")
+    commit(root)
+    merge_base_oid = git(root, "rev-parse", "HEAD")
+
+    git(root, "checkout", "-b", "left")
+    write(root, "left.py", "def left():\n    return 1\n")
+    commit(root)
+    left_oid = git(root, "rev-parse", "HEAD")
+
+    git(root, "checkout", "-b", "right", merge_base_oid)
+    write(root, "included.py", "def value():\n    return 2\n")
+    write(root, "ignored.py", "def ignored():\n    return 2\n")
+    commit(root)
+    head_oid = git(root, "rev-parse", "HEAD")
+    monkeypatch.chdir(root)
+
+    result = CliRunner().invoke(
+        main,
+        ["--structural-json", "-", "diff", "left...right", "--", "included.py"],
+    )
+
+    assert result.exit_code == 0, result.output
+    artifact = json.loads(result.output)
+    assert artifact["diff_ref"] == {
+        "kind": "commit_range",
+        "base_ref": merge_base_oid,
+        "head_ref": head_oid,
+        "pathspecs": ["included.py"],
+        "repo_root": str(root),
+    }
+    assert artifact["diff_ref"]["base_ref"] != left_oid
+    assert [item["path"] for item in artifact["files"]] == ["included.py"]
+
+
+def test_cli_structural_json_preserves_range_like_pathspec(tmp_path, monkeypatch):
+    from click.testing import CliRunner
+    from diffgraph.cli import main
+
+    root = repo(tmp_path)
+    write(root, "name..with.py", "def value():\n    return 1\n")
+    commit(root)
+    write(root, "name..with.py", "def value():\n    return 2\n")
+    monkeypatch.chdir(root)
+
+    result = CliRunner().invoke(
+        main, ["--structural-json", "-", "diff", "--", "name..with.py"]
+    )
+
+    assert result.exit_code == 0, result.output
+    artifact = json.loads(result.output)
+    assert artifact["diff_ref"]["kind"] == "unstaged"
+    assert artifact["diff_ref"]["pathspecs"] == ["name..with.py"]
+
+
+def test_cli_structural_json_rejects_four_dot_range(tmp_path, monkeypatch):
+    from click.testing import CliRunner
+    from diffgraph.cli import main
+
+    root = repo(tmp_path)
+    write(root, "app.py", "def value():\n    return 1\n")
+    commit(root)
+    monkeypatch.chdir(root)
+
+    result = CliRunner().invoke(
+        main, ["--structural-json", "-", "diff", "HEAD....HEAD"]
+    )
+
     assert result.exit_code == 2
-    assert "currently supports only unstaged" in result.output
+    assert "explicit non-empty BASE..HEAD or BASE...HEAD refs" in result.output
+
+
+def test_cli_structural_json_preserves_invalid_ref_warning(tmp_path, monkeypatch):
+    from click.testing import CliRunner
+    from diffgraph.cli import main
+
+    root = repo(tmp_path)
+    write(root, "app.py", "def value():\n    return 1\n")
+    commit(root)
+    monkeypatch.chdir(root)
+
+    result = CliRunner().invoke(
+        main, ["--structural-json", "-", "diff", "missing-ref..HEAD"]
+    )
+
+    assert result.exit_code == 0, result.output
+    artifact = json.loads(result.output)
+    assert artifact["files"] == []
+    warning = artifact["metadata"]["warnings"][0]
+    assert warning["code"] == "UNKNOWN"
+    assert warning["detail"].startswith("invalid_base_ref:")
 
 
 def test_cli_structural_json_requires_separator_before_pathspecs(tmp_path, monkeypatch):
