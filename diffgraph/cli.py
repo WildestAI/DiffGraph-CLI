@@ -125,19 +125,31 @@ class _RawArgsCommand(click.Command):
         return super().parse_args(ctx, args)
 
 
-def _terminal_options(diff_args):
-    """Remove terminal-only display flags from a ``diff`` invocation."""
+def _terminal_options(
+    diff_args, explicit_pathspecs: Optional[Tuple[str, ...]] = None
+):
+    """Remove terminal-only flags without consuming pathspecs after ``--``."""
+    option_args = list(diff_args)
+    pathspec_args = []
+    if explicit_pathspecs:
+        pathspec_count = len(explicit_pathspecs)
+        if tuple(option_args[-pathspec_count:]) == explicit_pathspecs:
+            option_args, pathspec_args = (
+                option_args[:-pathspec_count],
+                option_args[-pathspec_count:],
+            )
+
     remaining = []
     compact = False
     show_all = False
-    for arg in diff_args:
+    for arg in option_args:
         if arg == "--compact":
             compact = True
         elif arg == "--all":
             show_all = True
         else:
             remaining.append(arg)
-    return remaining, compact, show_all
+    return remaining + pathspec_args, compact, show_all
 
 
 def _pathspecs_after_diff_separator(raw_args) -> Optional[Tuple[str, ...]]:
@@ -177,6 +189,10 @@ class _StructuralScope:
 
 def _range_operand(argument: str):
     """Return exact two/three-dot endpoints, or ``None`` for another operand."""
+    if "...." in argument:
+        raise click.UsageError(
+            "commit ranges require explicit non-empty BASE..HEAD or BASE...HEAD refs"
+        )
     separator = "..." if "..." in argument else ".." if ".." in argument else None
     if separator is None:
         return None
@@ -373,11 +389,14 @@ def main(
         if structural_json is not None or output_format in ("html", "terminal", "json"):
             compact = False
             show_all = False
-            if output_format == "terminal":
-                diff_args, compact, show_all = _terminal_options(diff_args)
             raw_args = click.get_current_context().meta.get("raw_args", ())
+            explicit_pathspecs = _pathspecs_after_diff_separator(raw_args)
+            if output_format == "terminal":
+                diff_args, compact, show_all = _terminal_options(
+                    diff_args, explicit_pathspecs=explicit_pathspecs
+                )
             scope = _structural_scope(
-                diff_args, explicit_pathspecs=_pathspecs_after_diff_separator(raw_args)
+                diff_args, explicit_pathspecs=explicit_pathspecs
             )
             try:
                 artifact = build_validated_artifact(
