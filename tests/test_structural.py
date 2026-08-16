@@ -227,6 +227,47 @@ def test_pre_change_binary_snapshots_skip_all_source_analysis(
     }]
 
 
+def test_unstaged_binary_snapshot_uses_index_before_worktree(tmp_path):
+    root = repo(tmp_path)
+    path = root / "payload.py"
+    committed = b"def committed():\n    return 1\n"
+    staged_binary = b"\x00staged-binary\xff\n"
+    worktree_text = b"def worktree():\n    return 2\n"
+    path.write_bytes(committed)
+    commit(root)
+    path.write_bytes(staged_binary)
+    git(root, "add", "--", "payload.py")
+    index_oid = git(root, "rev-parse", ":payload.py")
+    path.write_bytes(worktree_text)
+
+    artifact = analyze_local_diff(str(root))
+
+    assert_valid(artifact)
+    assert artifact["symbols"] == []
+    assert artifact["relationships"] == []
+    assert artifact["metadata"]["files_analyzed"] == 0
+    assert artifact["metadata"]["files_skipped"] == 1
+    file_entry = artifact["files"][0]
+    assert file_entry["language"] is None
+    assert file_entry["lines_added"] is None
+    assert file_entry["lines_removed"] is None
+    provenance = json.loads(file_entry["evidence"][0]["detail"])
+    assert provenance["old_oid"] == index_oid
+    assert provenance["new_oid"] == git(
+        root, "hash-object", "--path=payload.py", "payload.py"
+    )
+    assert provenance["old_oid"] != git(root, "rev-parse", "HEAD:payload.py")
+    assert provenance["old_mode"] == "100644"
+    assert provenance["new_mode"] == "100644"
+    assert provenance["old_sha256"] == hashlib.sha256(staged_binary).hexdigest()
+    assert provenance["new_sha256"] == hashlib.sha256(worktree_text).hexdigest()
+    assert artifact["metadata"]["warnings"] == [{
+        "code": "PARTIAL_ANALYSIS",
+        "file": "payload.py",
+        "detail": "Binary content detected in pre-change snapshot; structural parsing and line counts were skipped.",
+    }]
+
+
 def test_file_fallback_reports_structural_line_statistics(tmp_path, monkeypatch):
     from click.testing import CliRunner
     from diffgraph.cli import main
