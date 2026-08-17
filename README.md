@@ -109,9 +109,13 @@ this baseline. Other changed files remain in `files[]` and receive a scoped
 `UNSUPPORTED_LANGUAGE` warning. Syntax/decoding failures receive a scoped
 `PARSE_FAILURE` warning and do not produce invented symbol changes. Import
 targets are explicitly labeled unresolved/external; no project-wide resolution
-is claimed. Every file records old/new paths, modes, Git object IDs, and content
-SHA-256 values in structural evidence, while symbol/relationship evidence names
-the parser package, query revision, and source blob identity.
+is claimed. Python call edges are emitted only for bare calls that resolve to an
+unambiguous function or class in the same file. Attribute dispatch, imported
+calls, and names shadowed by parameters or local assignments remain absent
+rather than being guessed. Every file records old/new paths, modes, Git object
+IDs, and content SHA-256 values in structural evidence, while
+symbol/relationship evidence names the parser package, query revision, source
+blob identity, and exact call site where applicable.
 
 #### CLI and offline contract
 
