@@ -149,6 +149,7 @@ def test_unsupported_language_is_explicit_and_not_overclaimed(tmp_path):
 
 @pytest.mark.parametrize("staged", [False, True])
 def test_binary_python_snapshot_preserves_identity_without_parsing(tmp_path, staged):
+    """Binary snapshots retain exact evidence without source-level claims."""
     root = repo(tmp_path)
     write(root, "payload.py", "def previous():\n    return 1\n")
     commit(root)
@@ -195,6 +196,7 @@ def test_binary_python_snapshot_preserves_identity_without_parsing(tmp_path, sta
 def test_pre_change_binary_snapshots_skip_all_source_analysis(
     tmp_path, old_content, new_content, binary_sides
 ):
+    """Pre-change binary content suppresses analysis for either or both sides."""
     root = repo(tmp_path)
     path = root / "payload.py"
     path.write_bytes(old_content)
@@ -231,6 +233,7 @@ def test_pre_change_binary_snapshots_skip_all_source_analysis(
 def test_added_and_deleted_binary_snapshots_preserve_one_sided_identity(
     tmp_path, change_kind
 ):
+    """One-sided binary changes preserve evidence only for the present side."""
     root = repo(tmp_path)
     binary = b"\x00binary-snapshot\xff\n"
     path = root / "payload.py"
@@ -283,6 +286,7 @@ def test_added_and_deleted_binary_snapshots_preserve_one_sided_identity(
 
 
 def test_unstaged_binary_snapshot_uses_index_before_worktree(tmp_path):
+    """Unstaged evidence compares the index snapshot with the worktree."""
     root = repo(tmp_path)
     path = root / "payload.py"
     committed = b"def committed():\n    return 1\n"
