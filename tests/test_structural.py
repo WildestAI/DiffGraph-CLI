@@ -227,6 +227,61 @@ def test_pre_change_binary_snapshots_skip_all_source_analysis(
     }]
 
 
+@pytest.mark.parametrize("change_kind", ["added", "deleted"])
+def test_added_and_deleted_binary_snapshots_preserve_one_sided_identity(
+    tmp_path, change_kind
+):
+    root = repo(tmp_path)
+    binary = b"\x00binary-snapshot\xff\n"
+    path = root / "payload.py"
+    write(root, "anchor.txt", "committed\n")
+    if change_kind == "deleted":
+        path.write_bytes(binary)
+    commit(root)
+
+    if change_kind == "added":
+        path.write_bytes(binary)
+        git(root, "add", "--", "payload.py")
+    else:
+        path.unlink()
+
+    artifact = analyze_local_diff(str(root), staged=change_kind == "added")
+
+    assert_valid(artifact)
+    assert artifact["symbols"] == []
+    assert artifact["relationships"] == []
+    assert artifact["metadata"]["files_analyzed"] == 0
+    assert artifact["metadata"]["files_skipped"] == 1
+    file_entry = artifact["files"][0]
+    assert file_entry["change_kind"] == change_kind
+    assert file_entry["language"] is None
+    assert file_entry["lines_added"] is None
+    assert file_entry["lines_removed"] is None
+    provenance = json.loads(file_entry["evidence"][0]["detail"])
+    binary_oid = (
+        git(root, "hash-object", "--path=payload.py", "payload.py")
+        if change_kind == "added"
+        else git(root, "rev-parse", "HEAD:payload.py")
+    )
+    binary_side = "new" if change_kind == "added" else "old"
+    absent_side = "old" if change_kind == "added" else "new"
+    assert provenance[f"{binary_side}_oid"] == binary_oid
+    assert provenance[f"{binary_side}_mode"] == "100644"
+    assert provenance[f"{binary_side}_sha256"] == hashlib.sha256(binary).hexdigest()
+    assert provenance[f"{absent_side}_oid"] is None
+    assert provenance[f"{absent_side}_mode"] is None
+    assert provenance[f"{absent_side}_sha256"] is None
+    warning_side = "post-change" if change_kind == "added" else "pre-change"
+    assert artifact["metadata"]["warnings"] == [{
+        "code": "PARTIAL_ANALYSIS",
+        "file": "payload.py",
+        "detail": (
+            f"Binary content detected in {warning_side} snapshot; "
+            "structural parsing and line counts were skipped."
+        ),
+    }]
+
+
 def test_unstaged_binary_snapshot_uses_index_before_worktree(tmp_path):
     root = repo(tmp_path)
     path = root / "payload.py"
