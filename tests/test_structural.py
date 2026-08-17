@@ -753,6 +753,8 @@ def test_python_calls_are_conservative_schema_valid_and_golden(tmp_path):
         "    helper()\n\n"
         "def attribute_call(service):\n"
         "    service.helper()\n\n"
+        "def default_call(value=helper()):\n"
+        "    return value\n\n"
         "helper()\n",
     )
     git(root, "add", "calls.py")
@@ -780,7 +782,7 @@ def test_python_calls_are_conservative_schema_valid_and_golden(tmp_path):
 
     # Parameter/local bindings and attribute dispatch are intentionally not
     # guessed. Every emitted edge has exact call-site/parser/blob evidence.
-    assert len(calls) == 4
+    assert len(calls) == 5
     assert all(item["analysis_source"] == "structural" for item in calls)
     assert all(item["confidence"] is None for item in calls)
     assert all("blob=" in item["evidence"][0]["detail"] for item in calls)

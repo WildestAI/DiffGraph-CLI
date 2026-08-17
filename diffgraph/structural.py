@@ -216,9 +216,21 @@ def _parse_python(
         elif node.type == "call":
             function = node.child_by_field_name("function")
             if function is not None and function.type == "identifier":
+                caller = parents[-1][0] if parents else None
+                ancestor = node.parent
+                while ancestor is not None:
+                    if ancestor.type in ("class_definition", "function_definition"):
+                        body = ancestor.child_by_field_name("body")
+                        if body is not None and not (
+                            body.start_byte <= node.start_byte
+                            and node.end_byte <= body.end_byte
+                        ):
+                            caller = parents[-2][0] if len(parents) > 1 else None
+                        break
+                    ancestor = ancestor.parent
                 calls.append(
                     _Call(
-                        parents[-1][0] if parents else None,
+                        caller,
                         _node_text(content, function),
                         node.start_point[0] + 1,
                         _node_text(content, node),
