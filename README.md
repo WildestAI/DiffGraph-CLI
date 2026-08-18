@@ -156,6 +156,11 @@ add optional data without weakening validation for existing consumers. The
 canonical schema and a complete local-only example are packaged under
 `diffgraph/schema/`; neither contains AI-derived symbols or relationships.
 
+Snapshots containing NUL bytes produce a scoped `PARTIAL_ANALYSIS` warning.
+Their exact pre/post object IDs and content hashes remain in file evidence,
+while language, line counts, symbols, and relationships are left unset rather
+than treating binary bytes as source code.
+
 ## 📊 Example Output
 
 The canonical HTML report includes:

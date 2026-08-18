@@ -97,6 +97,16 @@ def _line_counts(
     return added, removed
 
 
+def _binary_sides(old: Optional[bytes], new: Optional[bytes]) -> Tuple[str, ...]:
+    """Return snapshot sides matching the deterministic NUL-byte heuristic."""
+    sides = []
+    if old is not None and b"\0" in old:
+        sides.append("pre-change")
+    if new is not None and b"\0" in new:
+        sides.append("post-change")
+    return tuple(sides)
+
+
 def _parser():
     parser = getattr(_PARSER_STATE, "python_parser", None)
     if parser is not None:
@@ -333,13 +343,18 @@ def analyze_local_diff(
         ) or (
             new is None and entry.new_oid is not None
         )
+        binary_sides = () if snapshot_missing else _binary_sides(old, new)
         lines_added, lines_removed = (
-            (None, None) if snapshot_missing else _line_counts(old, new)
+            (None, None) if snapshot_missing or binary_sides else _line_counts(old, new)
         )
         file_entry = {
             "id": "file::" + path, "path": path,
             "old_path": entry.old_path if entry.status in ("R", "C") else None,
-            "language": "python" if Path(path).suffix.lower() == ".py" else None,
+            "language": (
+                "python"
+                if not binary_sides and Path(path).suffix.lower() == ".py"
+                else None
+            ),
             "change_kind": _change_kind(entry.status, entry.old_oid, entry.new_oid),
             "lines_added": lines_added,
             "lines_removed": lines_removed,
@@ -347,6 +362,16 @@ def analyze_local_diff(
             "evidence": [{"kind": "git_diff_name_status", "detail": _provenance(entry, old, new)}],
         }
         files.append(file_entry)
+        if binary_sides:
+            skipped += 1
+            warnings.append(_warning(
+                "PARTIAL_ANALYSIS",
+                path,
+                "Binary content detected in {} snapshot; structural parsing and line counts were skipped.".format(
+                    " and ".join(binary_sides)
+                ),
+            ))
+            continue
         if file_entry["language"] != "python":
             skipped += 1
             warnings.append(_warning("UNSUPPORTED_LANGUAGE", path, "Deterministic extraction currently supports Python (.py) only."))
