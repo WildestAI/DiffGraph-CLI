@@ -911,3 +911,76 @@ def test_missing_ai_dependency_is_a_click_error(tmp_path, monkeypatch):
     assert result.exit_code == 1
     assert "requires additional dependencies" in result.output
     assert "Traceback" not in result.output
+
+
+def test_python_calls_are_conservative_schema_valid_and_golden(tmp_path):
+    root = repo(tmp_path)
+    write(
+        root,
+        "calls.py",
+        "def helper():\n"
+        "    return 1\n\n"
+        "def caller():\n"
+        "    helper()\n"
+        "    helper()\n\n"
+        "def outer():\n"
+        "    def nested():\n"
+        "        return 1\n"
+        "    nested()\n\n"
+        "def parameter_shadow(helper):\n"
+        "    helper()\n\n"
+        "def assignment_shadow():\n"
+        "    helper = lambda: 2\n"
+        "    helper()\n\n"
+        "def attribute_call(service):\n"
+        "    service.helper()\n\n"
+        "def default_call(value=helper()):\n"
+        "    return value\n\n"
+        "helper()\n\n"
+        "def closure_shadow():\n"
+        "    helper = lambda: 3\n"
+        "    def inner():\n"
+        "        helper()\n\n"
+        "class MethodShadow:\n"
+        "    def method(self):\n"
+        "        helper = lambda: 4\n"
+        "        def inner():\n"
+        "            helper()\n",
+    )
+    git(root, "add", "calls.py")
+
+    artifact = analyze_local_diff(str(root), staged=True)
+    assert_valid(artifact)
+    calls = [item for item in artifact["relationships"] if item["kind"] == "calls"]
+    actual = [
+        {
+            "id": item["id"],
+            "source_id": item["source_id"],
+            "target_id": item["target_id"],
+            "resolution_method": item["resolution_method"],
+            "line": item["evidence"][0]["line_start"],
+            "snippet": item["evidence"][0]["snippet"],
+        }
+        for item in calls
+    ]
+    golden_path = Path(__file__).parent / "fixtures/python_calls.json"
+    expected = json.loads(golden_path.read_text())
+    if os.environ.get("UPDATE_GOLDEN"):
+        golden_path.write_text(json.dumps(actual, indent=2) + "\n")
+        pytest.skip("golden fixture regenerated")
+    assert actual == expected
+
+    # Parameter/local bindings and attribute dispatch are intentionally not
+    # guessed. Every emitted edge has exact call-site/parser/blob evidence.
+    assert len(calls) == 5
+    assert all(item["analysis_source"] == "structural" for item in calls)
+    assert all(item["confidence"] is None for item in calls)
+    shadowed_callers = {
+        "sym::calls.py::closure_shadow.inner",
+        "sym::calls.py::MethodShadow.method.inner",
+    }
+    symbol_ids = {item["id"] for item in artifact["symbols"]}
+    assert shadowed_callers <= symbol_ids
+    assert shadowed_callers.isdisjoint(item["source_id"] for item in calls)
+    assert all("query=python-structure-v2" in item["evidence"][0]["detail"] for item in calls)
+    assert all("blob=" in item["evidence"][0]["detail"] for item in calls)

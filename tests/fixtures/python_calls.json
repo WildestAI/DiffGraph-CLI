@@ -1,0 +1,42 @@
+[
+  {
+    "id": "rel::file::calls.py->sym::calls.py::helper",
+    "source_id": "file::calls.py",
+    "target_id": "sym::calls.py::helper",
+    "resolution_method": "resolved",
+    "line": 23,
+    "snippet": "helper()"
+  },
+  {
+    "id": "rel::file::calls.py->sym::calls.py::helper#1",
+    "source_id": "file::calls.py",
+    "target_id": "sym::calls.py::helper",
+    "resolution_method": "resolved",
+    "line": 26,
+    "snippet": "helper()"
+  },
+  {
+    "id": "rel::sym::calls.py::caller->sym::calls.py::helper",
+    "source_id": "sym::calls.py::caller",
+    "target_id": "sym::calls.py::helper",
+    "resolution_method": "resolved",
+    "line": 5,
+    "snippet": "helper()"
+  },
+  {
+    "id": "rel::sym::calls.py::caller->sym::calls.py::helper#1",
+    "source_id": "sym::calls.py::caller",
+    "target_id": "sym::calls.py::helper",
+    "resolution_method": "resolved",
+    "line": 6,
+    "snippet": "helper()"
+  },
+  {
+    "id": "rel::sym::calls.py::outer->sym::calls.py::outer.nested",
+    "source_id": "sym::calls.py::outer",
+    "target_id": "sym::calls.py::outer.nested",
+    "resolution_method": "resolved",
+    "line": 11,
+    "snippet": "nested()"
+  }
+]

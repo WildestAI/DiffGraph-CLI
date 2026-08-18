@@ -33,7 +33,7 @@ from diffgraph.git_snapshot import (
 )
 
 ANALYZER = "diffgraph-python-tree-sitter"
-QUERY_VERSION = "python-structure-v1"
+QUERY_VERSION = "python-structure-v2"
 _PARSER_STATE = threading.local()
 
 
@@ -55,6 +55,14 @@ class _Symbol:
 @dataclass(frozen=True)
 class _Import:
     module: str
+    line: int
+    snippet: str
+
+
+@dataclass(frozen=True)
+class _Call:
+    caller: Optional[str]
+    name: str
     line: int
     snippet: str
 
@@ -138,7 +146,9 @@ def _name_child(node):
     return next((item for item in node.children if item.type == "identifier"), None)
 
 
-def _parse_python(content: bytes) -> Tuple[List[_Symbol], List[_Import]]:
+def _parse_python(
+    content: bytes,
+) -> Tuple[List[_Symbol], List[_Import], List[_Call], Dict[Optional[str], set]]:
     # Do not silently replace undecodable source: the warning must identify the
     # exact side that could not be structurally analyzed.
     content.decode("utf-8")
@@ -148,7 +158,17 @@ def _parse_python(content: bytes) -> Tuple[List[_Symbol], List[_Import]]:
 
     symbols: List[_Symbol] = []
     imports: List[_Import] = []
+    calls: List[_Call] = []
+    bindings: Dict[Optional[str], set] = {}
     symbol_occurrences: Dict[str, int] = {}
+
+    def identifiers(node) -> set:
+        found = set()
+        if node.type == "identifier":
+            found.add(_node_text(content, node))
+        for child in node.children:
+            found.update(identifiers(child))
+        return found
 
     def visit(node, parents: Tuple[Tuple[str, str], ...] = ()) -> None:
         next_parents = parents
@@ -203,12 +223,48 @@ def _parse_python(content: bytes) -> Tuple[List[_Symbol], List[_Import]]:
                 module_node = node.child_by_field_name("module_name")
                 if module_node is not None:
                     imports.append(_Import(_node_text(content, module_node), node.start_point[0] + 1, snippet))
+        elif node.type == "call":
+            function = node.child_by_field_name("function")
+            if function is not None and function.type == "identifier":
+                caller = parents[-1][0] if parents else None
+                ancestor = node.parent
+                while ancestor is not None:
+                    if ancestor.type in ("class_definition", "function_definition"):
+                        body = ancestor.child_by_field_name("body")
+                        if body is not None and not (
+                            body.start_byte <= node.start_byte
+                            and node.end_byte <= body.end_byte
+                        ):
+                            caller = parents[-2][0] if len(parents) > 1 else None
+                        break
+                    ancestor = ancestor.parent
+                calls.append(
+                    _Call(
+                        caller,
+                        _node_text(content, function),
+                        node.start_point[0] + 1,
+                        _node_text(content, node),
+                    )
+                )
+
+        scope = parents[-1][0] if parents else None
+        if node.type == "parameters" or node.type in (
+            "import_statement", "import_from_statement"
+        ):
+            bindings.setdefault(scope, set()).update(identifiers(node))
+        elif node.type in ("assignment", "annotated_assignment", "for_statement"):
+            left = node.child_by_field_name("left")
+            if left is not None:
+                bindings.setdefault(scope, set()).update(identifiers(left))
         for child in node.children:
             visit(child, next_parents)
 
     visit(tree.root_node)
-    return sorted(symbols, key=lambda s: (s.qualified_name, s.start_line)), sorted(
-        imports, key=lambda item: (item.line, item.module, item.snippet)
+    return (
+        sorted(symbols, key=lambda s: (s.qualified_name, s.start_line)),
+        sorted(imports, key=lambda item: (item.line, item.module, item.snippet)),
+        sorted(calls, key=lambda item: (item.line, item.caller or "", item.name, item.snippet)),
+        bindings,
     )
 
 
@@ -288,6 +344,50 @@ def _keyed_imports(items: List[_Import]) -> Dict[Tuple[str, int], _Import]:
         occurrences[import_item.module] = occurrence + 1
         result[(import_item.module, occurrence)] = import_item
     return result
+
+
+def _resolve_call_target(
+    call: _Call,
+    symbols: Dict[str, _Symbol],
+    bindings: Dict[Optional[str], set],
+) -> Optional[str]:
+    """Resolve only syntax-grounded, same-file Python calls.
+
+    Bare identifiers shadowed by a parameter, assignment, loop target, or import
+    are deliberately left unresolved. Attribute calls and ambiguous duplicate
+    definitions are likewise omitted rather than guessed.
+    """
+    candidates: List[str] = []
+    current_name = call.caller
+    while current_name is not None:
+        current = symbols.get(current_name)
+        if current is None:
+            break
+        # Function and method scopes participate in lexical lookup. Class
+        # namespaces do not: a bare name in a method never resolves through
+        # sibling class attributes or methods.
+        if current.kind in ("function", "method"):
+            if call.name in bindings.get(current_name, set()):
+                return None
+            candidates.append("{}.{}".format(current_name, call.name))
+        current_name = current.parent
+
+    if call.name in bindings.get(None, set()):
+        return None
+    candidates.append(call.name)
+
+    for candidate in candidates:
+        matches = [
+            qname
+            for qname, symbol in symbols.items()
+            if symbol.kind in ("function", "class")
+            and (qname == candidate or qname.startswith(candidate + "#"))
+        ]
+        if len(matches) == 1:
+            return matches[0]
+        if len(matches) > 1:
+            return None
+    return None
 
 
 def analyze_local_diff(
@@ -386,13 +486,17 @@ def analyze_local_diff(
             UnicodeDecodeError, ValueError, RuntimeError, OSError, TypeError
         )
         try:
-            old_symbols, old_imports = _parse_python(old) if old is not None else ([], [])
+            old_symbols, old_imports, _old_calls, _old_bindings = (
+                _parse_python(old) if old is not None else ([], [], [], {})
+            )
         except parser_errors as error:
             warnings.append(_warning("PARSE_FAILURE", entry.old_path or path, "pre-change: {}: {}".format(type(error).__name__, error)))
             skipped += 1
             continue
         try:
-            new_symbols, new_imports = _parse_python(new) if new is not None else ([], [])
+            new_symbols, new_imports, new_calls, new_bindings = (
+                _parse_python(new) if new is not None else ([], [], [], {})
+            )
         except parser_errors as error:
             warnings.append(_warning("PARSE_FAILURE", path, "post-change: {}: {}".format(type(error).__name__, error)))
             skipped += 1
@@ -505,6 +609,43 @@ def analyze_local_diff(
                         "label": "unresolved/external module: " + module,
                     }
                 )
+
+        call_occurrences: Dict[Tuple[str, str], int] = {}
+        for call in new_calls:
+            target_qname = _resolve_call_target(call, new_map, new_bindings)
+            if target_qname is None:
+                continue
+            source = (
+                _symbol_id(output_path, call.caller)
+                if call.caller is not None
+                else "file::" + output_path
+            )
+            target = _symbol_id(output_path, target_qname)
+            edge = (source, target)
+            occurrence = call_occurrences.get(edge, 0)
+            call_occurrences[edge] = occurrence + 1
+            suffix = "" if occurrence == 0 else "#{}".format(occurrence)
+            relationships.append(
+                {
+                    "id": "rel::{}->{}{}".format(source, target, suffix),
+                    "kind": "calls",
+                    "source_id": source,
+                    "target_id": target,
+                    "analysis_source": "structural",
+                    "resolution_method": "resolved",
+                    "confidence": None,
+                    "evidence": [
+                        {
+                            "kind": "call_site",
+                            "file": output_path,
+                            "line_start": call.line,
+                            "line_end": call.line,
+                            "snippet": call.snippet,
+                            "detail": _parser_provenance(entry.new_oid),
+                        }
+                    ],
+                }
+            )
 
     files.sort(key=lambda item: item["path"])
     symbols.sort(key=lambda item: item["id"])
