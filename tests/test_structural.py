@@ -966,4 +966,5 @@ def test_python_calls_are_conservative_schema_valid_and_golden(tmp_path):
     assert len(calls) == 5
     assert all(item["analysis_source"] == "structural" for item in calls)
     assert all(item["confidence"] is None for item in calls)
+    assert all("query=python-structure-v2" in item["evidence"][0]["detail"] for item in calls)
     assert all("blob=" in item["evidence"][0]["detail"] for item in calls)

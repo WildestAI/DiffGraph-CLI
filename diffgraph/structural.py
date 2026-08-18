@@ -33,7 +33,7 @@ from diffgraph.git_snapshot import (
 )
 
 ANALYZER = "diffgraph-python-tree-sitter"
-QUERY_VERSION = "python-structure-v1"
+QUERY_VERSION = "python-structure-v2"
 _PARSER_STATE = threading.local()
 
 
