@@ -936,7 +936,16 @@ def test_python_calls_are_conservative_schema_valid_and_golden(tmp_path):
         "    service.helper()\n\n"
         "def default_call(value=helper()):\n"
         "    return value\n\n"
-        "helper()\n",
+        "helper()\n\n"
+        "def closure_shadow():\n"
+        "    helper = lambda: 3\n"
+        "    def inner():\n"
+        "        helper()\n\n"
+        "class MethodShadow:\n"
+        "    def method(self):\n"
+        "        helper = lambda: 4\n"
+        "        def inner():\n"
+        "            helper()\n",
     )
     git(root, "add", "calls.py")
 
@@ -966,5 +975,12 @@ def test_python_calls_are_conservative_schema_valid_and_golden(tmp_path):
     assert len(calls) == 5
     assert all(item["analysis_source"] == "structural" for item in calls)
     assert all(item["confidence"] is None for item in calls)
+    shadowed_callers = {
+        "sym::calls.py::closure_shadow.inner",
+        "sym::calls.py::MethodShadow.method.inner",
+    }
+    symbol_ids = {item["id"] for item in artifact["symbols"]}
+    assert shadowed_callers <= symbol_ids
+    assert shadowed_callers.isdisjoint(item["source_id"] for item in calls)
     assert all("query=python-structure-v2" in item["evidence"][0]["detail"] for item in calls)
     assert all("blob=" in item["evidence"][0]["detail"] for item in calls)

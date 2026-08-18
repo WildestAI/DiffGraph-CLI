@@ -357,23 +357,23 @@ def _resolve_call_target(
     are deliberately left unresolved. Attribute calls and ambiguous duplicate
     definitions are likewise omitted rather than guessed.
     """
-    if call.name in bindings.get(call.caller, set()):
-        return None
-
     candidates: List[str] = []
-    if call.caller is not None:
-        # A function can call a function defined in its own local scope.
-        candidates.append("{}.{}".format(call.caller, call.name))
-        current = symbols.get(call.caller)
-        parent = current.parent if current is not None else None
-        while parent is not None:
-            parent_symbol = symbols.get(parent)
-            if parent_symbol is None:
-                break
-            # Bare names do not resolve to sibling methods through a class.
-            if parent_symbol.kind == "function":
-                candidates.append("{}.{}".format(parent, call.name))
-            parent = parent_symbol.parent
+    current_name = call.caller
+    while current_name is not None:
+        current = symbols.get(current_name)
+        if current is None:
+            break
+        # Function and method scopes participate in lexical lookup. Class
+        # namespaces do not: a bare name in a method never resolves through
+        # sibling class attributes or methods.
+        if current.kind in ("function", "method"):
+            if call.name in bindings.get(current_name, set()):
+                return None
+            candidates.append("{}.{}".format(current_name, call.name))
+        current_name = current.parent
+
+    if call.name in bindings.get(None, set()):
+        return None
     candidates.append(call.name)
 
     for candidate in candidates:
