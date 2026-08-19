@@ -123,6 +123,27 @@ def test_unstaged_uses_index_to_worktree_exact_identity_and_is_stable(tmp_path):
     assert first["symbols"][0]["change_kind"] == "modified"
 
 
+def test_untracked_python_is_an_exact_added_snapshot(tmp_path):
+    root = repo(tmp_path)
+    write(root, "tracked.txt", "baseline\n")
+    commit(root)
+    write(root, "new.py", "def added():\n    return 1\n")
+
+    artifact = analyze_local_diff(str(root))
+
+    assert_valid(artifact)
+    assert [item["path"] for item in artifact["files"]] == ["new.py"]
+    file_entry = artifact["files"][0]
+    provenance = json.loads(file_entry["evidence"][0]["detail"])
+    assert file_entry["change_kind"] == "added"
+    assert provenance["old_oid"] is None
+    assert provenance["new_oid"] == git(
+        root, "hash-object", "--path=new.py", "new.py"
+    )
+    assert [item["name"] for item in artifact["symbols"]] == ["added"]
+    assert artifact["symbols"][0]["change_kind"] == "added"
+
+
 def test_pathspec_scope_is_not_widened(tmp_path):
     root = repo(tmp_path)
     write(root, "inside/a.py", "def a():\n    return 1\n")
