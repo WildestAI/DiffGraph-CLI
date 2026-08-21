@@ -269,7 +269,7 @@ def test_unstaged_includes_non_ignored_untracked_files_with_exact_identities(tmp
     write(repo, "new.py", b"def added():\n    return 1\n")
     write(repo, "ignored.py", b"def ignored():\n    return 1\n")
     write(repo, "bin/tool", b"#!/bin/sh\nexit 0\n")
-    os.chmod(repo / "bin/tool", 0o755)
+    os.chmod(repo / "bin/tool", 0o700)
     os.symlink("new.py", repo / "new-link")
 
     result = resolve_unstaged(str(repo))
