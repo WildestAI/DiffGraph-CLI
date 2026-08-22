@@ -117,6 +117,10 @@ IDs, and content SHA-256 values in structural evidence, while
 symbol/relationship evidence names the parser package, query revision, source
 blob identity, and exact call site where applicable.
 
+Unstaged analysis includes non-ignored ordinary untracked files as exact
+one-sided working-tree snapshots without modifying the index. Git ignore rules
+and caller-relative pathspecs are preserved.
+
 #### CLI and offline contract
 
 - Each canonical invocation resolves the requested Git snapshot once, builds

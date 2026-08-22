@@ -260,6 +260,56 @@ def test_unstaged_intent_to_add_and_rename_have_exact_identities(tmp_path):
     ).decode("ascii").strip()
 
 
+def test_unstaged_includes_non_ignored_untracked_files_with_exact_identities(tmp_path):
+    repo = make_repo(tmp_path)
+    write(repo, ".gitignore", b"ignored.py\n")
+    write(repo, "tracked.py", b"def tracked():\n    return 1\n")
+    commit_all(repo)
+
+    write(repo, "new.py", b"def added():\n    return 1\n")
+    write(repo, "ignored.py", b"def ignored():\n    return 1\n")
+    write(repo, "bin/tool", b"#!/bin/sh\nexit 0\n")
+    os.chmod(repo / "bin/tool", 0o700)
+    os.symlink("new.py", repo / "new-link")
+
+    result = resolve_unstaged(str(repo))
+    entries = {entry.new_path: entry for entry in result.entries}
+
+    assert result.warnings == ()
+    assert set(entries) == {"new.py", "bin/tool", "new-link"}
+    assert entries["new.py"].status == "A"
+    assert entries["new.py"].old_oid is None
+    assert entries["new.py"].new_mode == "100644"
+    assert entries["new.py"].new_oid == git(
+        repo,
+        "hash-object",
+        "--stdin",
+        "--path=new.py",
+        input_bytes=(repo / "new.py").read_bytes(),
+    ).decode("ascii").strip()
+    assert entries["bin/tool"].new_mode == "100755"
+    assert entries["new-link"].new_mode == "120000"
+    assert entries["new-link"].new_oid == git(
+        repo, "hash-object", "--stdin", input_bytes=b"new.py"
+    ).decode("ascii").strip()
+
+
+def test_untracked_pathspec_scope_is_relative_and_not_widened(tmp_path):
+    repo = make_repo(tmp_path)
+    write(repo, "tracked.txt", b"baseline\n")
+    commit_all(repo)
+    write(repo, "inside/new.py", b"inside = True\n")
+    write(repo, "outside.py", b"outside = True\n")
+
+    scoped = resolve_unstaged(str(repo / "inside"), ["new.py"])
+    no_match = resolve_unstaged(str(repo), ["missing"])
+
+    assert scoped.warnings == ()
+    assert [entry.new_path for entry in scoped.entries] == ["inside/new.py"]
+    assert no_match.entries == ()
+    assert no_match.warnings == ()
+
+
 def test_pathspecs_are_relative_to_the_calling_subdirectory(tmp_path):
     repo = make_repo(tmp_path)
     write(repo, "src/app.py", b"def value():\n    return 1\n")

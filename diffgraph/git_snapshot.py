@@ -3,7 +3,7 @@
 This module models the two local snapshot pairs and immutable commit ranges:
 
 * staged: ``HEAD`` -> index
-* unstaged: index -> working tree
+* unstaged: index -> working tree, including ordinary untracked files
 * two-dot: the requested base commit -> the requested head commit
 * three-dot: the merge base of the requested commits -> the requested head
 
@@ -108,8 +108,9 @@ def resolve_unstaged(
 ) -> SnapshotResolution:
     """Resolve tracked changes from the index to the working tree.
 
-    Git does not include ordinary untracked files in this diff.  For each
-    post-change regular file, the object ID is computed with ``git
+    Ordinary untracked files are added as one-sided working-tree snapshots;
+    ignored files remain excluded.  For each post-change regular file, the
+    object ID is computed with ``git
     hash-object --path`` so clean filters and attributes match ``git add``
     semantics without modifying the index.
     """
@@ -273,8 +274,64 @@ def _resolve(
         if entry is not None:
             entries.append(entry)
 
+    if not staged:
+        entries.extend(_resolve_untracked(root, scoped_pathspecs, warnings))
+
     entries.sort(key=_entry_sort_key)
     return SnapshotResolution(tuple(entries), tuple(warnings))
+
+
+def _resolve_untracked(
+    root: str,
+    pathspecs: Sequence[str],
+    warnings: List[ResolutionWarning],
+) -> List[SnapshotEntry]:
+    """Resolve non-ignored untracked paths without modifying the index."""
+
+    command = ["git", "ls-files", "--others", "--exclude-standard", "-z"]
+    if pathspecs:
+        command.append("--")
+        command.extend(pathspecs)
+    output = _run(command, root, warnings, "git_untracked_failed")
+    if output is None:
+        return []
+
+    entries: List[SnapshotEntry] = []
+    for raw_path in output.split(b"\0"):
+        if not raw_path:
+            continue
+        path = os.fsdecode(raw_path)
+        full_path = os.path.join(root, path)
+        try:
+            file_stat = os.lstat(full_path)
+        except OSError as error:
+            warnings.append(ResolutionWarning("worktree_read_failed", str(error), path))
+            continue
+
+        if stat.S_ISLNK(file_stat.st_mode):
+            mode = "120000"
+        elif stat.S_ISREG(file_stat.st_mode):
+            mode = "100755" if file_stat.st_mode & stat.S_IXUSR else "100644"
+        else:
+            warnings.append(ResolutionWarning(
+                "unsupported_worktree_entry",
+                "Cannot derive a Git blob ID for untracked filesystem entry",
+                path,
+            ))
+            continue
+
+        new_oid = _working_tree_oid(root, path, mode, warnings)
+        if new_oid is not None:
+            entries.append(SnapshotEntry(
+                status="A",
+                old_path=None,
+                new_path=path,
+                old_mode=None,
+                new_mode=mode,
+                old_oid=None,
+                new_oid=new_oid,
+            ))
+    return entries
 
 
 def _repository_root(
