@@ -265,8 +265,31 @@ def _resolve(
         return SnapshotResolution((), tuple(warnings))
 
     raw_entries = _parse_raw(output, warnings)
+    # A conflicted index has no single pre/post pair. ``git diff --raw`` can
+    # emit an unmerged ``U`` record and a second record for the same path;
+    # hashing that second record against an arbitrary conflict stage would
+    # fabricate a snapshot. Omit every record touching an unmerged path until
+    # the user resolves it, while retaining an actionable warning.
+    unmerged_paths = {
+        path
+        for raw in raw_entries
+        if raw.status == "U"
+        for path in (raw.old_path, raw.new_path)
+        if path is not None
+    }
+    for path in sorted(unmerged_paths, key=os.fsencode):
+        warnings.append(ResolutionWarning(
+            "unmerged_index_entry",
+            "Cannot resolve an exact pre/post snapshot while the index is unmerged",
+            path,
+        ))
+
     entries: List[SnapshotEntry] = []
     for raw in raw_entries:
+        if raw.status == "U" or (
+            raw.old_path in unmerged_paths or raw.new_path in unmerged_paths
+        ):
+            continue
         if staged:
             entry = _exact_staged_entry(raw, warnings)
         else:

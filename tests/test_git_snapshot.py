@@ -49,6 +49,28 @@ def make_repo(tmp_path):
     return repo
 
 
+def make_conflicted_repo(tmp_path):
+    """Create one unresolved merge conflict in an otherwise valid repository."""
+
+    repo = make_repo(tmp_path)
+    write(repo, "conflict.py", b"base = True\n")
+    commit_all(repo, "base")
+
+    git(repo, "switch", "-c", "side")
+    write(repo, "conflict.py", b"side = True\n")
+    commit_all(repo, "side")
+
+    git(repo, "switch", "master")
+    write(repo, "conflict.py", b"main = True\n")
+    commit_all(repo, "main")
+    completed = subprocess.run(
+        ["git", "merge", "side"], cwd=str(repo), stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE, check=False,
+    )
+    assert completed.returncode != 0
+    return repo
+
+
 def test_staged_add_modify_delete_and_rename_have_exact_identities(tmp_path):
     repo = make_repo(tmp_path)
     write(repo, "modify.txt", b"old modify\n")
@@ -214,6 +236,23 @@ def test_git_failures_are_warnings_not_changes(tmp_path, monkeypatch):
     assert result.entries == ()
     assert len(result.warnings) == 1
     assert result.warnings[0].code == "not_a_git_repository"
+
+
+def test_unmerged_index_entry_is_a_warning_not_a_fabricated_snapshot(tmp_path):
+    repo = make_conflicted_repo(tmp_path)
+
+    staged = resolve_staged(str(repo))
+    unstaged = resolve_unstaged(str(repo))
+
+    assert staged.entries == ()
+    assert unstaged.entries == ()
+    expected_warning = ("unmerged_index_entry", "conflict.py")
+    assert [(warning.code, warning.path) for warning in staged.warnings] == [
+        expected_warning
+    ]
+    assert [(warning.code, warning.path) for warning in unstaged.warnings] == [
+        expected_warning
+    ]
 
 
 def test_unstaged_intent_to_add_and_rename_have_exact_identities(tmp_path):
