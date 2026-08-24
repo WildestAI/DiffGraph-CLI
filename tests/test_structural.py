@@ -1025,3 +1025,28 @@ def test_python_calls_are_conservative_schema_valid_and_golden(tmp_path):
     assert shadowed_callers.isdisjoint(item["source_id"] for item in calls)
     assert all("query=python-structure-v2" in item["evidence"][0]["detail"] for item in calls)
     assert all("blob=" in item["evidence"][0]["detail"] for item in calls)
+
+
+def test_explicit_from_import_creates_import_grounded_call_edge(tmp_path):
+    root = repo(tmp_path)
+    write(
+        root,
+        "external_calls.py",
+        "from remote.worker import execute as run_remote\n\n"
+        "def caller():\n"
+        "    run_remote()\n",
+    )
+    git(root, "add", "external_calls.py")
+
+    artifact = analyze_local_diff(str(root), staged=True)
+    assert_valid(artifact)
+    calls = [item for item in artifact["relationships"] if item["kind"] == "calls"]
+    assert len(calls) == 1
+    call = calls[0]
+    assert call["source_id"] == "sym::external_calls.py::caller"
+    assert call["target_id"] == "sym::external_calls.py::import::remote.worker"
+    assert call["resolution_method"] == "import_grounded"
+    assert call["confidence"] is None
+    assert call["evidence"][0]["kind"] == "call_site"
+    assert call["evidence"][0]["snippet"] == "run_remote()"
+    assert "query=python-structure-v2" in call["evidence"][0]["detail"]

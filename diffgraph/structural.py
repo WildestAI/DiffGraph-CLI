@@ -57,6 +57,7 @@ class _Import:
     module: str
     line: int
     snippet: str
+    bindings: Tuple[str, ...]
 
 
 @dataclass(frozen=True)
@@ -218,11 +219,37 @@ def _parse_python(
                         raw = _node_text(content, name_node)
                     else:
                         raw = _node_text(content, item)
-                    imports.append(_Import(raw, node.start_point[0] + 1, snippet))
+                    if item.type == "aliased_import":
+                        binding = _node_text(content, item.children[-1])
+                    else:
+                        # ``import package.submodule`` binds ``package``.
+                        binding = raw.split(".", 1)[0]
+                    imports.append(_Import(
+                        raw, node.start_point[0] + 1, snippet, (binding,)
+                    ))
             else:
                 module_node = node.child_by_field_name("module_name")
                 if module_node is not None:
-                    imports.append(_Import(_node_text(content, module_node), node.start_point[0] + 1, snippet))
+                    imported = []
+                    after_import = False
+                    for child in node.children:
+                        if child.type == "import":
+                            after_import = True
+                            continue
+                        if not after_import or child.type not in (
+                            "dotted_name", "aliased_import"
+                        ):
+                            continue
+                        if child.type == "aliased_import":
+                            imported.append(_node_text(content, child.children[-1]))
+                        else:
+                            imported.append(_node_text(content, child).split(".", 1)[0])
+                    imports.append(_Import(
+                        _node_text(content, module_node),
+                        node.start_point[0] + 1,
+                        snippet,
+                        tuple(imported),
+                    ))
         elif node.type == "call":
             function = node.child_by_field_name("function")
             if function is not None and function.type == "identifier":
@@ -351,6 +378,7 @@ def _resolve_call_target(
     call: _Call,
     symbols: Dict[str, _Symbol],
     bindings: Dict[Optional[str], set],
+    imported_targets: Dict[str, Optional[str]],
 ) -> Optional[str]:
     """Resolve only syntax-grounded, same-file Python calls.
 
@@ -374,7 +402,9 @@ def _resolve_call_target(
         current_name = current.parent
 
     if call.name in bindings.get(None, set()):
-        return None
+        # An explicit import is a deterministic external target. Other global
+        # bindings (for example an assignment) remain intentionally unresolved.
+        return imported_targets.get(call.name)
     candidates.append(call.name)
 
     for candidate in candidates:
@@ -389,6 +419,25 @@ def _resolve_call_target(
         if len(matches) > 1:
             return None
     return None
+
+
+def _imported_call_targets(
+    imports: Dict[Tuple[str, int], _Import],
+) -> Dict[str, Optional[str]]:
+    """Map unambiguous imported bindings to their external import symbols."""
+
+    targets: Dict[str, Optional[str]] = {}
+    for (module, occurrence), item in imports.items():
+        suffix = "" if occurrence == 0 else "#{}".format(occurrence)
+        target = "import::{}{}".format(module, suffix)
+        for binding in item.bindings:
+            if binding in targets:
+                # Re-importing the same local name makes the final binding
+                # order-dependent. Do not claim a particular external target.
+                targets[binding] = None
+            else:
+                targets[binding] = target
+    return targets
 
 
 def analyze_local_diff(
@@ -545,6 +594,7 @@ def analyze_local_diff(
 
         old_import_map = _keyed_imports(old_imports)
         new_import_map = _keyed_imports(new_imports)
+        imported_call_targets = _imported_call_targets(new_import_map)
         for import_key in sorted(set(old_import_map) | set(new_import_map)):
             before = old_import_map.get(import_key)
             after = new_import_map.get(import_key)
@@ -613,7 +663,9 @@ def analyze_local_diff(
 
         call_occurrences: Dict[Tuple[str, str], int] = {}
         for call in new_calls:
-            target_qname = _resolve_call_target(call, new_map, new_bindings)
+            target_qname = _resolve_call_target(
+                call, new_map, new_bindings, imported_call_targets
+            )
             if target_qname is None:
                 continue
             source = (
@@ -633,7 +685,11 @@ def analyze_local_diff(
                     "source_id": source,
                     "target_id": target,
                     "analysis_source": "structural",
-                    "resolution_method": "resolved",
+                    "resolution_method": (
+                        "import_grounded"
+                        if target_qname.startswith("import::")
+                        else "resolved"
+                    ),
                     "confidence": None,
                     "evidence": [
                         {
