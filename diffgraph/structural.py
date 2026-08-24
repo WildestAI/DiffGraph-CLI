@@ -320,6 +320,7 @@ def _resolution_warning(item: ResolutionWarning) -> Dict[str, str]:
         "worktree_read_failed",
         "hash_object_failed",
         "malformed_hash_object_output",
+        "unmerged_index_entry",
     }
     code = item.code if item.code in known_codes else "UNKNOWN"
     return _warning(code, item.path, "{}: {}".format(item.code, item.message))

@@ -830,6 +830,26 @@ def test_resolution_warning_preserves_machine_readable_code(monkeypatch, tmp_pat
     ]
 
 
+def test_unmerged_index_warning_preserves_machine_readable_code(monkeypatch, tmp_path):
+    root = repo(tmp_path)
+    warning = ResolutionWarning("unmerged_index_entry", "conflict remains", "app.py")
+    monkeypatch.setattr(
+        "diffgraph.structural.resolve_unstaged",
+        lambda repository, pathspecs: SnapshotResolution((), (warning,)),
+    )
+
+    artifact = analyze_local_diff(str(root))
+
+    assert_valid(artifact)
+    assert artifact["metadata"]["warnings"] == [
+        {
+            "code": "unmerged_index_entry",
+            "file": "app.py",
+            "detail": "unmerged_index_entry: conflict remains",
+        }
+    ]
+
+
 def test_cli_structural_json_rejects_non_diff_command():
     from click.testing import CliRunner
     from diffgraph.cli import main
