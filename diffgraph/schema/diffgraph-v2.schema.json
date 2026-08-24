@@ -400,7 +400,8 @@
             "unsupported_worktree_entry",
             "worktree_read_failed",
             "hash_object_failed",
-            "malformed_hash_object_output"
+            "malformed_hash_object_output",
+            "unmerged_index_entry"
           ],
           "description": "Machine-readable warning code. Consumers can surface these to the user."
         },
