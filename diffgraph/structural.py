@@ -149,7 +149,13 @@ def _name_child(node):
 
 def _parse_python(
     content: bytes,
-) -> Tuple[List[_Symbol], List[_Import], List[_Call], Dict[Optional[str], set]]:
+) -> Tuple[
+    List[_Symbol],
+    List[_Import],
+    List[_Call],
+    Dict[Optional[str], set],
+    List[Tuple[str, int]],
+]:
     # Do not silently replace undecodable source: the warning must identify the
     # exact side that could not be structurally analyzed.
     content.decode("utf-8")
@@ -161,6 +167,7 @@ def _parse_python(
     imports: List[_Import] = []
     calls: List[_Call] = []
     bindings: Dict[Optional[str], set] = {}
+    module_rebindings: List[Tuple[str, int]] = []
     symbol_occurrences: Dict[str, int] = {}
 
     def identifiers(node) -> set:
@@ -282,7 +289,12 @@ def _parse_python(
         elif node.type in ("assignment", "annotated_assignment", "for_statement"):
             left = node.child_by_field_name("left")
             if left is not None:
-                bindings.setdefault(scope, set()).update(identifiers(left))
+                bound_names = identifiers(left)
+                bindings.setdefault(scope, set()).update(bound_names)
+                if scope is None:
+                    module_rebindings.extend(
+                        (name, node.start_point[0] + 1) for name in bound_names
+                    )
         for child in node.children:
             visit(child, next_parents)
 
@@ -292,6 +304,7 @@ def _parse_python(
         sorted(imports, key=lambda item: (item.line, item.module, item.snippet)),
         sorted(calls, key=lambda item: (item.line, item.caller or "", item.name, item.snippet)),
         bindings,
+        module_rebindings,
     )
 
 
@@ -423,10 +436,12 @@ def _resolve_call_target(
 
 def _imported_call_targets(
     imports: Dict[Tuple[str, int], _Import],
+    module_rebindings: List[Tuple[str, int]],
 ) -> Dict[str, Optional[str]]:
-    """Map unambiguous imported bindings to their external import symbols."""
+    """Map unambiguous, unrebound import bindings to external import symbols."""
 
     targets: Dict[str, Optional[str]] = {}
+    import_lines: Dict[str, int] = {}
     for (module, occurrence), item in imports.items():
         suffix = "" if occurrence == 0 else "#{}".format(occurrence)
         target = "import::{}{}".format(module, suffix)
@@ -437,6 +452,11 @@ def _imported_call_targets(
                 targets[binding] = None
             else:
                 targets[binding] = target
+            import_lines[binding] = item.line
+    for binding, line in module_rebindings:
+        if line > import_lines.get(binding, line):
+            # A later module-level assignment replaces the imported binding.
+            targets[binding] = None
     return targets
 
 
@@ -536,16 +556,16 @@ def analyze_local_diff(
             UnicodeDecodeError, ValueError, RuntimeError, OSError, TypeError
         )
         try:
-            old_symbols, old_imports, _old_calls, _old_bindings = (
-                _parse_python(old) if old is not None else ([], [], [], {})
+            old_symbols, old_imports, _old_calls, _old_bindings, _old_rebindings = (
+                _parse_python(old) if old is not None else ([], [], [], {}, [])
             )
         except parser_errors as error:
             warnings.append(_warning("PARSE_FAILURE", entry.old_path or path, "pre-change: {}: {}".format(type(error).__name__, error)))
             skipped += 1
             continue
         try:
-            new_symbols, new_imports, new_calls, new_bindings = (
-                _parse_python(new) if new is not None else ([], [], [], {})
+            new_symbols, new_imports, new_calls, new_bindings, new_rebindings = (
+                _parse_python(new) if new is not None else ([], [], [], {}, [])
             )
         except parser_errors as error:
             warnings.append(_warning("PARSE_FAILURE", path, "post-change: {}: {}".format(type(error).__name__, error)))
@@ -594,7 +614,9 @@ def analyze_local_diff(
 
         old_import_map = _keyed_imports(old_imports)
         new_import_map = _keyed_imports(new_imports)
-        imported_call_targets = _imported_call_targets(new_import_map)
+        imported_call_targets = _imported_call_targets(
+            new_import_map, new_rebindings
+        )
         for import_key in sorted(set(old_import_map) | set(new_import_map)):
             before = old_import_map.get(import_key)
             after = new_import_map.get(import_key)

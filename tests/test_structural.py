@@ -1050,3 +1050,21 @@ def test_explicit_from_import_creates_import_grounded_call_edge(tmp_path):
     assert call["evidence"][0]["kind"] == "call_site"
     assert call["evidence"][0]["snippet"] == "run_remote()"
     assert "query=python-structure-v2" in call["evidence"][0]["detail"]
+
+
+def test_rebound_import_does_not_create_import_grounded_call_edge(tmp_path):
+    root = repo(tmp_path)
+    write(
+        root,
+        "rebound_import.py",
+        "from remote.worker import execute as run_remote\n\n"
+        "run_remote = lambda: None\n\n"
+        "def caller():\n"
+        "    run_remote()\n",
+    )
+    git(root, "add", "rebound_import.py")
+
+    artifact = analyze_local_diff(str(root), staged=True)
+    assert_valid(artifact)
+    calls = [item for item in artifact["relationships"] if item["kind"] == "calls"]
+    assert calls == []
