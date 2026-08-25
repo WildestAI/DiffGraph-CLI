@@ -425,7 +425,12 @@ def _resolve_call_target(
         # later top-level rebind retroactively.
         history = imported_targets.get(call.name, [])
         visible = [target for line, target in history if line <= call.line]
-        return visible[-1] if visible else None
+        if visible and visible[-1] is not None:
+            return visible[-1]
+        # A later import must not hide a declaration that was already visible
+        # at this call site. Likewise, a declaration that replaces an import
+        # can still resolve through the ordinary local-symbol path. Assignments
+        # and loop targets have no matching local symbol and remain unresolved.
     candidates.append(call.name)
 
     for candidate in candidates:

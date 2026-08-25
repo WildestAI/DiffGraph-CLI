@@ -1106,3 +1106,23 @@ def test_import_binding_remains_visible_before_later_rebind(tmp_path):
     assert len(calls) == 1
     assert calls[0]["target_id"] == "sym::line_aware_rebind.py::import::remote.worker"
     assert calls[0]["resolution_method"] == "import_grounded"
+
+
+def test_later_import_does_not_hide_earlier_local_call(tmp_path):
+    root = repo(tmp_path)
+    write(
+        root,
+        "local_before_import.py",
+        "def run():\n"
+        "    return None\n\n"
+        "run()\n\n"
+        "from remote.worker import execute as run\n",
+    )
+    git(root, "add", "local_before_import.py")
+
+    artifact = analyze_local_diff(str(root), staged=True)
+    assert_valid(artifact)
+    calls = [item for item in artifact["relationships"] if item["kind"] == "calls"]
+    assert len(calls) == 1
+    assert calls[0]["target_id"] == "sym::local_before_import.py::run"
+    assert calls[0]["resolution_method"] == "resolved"
