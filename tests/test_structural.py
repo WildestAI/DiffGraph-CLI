@@ -1025,3 +1025,104 @@ def test_python_calls_are_conservative_schema_valid_and_golden(tmp_path):
     assert shadowed_callers.isdisjoint(item["source_id"] for item in calls)
     assert all("query=python-structure-v2" in item["evidence"][0]["detail"] for item in calls)
     assert all("blob=" in item["evidence"][0]["detail"] for item in calls)
+
+
+def test_explicit_from_import_creates_import_grounded_call_edge(tmp_path):
+    root = repo(tmp_path)
+    write(
+        root,
+        "external_calls.py",
+        "from remote.worker import execute as run_remote\n\n"
+        "def caller():\n"
+        "    run_remote()\n",
+    )
+    git(root, "add", "external_calls.py")
+
+    artifact = analyze_local_diff(str(root), staged=True)
+    assert_valid(artifact)
+    calls = [item for item in artifact["relationships"] if item["kind"] == "calls"]
+    assert len(calls) == 1
+    call = calls[0]
+    assert call["source_id"] == "sym::external_calls.py::caller"
+    assert call["target_id"] == "sym::external_calls.py::import::remote.worker"
+    assert call["resolution_method"] == "import_grounded"
+    assert call["confidence"] is None
+    assert call["evidence"][0]["kind"] == "call_site"
+    assert call["evidence"][0]["snippet"] == "run_remote()"
+    assert "query=python-structure-v2" in call["evidence"][0]["detail"]
+
+
+def test_rebound_import_does_not_create_import_grounded_call_edge(tmp_path):
+    root = repo(tmp_path)
+    write(
+        root,
+        "rebound_import.py",
+        "from remote.worker import execute as run_remote\n\n"
+        "run_remote = lambda: None\n\n"
+        "def caller():\n"
+        "    run_remote()\n",
+    )
+    git(root, "add", "rebound_import.py")
+
+    artifact = analyze_local_diff(str(root), staged=True)
+    assert_valid(artifact)
+    calls = [item for item in artifact["relationships"] if item["kind"] == "calls"]
+    assert calls == []
+
+
+@pytest.mark.parametrize("declaration", ["def run_remote():\n    return None", "class run_remote:\n    pass"])
+def test_module_declaration_rebinds_imported_alias(tmp_path, declaration):
+    root = repo(tmp_path)
+    write(
+        root,
+        "declaration_rebind.py",
+        "from remote.worker import execute as run_remote\n\n"
+        + declaration + "\n\n"
+        "def caller():\n"
+        "    run_remote()\n",
+    )
+    git(root, "add", "declaration_rebind.py")
+
+    artifact = analyze_local_diff(str(root), staged=True)
+    assert_valid(artifact)
+    calls = [item for item in artifact["relationships"] if item["kind"] == "calls"]
+    assert all(item["resolution_method"] != "import_grounded" for item in calls)
+
+
+def test_import_binding_remains_visible_before_later_rebind(tmp_path):
+    root = repo(tmp_path)
+    write(
+        root,
+        "line_aware_rebind.py",
+        "from remote.worker import execute as run_remote\n\n"
+        "run_remote()\n\n"
+        "run_remote = lambda: None\n",
+    )
+    git(root, "add", "line_aware_rebind.py")
+
+    artifact = analyze_local_diff(str(root), staged=True)
+    assert_valid(artifact)
+    calls = [item for item in artifact["relationships"] if item["kind"] == "calls"]
+    assert len(calls) == 1
+    assert calls[0]["target_id"] == "sym::line_aware_rebind.py::import::remote.worker"
+    assert calls[0]["resolution_method"] == "import_grounded"
+
+
+def test_later_import_does_not_hide_earlier_local_call(tmp_path):
+    root = repo(tmp_path)
+    write(
+        root,
+        "local_before_import.py",
+        "def run():\n"
+        "    return None\n\n"
+        "run()\n\n"
+        "from remote.worker import execute as run\n",
+    )
+    git(root, "add", "local_before_import.py")
+
+    artifact = analyze_local_diff(str(root), staged=True)
+    assert_valid(artifact)
+    calls = [item for item in artifact["relationships"] if item["kind"] == "calls"]
+    assert len(calls) == 1
+    assert calls[0]["target_id"] == "sym::local_before_import.py::run"
+    assert calls[0]["resolution_method"] == "resolved"

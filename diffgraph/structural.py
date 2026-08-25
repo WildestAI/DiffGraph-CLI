@@ -57,6 +57,7 @@ class _Import:
     module: str
     line: int
     snippet: str
+    bindings: Tuple[str, ...]
 
 
 @dataclass(frozen=True)
@@ -148,7 +149,13 @@ def _name_child(node):
 
 def _parse_python(
     content: bytes,
-) -> Tuple[List[_Symbol], List[_Import], List[_Call], Dict[Optional[str], set]]:
+) -> Tuple[
+    List[_Symbol],
+    List[_Import],
+    List[_Call],
+    Dict[Optional[str], set],
+    List[Tuple[str, int]],
+]:
     # Do not silently replace undecodable source: the warning must identify the
     # exact side that could not be structurally analyzed.
     content.decode("utf-8")
@@ -160,6 +167,7 @@ def _parse_python(
     imports: List[_Import] = []
     calls: List[_Call] = []
     bindings: Dict[Optional[str], set] = {}
+    module_rebindings: List[Tuple[str, int]] = []
     symbol_occurrences: Dict[str, int] = {}
 
     def identifiers(node) -> set:
@@ -206,6 +214,10 @@ def _parse_python(
                     )
                 )
                 next_parents = (*parents, (qname, kind))
+                if not parents:
+                    # A top-level declaration overwrites an imported binding at
+                    # runtime just like a top-level assignment does.
+                    module_rebindings.append((name, node.start_point[0] + 1))
         elif node.type in ("import_statement", "import_from_statement"):
             snippet = _node_text(content, node)
             if node.type == "import_statement":
@@ -218,11 +230,37 @@ def _parse_python(
                         raw = _node_text(content, name_node)
                     else:
                         raw = _node_text(content, item)
-                    imports.append(_Import(raw, node.start_point[0] + 1, snippet))
+                    if item.type == "aliased_import":
+                        binding = _node_text(content, item.children[-1])
+                    else:
+                        # ``import package.submodule`` binds ``package``.
+                        binding = raw.split(".", 1)[0]
+                    imports.append(_Import(
+                        raw, node.start_point[0] + 1, snippet, (binding,)
+                    ))
             else:
                 module_node = node.child_by_field_name("module_name")
                 if module_node is not None:
-                    imports.append(_Import(_node_text(content, module_node), node.start_point[0] + 1, snippet))
+                    imported = []
+                    after_import = False
+                    for child in node.children:
+                        if child.type == "import":
+                            after_import = True
+                            continue
+                        if not after_import or child.type not in (
+                            "dotted_name", "aliased_import"
+                        ):
+                            continue
+                        if child.type == "aliased_import":
+                            imported.append(_node_text(content, child.children[-1]))
+                        else:
+                            imported.append(_node_text(content, child).split(".", 1)[0])
+                    imports.append(_Import(
+                        _node_text(content, module_node),
+                        node.start_point[0] + 1,
+                        snippet,
+                        tuple(imported),
+                    ))
         elif node.type == "call":
             function = node.child_by_field_name("function")
             if function is not None and function.type == "identifier":
@@ -255,7 +293,12 @@ def _parse_python(
         elif node.type in ("assignment", "annotated_assignment", "for_statement"):
             left = node.child_by_field_name("left")
             if left is not None:
-                bindings.setdefault(scope, set()).update(identifiers(left))
+                bound_names = identifiers(left)
+                bindings.setdefault(scope, set()).update(bound_names)
+                if scope is None:
+                    module_rebindings.extend(
+                        (name, node.start_point[0] + 1) for name in bound_names
+                    )
         for child in node.children:
             visit(child, next_parents)
 
@@ -265,6 +308,7 @@ def _parse_python(
         sorted(imports, key=lambda item: (item.line, item.module, item.snippet)),
         sorted(calls, key=lambda item: (item.line, item.caller or "", item.name, item.snippet)),
         bindings,
+        module_rebindings,
     )
 
 
@@ -351,6 +395,7 @@ def _resolve_call_target(
     call: _Call,
     symbols: Dict[str, _Symbol],
     bindings: Dict[Optional[str], set],
+    imported_targets: Dict[str, List[Tuple[int, Optional[str]]]],
 ) -> Optional[str]:
     """Resolve only syntax-grounded, same-file Python calls.
 
@@ -374,7 +419,18 @@ def _resolve_call_target(
         current_name = current.parent
 
     if call.name in bindings.get(None, set()):
-        return None
+        # An explicit import is a deterministic external target. Other global
+        # bindings (for example an assignment) remain intentionally unresolved.
+        # Select the binding visible at this call site rather than applying a
+        # later top-level rebind retroactively.
+        history = imported_targets.get(call.name, [])
+        visible = [target for line, target in history if line <= call.line]
+        if visible and visible[-1] is not None:
+            return visible[-1]
+        # A later import must not hide a declaration that was already visible
+        # at this call site. Likewise, a declaration that replaces an import
+        # can still resolve through the ordinary local-symbol path. Assignments
+        # and loop targets have no matching local symbol and remain unresolved.
     candidates.append(call.name)
 
     for candidate in candidates:
@@ -389,6 +445,33 @@ def _resolve_call_target(
         if len(matches) > 1:
             return None
     return None
+
+
+def _imported_call_targets(
+    imports: Dict[Tuple[str, int], _Import],
+    module_rebindings: List[Tuple[str, int]],
+) -> Dict[str, List[Tuple[int, Optional[str]]]]:
+    """Map each import binding to its conservative, line-aware history."""
+
+    targets: Dict[str, List[Tuple[int, Optional[str]]]] = {}
+    imported_bindings = set()
+    for (module, occurrence), item in imports.items():
+        suffix = "" if occurrence == 0 else "#{}".format(occurrence)
+        target = "import::{}{}".format(module, suffix)
+        for binding in item.bindings:
+            # A later import of the same local name is intentionally
+            # unresolved, but calls before it retain the earlier binding.
+            targets.setdefault(binding, []).append((
+                item.line, None if binding in imported_bindings else target
+            ))
+            imported_bindings.add(binding)
+    for binding, line in module_rebindings:
+        # A declaration, assignment, or loop target replaces the imported
+        # binding only for calls at or after its source line.
+        targets.setdefault(binding, []).append((line, None))
+    for history in targets.values():
+        history.sort(key=lambda item: item[0])
+    return targets
 
 
 def analyze_local_diff(
@@ -487,16 +570,16 @@ def analyze_local_diff(
             UnicodeDecodeError, ValueError, RuntimeError, OSError, TypeError
         )
         try:
-            old_symbols, old_imports, _old_calls, _old_bindings = (
-                _parse_python(old) if old is not None else ([], [], [], {})
+            old_symbols, old_imports, _old_calls, _old_bindings, _old_rebindings = (
+                _parse_python(old) if old is not None else ([], [], [], {}, [])
             )
         except parser_errors as error:
             warnings.append(_warning("PARSE_FAILURE", entry.old_path or path, "pre-change: {}: {}".format(type(error).__name__, error)))
             skipped += 1
             continue
         try:
-            new_symbols, new_imports, new_calls, new_bindings = (
-                _parse_python(new) if new is not None else ([], [], [], {})
+            new_symbols, new_imports, new_calls, new_bindings, new_rebindings = (
+                _parse_python(new) if new is not None else ([], [], [], {}, [])
             )
         except parser_errors as error:
             warnings.append(_warning("PARSE_FAILURE", path, "post-change: {}: {}".format(type(error).__name__, error)))
@@ -545,6 +628,9 @@ def analyze_local_diff(
 
         old_import_map = _keyed_imports(old_imports)
         new_import_map = _keyed_imports(new_imports)
+        imported_call_targets = _imported_call_targets(
+            new_import_map, new_rebindings
+        )
         for import_key in sorted(set(old_import_map) | set(new_import_map)):
             before = old_import_map.get(import_key)
             after = new_import_map.get(import_key)
@@ -613,7 +699,9 @@ def analyze_local_diff(
 
         call_occurrences: Dict[Tuple[str, str], int] = {}
         for call in new_calls:
-            target_qname = _resolve_call_target(call, new_map, new_bindings)
+            target_qname = _resolve_call_target(
+                call, new_map, new_bindings, imported_call_targets
+            )
             if target_qname is None:
                 continue
             source = (
@@ -633,7 +721,11 @@ def analyze_local_diff(
                     "source_id": source,
                     "target_id": target,
                     "analysis_source": "structural",
-                    "resolution_method": "resolved",
+                    "resolution_method": (
+                        "import_grounded"
+                        if target_qname.startswith("import::")
+                        else "resolved"
+                    ),
                     "confidence": None,
                     "evidence": [
                         {
