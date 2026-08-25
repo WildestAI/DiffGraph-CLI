@@ -214,6 +214,10 @@ def _parse_python(
                     )
                 )
                 next_parents = (*parents, (qname, kind))
+                if not parents:
+                    # A top-level declaration overwrites an imported binding at
+                    # runtime just like a top-level assignment does.
+                    module_rebindings.append((name, node.start_point[0] + 1))
         elif node.type in ("import_statement", "import_from_statement"):
             snippet = _node_text(content, node)
             if node.type == "import_statement":
@@ -391,7 +395,7 @@ def _resolve_call_target(
     call: _Call,
     symbols: Dict[str, _Symbol],
     bindings: Dict[Optional[str], set],
-    imported_targets: Dict[str, Optional[str]],
+    imported_targets: Dict[str, List[Tuple[int, Optional[str]]]],
 ) -> Optional[str]:
     """Resolve only syntax-grounded, same-file Python calls.
 
@@ -417,7 +421,11 @@ def _resolve_call_target(
     if call.name in bindings.get(None, set()):
         # An explicit import is a deterministic external target. Other global
         # bindings (for example an assignment) remain intentionally unresolved.
-        return imported_targets.get(call.name)
+        # Select the binding visible at this call site rather than applying a
+        # later top-level rebind retroactively.
+        history = imported_targets.get(call.name, [])
+        visible = [target for line, target in history if line <= call.line]
+        return visible[-1] if visible else None
     candidates.append(call.name)
 
     for candidate in candidates:
@@ -437,26 +445,27 @@ def _resolve_call_target(
 def _imported_call_targets(
     imports: Dict[Tuple[str, int], _Import],
     module_rebindings: List[Tuple[str, int]],
-) -> Dict[str, Optional[str]]:
-    """Map unambiguous, unrebound import bindings to external import symbols."""
+) -> Dict[str, List[Tuple[int, Optional[str]]]]:
+    """Map each import binding to its conservative, line-aware history."""
 
-    targets: Dict[str, Optional[str]] = {}
-    import_lines: Dict[str, int] = {}
+    targets: Dict[str, List[Tuple[int, Optional[str]]]] = {}
+    imported_bindings = set()
     for (module, occurrence), item in imports.items():
         suffix = "" if occurrence == 0 else "#{}".format(occurrence)
         target = "import::{}{}".format(module, suffix)
         for binding in item.bindings:
-            if binding in targets:
-                # Re-importing the same local name makes the final binding
-                # order-dependent. Do not claim a particular external target.
-                targets[binding] = None
-            else:
-                targets[binding] = target
-            import_lines[binding] = item.line
+            # A later import of the same local name is intentionally
+            # unresolved, but calls before it retain the earlier binding.
+            targets.setdefault(binding, []).append((
+                item.line, None if binding in imported_bindings else target
+            ))
+            imported_bindings.add(binding)
     for binding, line in module_rebindings:
-        if line > import_lines.get(binding, line):
-            # A later module-level assignment replaces the imported binding.
-            targets[binding] = None
+        # A declaration, assignment, or loop target replaces the imported
+        # binding only for calls at or after its source line.
+        targets.setdefault(binding, []).append((line, None))
+    for history in targets.values():
+        history.sort(key=lambda item: item[0])
     return targets
 
 
