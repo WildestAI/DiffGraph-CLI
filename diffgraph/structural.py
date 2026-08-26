@@ -180,7 +180,11 @@ def _parse_python(
 
     def visit(node, parents: Tuple[Tuple[str, str], ...] = ()) -> None:
         next_parents = parents
-        if node.type in ("class_definition", "function_definition"):
+        if node.type in (
+            "class_definition",
+            "function_definition",
+            "async_function_definition",
+        ):
             name_node = _name_child(node)
             if name_node is not None:
                 name = _node_text(content, name_node)
@@ -267,7 +271,11 @@ def _parse_python(
                 caller = parents[-1][0] if parents else None
                 ancestor = node.parent
                 while ancestor is not None:
-                    if ancestor.type in ("class_definition", "function_definition"):
+                    if ancestor.type in (
+                        "class_definition",
+                        "function_definition",
+                        "async_function_definition",
+                    ):
                         body = ancestor.child_by_field_name("body")
                         if body is not None and not (
                             body.start_byte <= node.start_byte

@@ -720,6 +720,43 @@ def test_methods_nested_functions_and_deleted_imports_are_not_overclaimed(tmp_pa
     )
 
 
+def test_async_python_functions_are_structural_symbols_and_callers(tmp_path):
+    """Async declarations must be represented like their synchronous peers."""
+    root = repo(tmp_path)
+    write(
+        root,
+        "service.py",
+        "async def helper():\n    return 1\n\n"
+        "class Service:\n"
+        "    async def run(self):\n"
+        "        return await helper()\n",
+    )
+    commit(root)
+    write(
+        root,
+        "service.py",
+        "async def helper():\n    return 2\n\n"
+        "class Service:\n"
+        "    async def run(self):\n"
+        "        return await helper()\n",
+    )
+
+    artifact = analyze_local_diff(str(root))
+
+    assert_valid(artifact)
+    symbols = {item["id"]: item for item in artifact["symbols"]}
+    assert symbols["sym::service.py::helper"]["kind"] == "function"
+    assert symbols["sym::service.py::helper"]["change_kind"] == "modified"
+    assert symbols["sym::service.py::Service.run"]["kind"] == "method"
+    assert symbols["sym::service.py::Service.run"]["parent_id"] == "sym::service.py::Service"
+    relationships = {
+        (item["kind"], item["source_id"], item["target_id"])
+        for item in artifact["relationships"]
+    }
+    assert ("contains", "sym::service.py::Service", "sym::service.py::Service.run") in relationships
+    assert ("calls", "sym::service.py::Service.run", "sym::service.py::helper") in relationships
+
+
 def test_duplicate_symbol_occurrences_are_preserved(tmp_path):
     root = repo(tmp_path)
     write(
