@@ -911,7 +911,36 @@ def test_schema_errors_become_click_errors(monkeypatch):
         cli._validate_structural_artifact({})
 
 
-def test_missing_parser_dependency_is_a_run_level_cli_error(tmp_path, monkeypatch):
+def test_missing_parser_dependency_is_a_scoped_structural_warning(tmp_path, monkeypatch):
+    """A parser installation failure must not turn exact Git input into a false change."""
+    from diffgraph.structural import StructuralDependencyError
+
+    root = repo(tmp_path)
+    write(root, "app.py", "def value():\n    return 1\n")
+    git(root, "add", "app.py")
+
+    def unavailable():
+        raise StructuralDependencyError("parser dependency is unavailable")
+
+    monkeypatch.setattr("diffgraph.structural._parser", unavailable)
+    artifact = analyze_local_diff(str(root), staged=True)
+
+    assert_valid(artifact)
+    assert artifact["symbols"] == []
+    assert artifact["relationships"] == []
+    assert artifact["metadata"]["files_analyzed"] == 0
+    assert artifact["metadata"]["files_skipped"] == 1
+    assert artifact["metadata"]["warnings"] == [{
+        "code": "PARSE_FAILURE",
+        "file": "app.py",
+        "detail": (
+            "post-change: StructuralDependencyError: "
+            "parser dependency is unavailable"
+        ),
+    }]
+
+
+def test_cli_emits_valid_artifact_when_parser_dependency_is_unavailable(tmp_path, monkeypatch):
     from click.testing import CliRunner
     from diffgraph.cli import main
     from diffgraph.structural import StructuralDependencyError
@@ -928,9 +957,11 @@ def test_missing_parser_dependency_is_a_run_level_cli_error(tmp_path, monkeypatc
     result = CliRunner().invoke(
         main, ["--structural-json", "-", "diff", "--staged"]
     )
-    assert result.exit_code == 1
-    assert "parser dependency is unavailable" in result.output
-    assert "PARSE_FAILURE" not in result.output
+
+    assert result.exit_code == 0, result.output
+    artifact = json.loads(result.output)
+    assert_valid(artifact)
+    assert artifact["metadata"]["warnings"][0]["code"] == "PARSE_FAILURE"
 
 
 def test_missing_ai_dependency_is_a_click_error(tmp_path, monkeypatch):

@@ -567,7 +567,12 @@ def analyze_local_diff(
             continue
 
         parser_errors = (
-            UnicodeDecodeError, ValueError, RuntimeError, OSError, TypeError
+            StructuralDependencyError,
+            UnicodeDecodeError,
+            ValueError,
+            RuntimeError,
+            OSError,
+            TypeError,
         )
         try:
             old_symbols, old_imports, _old_calls, _old_bindings, _old_rebindings = (
