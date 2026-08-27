@@ -490,3 +490,32 @@ def test_three_dot_without_merge_base_is_a_warning_not_a_change(tmp_path):
     assert result.entries == ()
     assert result.comparison_base_oid is None
     assert [warning.code for warning in result.warnings] == ["merge_base_failed"]
+
+
+def test_file_mode_transitions_preserve_exact_blob_provenance(tmp_path):
+    """Executable-bit-only changes retain both endpoint modes and blob IDs."""
+    repo = make_repo(tmp_path)
+    write(repo, "tool.py", b"#!/usr/bin/env python3\nprint('wild')\n")
+    commit_all(repo)
+    original_oid = oid(repo, "HEAD:tool.py")
+
+    os.chmod(repo / "tool.py", 0o755)
+    unstaged = resolve_unstaged(str(repo), ["tool.py"])
+
+    assert unstaged.warnings == ()
+    assert len(unstaged.entries) == 1
+    unstaged_entry = unstaged.entries[0]
+    assert (unstaged_entry.status, unstaged_entry.old_path, unstaged_entry.new_path) == (
+        "M", "tool.py", "tool.py",
+    )
+    assert (unstaged_entry.old_mode, unstaged_entry.new_mode) == ("100644", "100755")
+    assert (unstaged_entry.old_oid, unstaged_entry.new_oid) == (original_oid, original_oid)
+
+    git(repo, "add", "--", "tool.py")
+    staged = resolve_staged(str(repo), ["tool.py"])
+
+    assert staged.warnings == ()
+    assert len(staged.entries) == 1
+    staged_entry = staged.entries[0]
+    assert (staged_entry.old_mode, staged_entry.new_mode) == ("100644", "100755")
+    assert (staged_entry.old_oid, staged_entry.new_oid) == (original_oid, original_oid)
