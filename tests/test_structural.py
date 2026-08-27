@@ -727,6 +727,8 @@ def test_async_python_functions_are_structural_symbols_and_callers(tmp_path):
         root,
         "service.py",
         "async def helper():\n    return 1\n\n"
+        "async def orchestrate():\n"
+        "    return await helper()\n\n"
         "class Service:\n"
         "    async def run(self):\n"
         "        return await helper()\n",
@@ -736,6 +738,8 @@ def test_async_python_functions_are_structural_symbols_and_callers(tmp_path):
         root,
         "service.py",
         "async def helper():\n    return 2\n\n"
+        "async def orchestrate():\n"
+        "    return await helper()\n\n"
         "class Service:\n"
         "    async def run(self):\n"
         "        return await helper()\n",
@@ -747,6 +751,7 @@ def test_async_python_functions_are_structural_symbols_and_callers(tmp_path):
     symbols = {item["id"]: item for item in artifact["symbols"]}
     assert symbols["sym::service.py::helper"]["kind"] == "function"
     assert symbols["sym::service.py::helper"]["change_kind"] == "modified"
+    assert symbols["sym::service.py::orchestrate"]["kind"] == "function"
     assert symbols["sym::service.py::Service.run"]["kind"] == "method"
     assert symbols["sym::service.py::Service.run"]["parent_id"] == "sym::service.py::Service"
     relationships = {
@@ -754,6 +759,7 @@ def test_async_python_functions_are_structural_symbols_and_callers(tmp_path):
         for item in artifact["relationships"]
     }
     assert ("contains", "sym::service.py::Service", "sym::service.py::Service.run") in relationships
+    assert ("calls", "sym::service.py::orchestrate", "sym::service.py::helper") in relationships
     assert ("calls", "sym::service.py::Service.run", "sym::service.py::helper") in relationships
 
 
