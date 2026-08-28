@@ -195,6 +195,27 @@ def test_explicit_pathspec_scope_is_not_widened(tmp_path):
     assert no_match.warnings == ()
 
 
+def test_absolute_pathspec_outside_repository_is_a_scoped_warning(tmp_path):
+    """An invalid absolute scope must not turn into an unscoped diff."""
+    repo = make_repo(tmp_path)
+    write(repo, "tracked.txt", b"old\n")
+    commit_all(repo)
+    write(repo, "tracked.txt", b"new\n")
+
+    outside = tmp_path / "outside"
+    staged = resolve_staged(str(repo), [str(outside)])
+    unstaged = resolve_unstaged(str(repo), [str(outside)])
+    ranged = resolve_commit_range(
+        str(repo), "HEAD", "HEAD", pathspecs=[str(outside)]
+    )
+
+    for result in (staged, unstaged, ranged):
+        assert result.entries == ()
+        assert [(warning.code, warning.path) for warning in result.warnings] == [
+            ("pathspec_outside_repository", str(outside))
+        ]
+
+
 def test_nul_parsing_preserves_tabs_and_newlines_in_paths(tmp_path):
     repo = make_repo(tmp_path)
     old_name = "old\tname\npart.txt"

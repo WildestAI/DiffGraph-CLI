@@ -173,7 +173,15 @@ def resolve_commit_range(
         "git", "diff", "--raw", "-z", "--no-abbrev", "--no-ext-diff",
         "--find-renames=50%", comparison_base_oid, head_oid,
     ]
-    scoped_pathspecs = _root_relative_pathspecs(repository, root, pathspecs)
+    scoped_pathspecs = _root_relative_pathspecs(
+        repository, root, pathspecs, warnings
+    )
+    if scoped_pathspecs is None:
+        return _commit_range_result(
+            base_ref, head_ref, three_dot, warnings=warnings,
+            base_oid=base_oid, head_oid=head_oid,
+            comparison_base_oid=comparison_base_oid,
+        )
     if scoped_pathspecs:
         command.append("--")
         command.extend(scoped_pathspecs)
@@ -255,7 +263,11 @@ def _resolve(
     command.extend(
         ["--raw", "-z", "--no-abbrev", "--no-ext-diff", "--find-renames=50%"]
     )
-    scoped_pathspecs = _root_relative_pathspecs(repository, root, pathspecs)
+    scoped_pathspecs = _root_relative_pathspecs(
+        repository, root, pathspecs, warnings
+    )
+    if scoped_pathspecs is None:
+        return SnapshotResolution((), tuple(warnings))
     if scoped_pathspecs:
         command.append("--")
         command.extend(scoped_pathspecs)
@@ -408,20 +420,37 @@ def _root_relative_pathspecs(
     repository: str,
     root: str,
     pathspecs: Optional[Sequence[str]],
-) -> List[str]:
-    """Translate caller-relative pathspecs for a Git process run at ``root``."""
+    warnings: List[ResolutionWarning],
+) -> Optional[List[str]]:
+    """Translate caller-relative pathspecs for a Git process run at ``root``.
+
+    An absolute scope outside the repository cannot be passed to Git safely.
+    Reject it rather than normalising it to ``../...`` and relying on a
+    command failure, so callers receive an actionable warning and never risk
+    falling back to a broader query.
+    """
 
     if not pathspecs:
         return []
     caller = os.path.abspath(os.fspath(repository))
     prefix = os.path.relpath(caller, root)
-    if prefix == ".":
-        return list(pathspecs)
-    prefix = prefix.replace(os.sep, "/")
+    prefix = "" if prefix == "." else prefix.replace(os.sep, "/")
     scoped: List[str] = []
     for pathspec in pathspecs:
         if os.path.isabs(pathspec):
-            scoped.append(os.path.relpath(pathspec, root).replace(os.sep, "/"))
+            absolute_path = os.path.abspath(pathspec)
+            try:
+                inside_root = os.path.commonpath([root, absolute_path]) == root
+            except ValueError:
+                inside_root = False
+            if not inside_root:
+                warnings.append(ResolutionWarning(
+                    "pathspec_outside_repository",
+                    "Absolute pathspec is outside the repository and was not resolved",
+                    pathspec,
+                ))
+                return None
+            scoped.append(os.path.relpath(absolute_path, root).replace(os.sep, "/"))
         else:
             scoped.append(_prefix_pathspec(pathspec, prefix))
     return scoped
