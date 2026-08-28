@@ -216,6 +216,21 @@ def test_absolute_pathspec_outside_repository_is_a_scoped_warning(tmp_path):
         ]
 
 
+def test_absolute_pathspec_via_symlink_alias_is_in_repository(tmp_path):
+    """A symlinked repository path resolves to the canonical repository scope."""
+    repo = make_repo(tmp_path)
+    write(repo, "tracked.txt", b"old\n")
+    commit_all(repo)
+    write(repo, "tracked.txt", b"new\n")
+    alias = tmp_path / "repo-alias"
+    os.symlink(repo, alias, target_is_directory=True)
+
+    result = resolve_unstaged(str(alias), [str(alias / "tracked.txt")])
+
+    assert result.warnings == ()
+    assert [entry.new_path for entry in result.entries] == ["tracked.txt"]
+
+
 def test_nul_parsing_preserves_tabs_and_newlines_in_paths(tmp_path):
     repo = make_repo(tmp_path)
     old_name = "old\tname\npart.txt"

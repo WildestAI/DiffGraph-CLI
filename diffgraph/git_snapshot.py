@@ -432,15 +432,19 @@ def _root_relative_pathspecs(
 
     if not pathspecs:
         return []
-    caller = os.path.abspath(os.fspath(repository))
-    prefix = os.path.relpath(caller, root)
+    canonical_root = os.path.realpath(root)
+    caller = os.path.realpath(os.fspath(repository))
+    prefix = os.path.relpath(caller, canonical_root)
     prefix = "" if prefix == "." else prefix.replace(os.sep, "/")
     scoped: List[str] = []
     for pathspec in pathspecs:
         if os.path.isabs(pathspec):
-            absolute_path = os.path.abspath(pathspec)
+            absolute_path = os.path.realpath(pathspec)
             try:
-                inside_root = os.path.commonpath([root, absolute_path]) == root
+                inside_root = (
+                    os.path.commonpath([canonical_root, absolute_path])
+                    == canonical_root
+                )
             except ValueError:
                 inside_root = False
             if not inside_root:
@@ -450,7 +454,9 @@ def _root_relative_pathspecs(
                     pathspec,
                 ))
                 return None
-            scoped.append(os.path.relpath(absolute_path, root).replace(os.sep, "/"))
+            scoped.append(
+                os.path.relpath(absolute_path, canonical_root).replace(os.sep, "/")
+            )
         else:
             scoped.append(_prefix_pathspec(pathspec, prefix))
     return scoped
