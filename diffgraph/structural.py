@@ -359,6 +359,7 @@ def _resolution_warning(item: ResolutionWarning) -> Dict[str, str]:
         "not_a_git_repository",
         "git_diff_failed",
         "malformed_git_output",
+        "undecodable_path",
         "missing_object_id",
         "unsupported_worktree_entry",
         "worktree_read_failed",

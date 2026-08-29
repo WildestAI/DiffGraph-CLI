@@ -250,6 +250,22 @@ def test_nul_parsing_preserves_tabs_and_newlines_in_paths(tmp_path):
     assert entry.old_oid == entry.new_oid == oid(repo, "HEAD:" + old_name)
 
 
+def test_undecodable_untracked_path_is_a_scoped_warning(tmp_path):
+    """One non-UTF-8 path must not leak surrogate escapes or hide valid files."""
+    repo = make_repo(tmp_path)
+    write(repo, "good.py", b"value = 1\n")
+    raw_path = os.fsencode(repo) + b"/bad-\xff.py"
+    with open(raw_path, "wb") as handle:
+        handle.write(b"value = 2\n")
+
+    result = resolve_unstaged(str(repo))
+
+    assert [entry.new_path for entry in result.entries] == ["good.py"]
+    assert [(warning.code, warning.path) for warning in result.warnings] == [
+        ("undecodable_path", "bad-\\xff.py")
+    ]
+
+
 def test_repeated_resolution_is_deterministic(tmp_path):
     repo = make_repo(tmp_path)
     for name in ("z.txt", "a.txt", "middle.txt"):
