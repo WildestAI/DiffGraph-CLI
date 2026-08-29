@@ -112,6 +112,21 @@ def test_optional_prose_enrichment_cannot_mutate_frozen_topology(golden_artifact
     assert enriched.value["metadata"]["tiers_used"] == ["inferred", "structural"]
 
 
+def test_optional_prose_enrichment_preserves_cloud_backend_privacy(golden_artifact):
+    golden_artifact["metadata"]["privacy_tier"] = "cloud_backend"
+    frozen = ValidatedArtifact.from_value(golden_artifact)
+
+    enriched = enrich_with_prose(
+        frozen,
+        "The deterministic graph has backend provenance.",
+        provider="byok-openai",
+        model="gpt-test",
+    )
+
+    assert enriched.value["metadata"]["privacy_tier"] == "cloud_backend"
+    assert enriched.value["metadata"]["cloud_providers_used"] == ["byok-openai"]
+
+
 @pytest.mark.parametrize(
     ("kwargs", "message"),
     [

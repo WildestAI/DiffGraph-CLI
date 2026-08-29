@@ -100,7 +100,11 @@ def enrich_with_prose(
         ],
     }
     metadata = enriched["metadata"]
-    metadata["privacy_tier"] = "cloud_llm"
+    # The v2 contract has no combined tier. Retain a pre-existing backend
+    # classification so enrichment never hides that the artifact's data also
+    # left the machine through WildestAI's backend.
+    if metadata.get("privacy_tier") != "cloud_backend":
+        metadata["privacy_tier"] = "cloud_llm"
     metadata["cloud_providers_used"] = sorted(
         set(metadata.get("cloud_providers_used", [])) | {provider}
     )
