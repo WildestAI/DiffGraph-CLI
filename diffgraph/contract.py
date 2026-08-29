@@ -48,6 +48,72 @@ class ValidatedArtifact:
         return deepcopy(self._value)
 
 
+def enrich_with_prose(
+    artifact: ValidatedArtifact,
+    text: str,
+    *,
+    provider: str,
+    model: str,
+    confidence: float | None = None,
+    prompt_ref: str | None = None,
+) -> ValidatedArtifact:
+    """Return a separately validated artifact with optional AI prose only.
+
+    The supplied prose is deliberately limited to ``summary`` and its own
+    provenance.  Files, symbols, and relationships are copied from the frozen
+    deterministic artifact, so a provider cannot add, remove, or edit graph
+    topology.  This helper performs no provider call and never receives a
+    prompt or API credential.
+    """
+    if not isinstance(artifact, ValidatedArtifact):
+        raise TypeError("enrich_with_prose requires a ValidatedArtifact")
+    if not isinstance(text, str) or not text.strip():
+        raise ValueError("summary text must be a non-empty string")
+    if not isinstance(provider, str) or not provider.strip():
+        raise ValueError("provider must be a non-empty string")
+    if not isinstance(model, str) or not model.strip():
+        raise ValueError("model must be a non-empty string")
+    if confidence is not None and (
+        isinstance(confidence, bool)
+        or not isinstance(confidence, (int, float))
+        or not 0 <= confidence <= 1
+    ):
+        raise ValueError("confidence must be a number from 0 through 1")
+    if prompt_ref is not None and (not isinstance(prompt_ref, str) or not prompt_ref.strip()):
+        raise ValueError("prompt_ref must be a non-empty string when provided")
+
+    enriched = artifact.value
+    llm_evidence = {"kind": "llm_inference", "model": model}
+    if prompt_ref is not None:
+        llm_evidence["prompt_ref"] = prompt_ref
+    enriched["summary"] = {
+        "text": text,
+        "analysis_source": "inferred",
+        "confidence": confidence,
+        "evidence": [
+            llm_evidence,
+            {
+                "kind": "structural_basis",
+                "file_ids": [item["id"] for item in enriched["files"]],
+                "symbol_ids": [item["id"] for item in enriched["symbols"]],
+            },
+        ],
+    }
+    metadata = enriched["metadata"]
+    # The v2 contract has no combined tier. Retain a pre-existing backend
+    # classification so enrichment never hides that the artifact's data also
+    # left the machine through WildestAI's backend.
+    if metadata.get("privacy_tier") != "cloud_backend":
+        metadata["privacy_tier"] = "cloud_llm"
+    metadata["cloud_providers_used"] = sorted(
+        set(metadata.get("cloud_providers_used", [])) | {provider}
+    )
+    metadata["llm_calls"] = (metadata.get("llm_calls") or 0) + 1
+    metadata["llm_model"] = model
+    metadata["tiers_used"] = sorted(set(metadata.get("tiers_used", [])) | {"inferred"})
+    return ValidatedArtifact.from_value(enriched)
+
+
 def schema_version(value: object) -> Tuple[int, int]:
     """Parse and compatibility-check a DiffGraph ``MAJOR.MINOR`` version."""
     if not isinstance(value, str):
