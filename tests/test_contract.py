@@ -15,6 +15,7 @@ from diffgraph.contract import (
     SUPPORTED_SCHEMA_MAJOR,
     DiffGraphContractError,
     ValidatedArtifact,
+    enrich_with_prose,
     load_schema,
     schema_version,
     validate_artifact,
@@ -63,6 +64,68 @@ def test_golden_contains_only_local_structural_claims(golden_artifact):
         for collection in ("files", "symbols", "relationships")
         for item in golden_artifact[collection]
     )
+
+
+def test_optional_prose_enrichment_cannot_mutate_frozen_topology(golden_artifact):
+    frozen = ValidatedArtifact.from_value(golden_artifact)
+    topology_before = {
+        field: frozen.value[field]
+        for field in ("files", "symbols", "relationships")
+    }
+
+    enriched = enrich_with_prose(
+        frozen,
+        "The deterministic graph shows one modified Python symbol.",
+        provider="byok-openai",
+        model="gpt-test",
+        confidence=0.75,
+        prompt_ref="summary-v1",
+    )
+
+    validate_artifact(enriched.value)
+    assert frozen.value["summary"] is None
+    assert {
+        field: frozen.value[field]
+        for field in ("files", "symbols", "relationships")
+    } == topology_before
+    assert {
+        field: enriched.value[field]
+        for field in ("files", "symbols", "relationships")
+    } == topology_before
+    assert enriched.value["summary"] == {
+        "text": "The deterministic graph shows one modified Python symbol.",
+        "analysis_source": "inferred",
+        "confidence": 0.75,
+        "evidence": [
+            {"kind": "llm_inference", "model": "gpt-test", "prompt_ref": "summary-v1"},
+            {
+                "kind": "structural_basis",
+                "file_ids": [item["id"] for item in topology_before["files"]],
+                "symbol_ids": [item["id"] for item in topology_before["symbols"]],
+            },
+        ],
+    }
+    assert enriched.value["metadata"]["privacy_tier"] == "cloud_llm"
+    assert enriched.value["metadata"]["cloud_providers_used"] == ["byok-openai"]
+    assert enriched.value["metadata"]["llm_calls"] == 1
+    assert enriched.value["metadata"]["llm_model"] == "gpt-test"
+    assert enriched.value["metadata"]["tiers_used"] == ["inferred", "structural"]
+
+
+@pytest.mark.parametrize(
+    ("kwargs", "message"),
+    [
+        ({"text": "", "provider": "provider", "model": "model"}, "summary text"),
+        ({"text": "summary", "provider": "", "model": "model"}, "provider"),
+        ({"text": "summary", "provider": "provider", "model": ""}, "model"),
+        ({"text": "summary", "provider": "provider", "model": "model", "confidence": 2}, "confidence"),
+    ],
+)
+def test_optional_prose_enrichment_rejects_ambiguous_provenance(golden_artifact, kwargs, message):
+    frozen = ValidatedArtifact.from_value(golden_artifact)
+
+    with pytest.raises(ValueError, match=message):
+        enrich_with_prose(frozen, **kwargs)
 
 
 @pytest.mark.parametrize("value", [None, 2, "2", "v2", "2.0.0", "02.0", "2.-1"])
