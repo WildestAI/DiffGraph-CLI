@@ -335,7 +335,9 @@ def _resolve_untracked(
     for raw_path in output.split(b"\0"):
         if not raw_path:
             continue
-        path = os.fsdecode(raw_path)
+        path = _decode_git_path(raw_path, warnings)
+        if path is None:
+            continue
         full_path = os.path.join(root, path)
         try:
             file_stat = os.lstat(full_path)
@@ -519,8 +521,18 @@ def _parse_raw(data: bytes, warnings: List[ResolutionWarning]) -> List[_RawEntry
             path_count = 2 if status in ("R", "C") else 1
             if not status or index + path_count > len(fields):
                 raise ValueError("malformed raw-diff path fields")
-            paths = [os.fsdecode(value) for value in fields[index : index + path_count]]
+            paths = [
+                _decode_git_path(value, warnings)
+                for value in fields[index : index + path_count]
+            ]
             index += path_count
+
+            # Git permits arbitrary bytes in a pathname, but artifact paths
+            # must be valid Unicode strings. Skip only this record while
+            # retaining its NUL-delimited boundaries, so a single invalid
+            # filename cannot poison the rest of the snapshot.
+            if any(path is None for path in paths):
+                continue
 
             if status in ("R", "C"):
                 old_path, new_path = paths
@@ -550,6 +562,22 @@ def _parse_raw(data: bytes, warnings: List[ResolutionWarning]) -> List[_RawEntry
             # successfully parsed prefix avoids inventing changes.
             break
     return parsed
+
+
+def _decode_git_path(
+    value: bytes, warnings: List[ResolutionWarning]
+) -> Optional[str]:
+    """Decode a Git pathname without leaking surrogate escapes into artifacts."""
+
+    try:
+        return value.decode("utf-8")
+    except UnicodeDecodeError:
+        warnings.append(ResolutionWarning(
+            "undecodable_path",
+            "Git reported a path that is not valid UTF-8; the entry was skipped",
+            value.decode("utf-8", "backslashreplace"),
+        ))
+        return None
 
 
 def _mode(value: bytes) -> Optional[str]:

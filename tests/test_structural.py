@@ -873,6 +873,25 @@ def test_resolution_warning_preserves_machine_readable_code(monkeypatch, tmp_pat
     ]
 
 
+def test_undecodable_path_warning_is_schema_valid(monkeypatch, tmp_path):
+    root = repo(tmp_path)
+    warning = ResolutionWarning(
+        "undecodable_path", "Git reported a non-UTF-8 filename", None
+    )
+    monkeypatch.setattr(
+        "diffgraph.structural.resolve_unstaged",
+        lambda repository, pathspecs: SnapshotResolution((), (warning,)),
+    )
+
+    artifact = analyze_local_diff(str(root))
+
+    assert_valid(artifact)
+    assert artifact["metadata"]["warnings"] == [{
+        "code": "undecodable_path",
+        "detail": "undecodable_path: Git reported a non-UTF-8 filename",
+    }]
+
+
 def test_unmerged_index_warning_preserves_machine_readable_code(monkeypatch, tmp_path):
     root = repo(tmp_path)
     warning = ResolutionWarning("unmerged_index_entry", "conflict remains", "app.py")
