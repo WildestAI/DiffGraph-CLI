@@ -467,6 +467,36 @@ def test_two_dot_range_records_exact_endpoints_and_tree_identities(tmp_path):
     assert entries["head-only.txt"].new_oid == oid(repo, "head:head-only.txt")
 
 
+def test_commit_range_rename_preserves_both_paths_modes_and_blob_identities(tmp_path):
+    """A renamed-and-modified file keeps immutable provenance on both sides."""
+    repo = make_repo(tmp_path)
+    old_path = "package/old_name.py"
+    new_path = "package/new_name.py"
+    old_content = b"def moved():\n    return 'stable'\n" * 20
+    new_content = old_content + b"# post-rename change\n"
+    write(repo, old_path, old_content)
+    commit_all(repo, "before rename")
+    git(repo, "branch", "before")
+    old_oid = oid(repo, "HEAD:" + old_path)
+
+    git(repo, "mv", old_path, new_path)
+    write(repo, new_path, new_content)
+    commit_all(repo, "rename and modify")
+    new_oid = oid(repo, "HEAD:" + new_path)
+
+    result = resolve_commit_range(str(repo), "before", "HEAD")
+
+    assert result.warnings == ()
+    assert len(result.entries) == 1
+    entry = result.entries[0]
+    assert (entry.status, entry.old_path, entry.new_path) == (
+        "R", old_path, new_path,
+    )
+    assert (entry.old_mode, entry.new_mode) == ("100644", "100644")
+    assert (entry.old_oid, entry.new_oid) == (old_oid, new_oid)
+    assert entry.old_oid != entry.new_oid
+
+
 def test_three_dot_range_uses_merge_base_and_excludes_base_only_changes(tmp_path):
     repo = make_repo(tmp_path)
     write(repo, "shared.txt", b"common\n")
