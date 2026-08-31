@@ -527,13 +527,20 @@ def analyze_local_diff(
         path = entry.new_path or entry.old_path
         if path is None:
             raise RuntimeError("snapshot entry has neither an old nor a new path")
+        # Gitlink (mode 160000) OIDs identify commits, not blobs, so content
+        # reads would fail or be misleading. Skip reads for gitlink sides and
+        # let _non_regular_modes() report the opaque entry cleanly; continue
+        # reading symlink sides normally.
         try:
-            old = _blob(root, entry.old_oid)
-            new = (
-                _blob(root, entry.new_oid)
-                if staged or is_commit_range
-                else _worktree_bytes(root, entry)
+            old = (
+                None if entry.old_mode == "160000" else _blob(root, entry.old_oid)
             )
+            if entry.new_mode == "160000":
+                new = None
+            elif staged or is_commit_range:
+                new = _blob(root, entry.new_oid)
+            else:
+                new = _worktree_bytes(root, entry)
         except (OSError, GitSnapshotError) as error:
             old = new = None
             warnings.append(_warning("PARTIAL_ANALYSIS", path, "snapshot read failed: {}".format(error)))
