@@ -214,6 +214,7 @@ def test_binary_python_snapshot_preserves_identity_without_parsing(tmp_path, sta
     ],
     ids=["binary-to-text", "binary-to-binary"],
 )
+
 def test_pre_change_binary_snapshots_skip_all_source_analysis(
     tmp_path, old_content, new_content, binary_sides
 ):
@@ -468,6 +469,35 @@ def test_cli_terminal_all_disables_review_item_cap(tmp_path, monkeypatch):
     assert result.exit_code == 0, result.output
     assert "item_10" in result.output
     assert "more" not in result.output
+
+def test_symlink_type_change_is_an_opaque_snapshot_not_python_source(tmp_path):
+    """A symlink target ending in .py must not create false topology."""
+    root = repo(tmp_path)
+    write(root, "module.py", "def previous():\n    return 1\n")
+    commit(root)
+
+    (root / "module.py").unlink()
+    os.symlink("replacement.py", root / "module.py")
+    git(root, "add", "-A")
+
+    artifact = analyze_local_diff(str(root), staged=True)
+
+    assert_valid(artifact)
+    file_entry = artifact["files"][0]
+    provenance = json.loads(file_entry["evidence"][0]["detail"])
+    assert provenance["old_mode"] == "100644"
+    assert provenance["new_mode"] == "120000"
+    assert file_entry["language"] is None
+    assert file_entry["lines_added"] is None
+    assert file_entry["lines_removed"] is None
+    assert artifact["symbols"] == []
+    assert artifact["relationships"] == []
+    assert artifact["metadata"]["files_skipped"] == 1
+    assert artifact["metadata"]["warnings"] == [{
+        "code": "PARTIAL_ANALYSIS",
+        "file": "module.py",
+        "detail": "Non-regular Git mode 120000 detected; structural parsing and line counts were skipped.",
+    }]
 
 
 @pytest.mark.parametrize("pathspec", ["--compact", "--all"])
@@ -815,7 +845,7 @@ def test_aliased_import_uses_name_field_and_reports_alias_edit_as_modified(tmp_p
     assert imported["change_kind"] == "modified"
 
 
-def test_worktree_symlink_uses_exact_link_bytes_without_partial_warning(tmp_path):
+def test_worktree_symlink_preserves_exact_link_bytes_without_source_analysis(tmp_path):
     root = repo(tmp_path)
     os.symlink("original.py", root / "link.py")
     commit(root)
@@ -824,12 +854,18 @@ def test_worktree_symlink_uses_exact_link_bytes_without_partial_warning(tmp_path
 
     artifact = analyze_local_diff(str(root))
     assert_valid(artifact)
-    assert artifact["metadata"]["files_analyzed"] == 1
-    assert not any(
-        warning["code"] == "PARTIAL_ANALYSIS"
-        for warning in artifact["metadata"]["warnings"]
-    )
-    provenance = json.loads(artifact["files"][0]["evidence"][0]["detail"])
+    assert artifact["metadata"]["files_analyzed"] == 0
+    assert artifact["metadata"]["files_skipped"] == 1
+    file_entry = artifact["files"][0]
+    assert file_entry["language"] is None
+    assert file_entry["lines_added"] is None
+    assert file_entry["lines_removed"] is None
+    assert artifact["metadata"]["warnings"] == [{
+        "code": "PARTIAL_ANALYSIS",
+        "file": "link.py",
+        "detail": "Non-regular Git mode 120000 detected; structural parsing and line counts were skipped.",
+    }]
+    provenance = json.loads(file_entry["evidence"][0]["detail"])
     assert provenance["new_oid"] == git(
         root, "hash-object", "--stdin", input_bytes=b"replacement.py"
     )
