@@ -500,6 +500,90 @@ def test_symlink_type_change_is_an_opaque_snapshot_not_python_source(tmp_path):
     }]
 
 
+def assert_opaque_gitlink(artifact, expected_old_oid, expected_new_oid):
+    """Assert that a gitlink keeps commit provenance without source claims."""
+    assert_valid(artifact)
+    file_entry = next(item for item in artifact["files"] if item["path"] == "vendor/tool")
+    provenance = json.loads(file_entry["evidence"][0]["detail"])
+    assert provenance["old_mode"] in (None, "160000")
+    assert provenance["new_mode"] in (None, "160000")
+    assert provenance["old_oid"] == expected_old_oid
+    assert provenance["new_oid"] == expected_new_oid
+    assert file_entry["language"] is None
+    assert file_entry["lines_added"] is None
+    assert file_entry["lines_removed"] is None
+    assert artifact["symbols"] == []
+    assert artifact["relationships"] == []
+    assert artifact["metadata"]["files_skipped"] == 1
+    assert artifact["metadata"]["warnings"] == [{
+        "code": "PARTIAL_ANALYSIS",
+        "file": "vendor/tool",
+        "detail": "Non-regular Git mode 160000 detected; structural parsing and line counts were skipped.",
+    }]
+
+
+def test_staged_gitlink_is_an_opaque_commit_snapshot(tmp_path):
+    """A staged gitlink addition must preserve its commit ID without a blob read."""
+    root = repo(tmp_path)
+    write(root, "tracked.txt", "baseline\n")
+    commit(root)
+    gitlink_oid = git(root, "rev-parse", "HEAD")
+    git(root, "update-index", "--add", "--cacheinfo", "160000,{},vendor/tool".format(gitlink_oid))
+
+    artifact = analyze_local_diff(str(root), staged=True)
+
+    assert_opaque_gitlink(artifact, None, gitlink_oid)
+
+
+def test_unstaged_gitlink_uses_checked_out_submodule_commit(tmp_path):
+    """An unstaged gitlink change must resolve the checked-out submodule HEAD."""
+    child = tmp_path / "child"
+    child.mkdir()
+    git(child, "init")
+    git(child, "config", "user.name", "Structural Tests")
+    git(child, "config", "user.email", "structural@example.test")
+    write(child, "value.txt", "one\n")
+    commit(child)
+
+    root = repo(tmp_path)
+    git(root, "-c", "protocol.file.allow=always", "submodule", "add", str(child), "vendor/tool")
+    commit(root)
+    old_oid = git(root / "vendor/tool", "rev-parse", "HEAD")
+    git(root / "vendor/tool", "config", "user.name", "Structural Tests")
+    git(root / "vendor/tool", "config", "user.email", "structural@example.test")
+    write(root / "vendor/tool", "value.txt", "two\n")
+    commit(root / "vendor/tool")
+    new_oid = git(root / "vendor/tool", "rev-parse", "HEAD")
+
+    artifact = analyze_local_diff(str(root))
+
+    assert_opaque_gitlink(artifact, old_oid, new_oid)
+
+
+def test_commit_range_gitlink_is_an_opaque_commit_snapshot(tmp_path):
+    """A commit-range gitlink change must preserve both commit IDs without reads."""
+    root = repo(tmp_path)
+    write(root, "tracked.txt", "first\n")
+    commit(root)
+    first_oid = git(root, "rev-parse", "HEAD")
+    write(root, "tracked.txt", "second\n")
+    commit(root)
+    second_oid = git(root, "rev-parse", "HEAD")
+
+    git(root, "update-index", "--add", "--cacheinfo", "160000,{},vendor/tool".format(first_oid))
+    git(root, "commit", "-m", "add gitlink")
+    base_oid = git(root, "rev-parse", "HEAD")
+    git(root, "update-index", "--cacheinfo", "160000,{},vendor/tool".format(second_oid))
+    git(root, "commit", "-m", "update gitlink")
+    head_oid = git(root, "rev-parse", "HEAD")
+
+    artifact = analyze_local_diff(
+        str(root), base_ref=base_oid, head_ref=head_oid
+    )
+
+    assert_opaque_gitlink(artifact, first_oid, second_oid)
+
+
 @pytest.mark.parametrize("pathspec", ["--compact", "--all"])
 def test_cli_terminal_preserves_flag_like_pathspec_after_separator(
     pathspec, tmp_path, monkeypatch

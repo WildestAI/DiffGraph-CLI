@@ -643,6 +643,28 @@ def _working_tree_oid(
     mode: Optional[str],
     warnings: List[ResolutionWarning],
 ) -> Optional[str]:
+    """Return the exact object ID for a worktree file, link, or gitlink."""
+
+    if mode == "160000":
+        output = _run(
+            ["git", "rev-parse", "--verify", "HEAD^{commit}"],
+            os.path.join(root, path),
+            warnings,
+            "gitlink_head_failed",
+            path=path,
+        )
+        if output is None:
+            return None
+        oid = os.fsdecode(output).strip()
+        if not _is_hex_oid(oid):
+            warnings.append(ResolutionWarning(
+                "malformed_gitlink_head",
+                "Git returned an invalid gitlink commit object ID",
+                path,
+            ))
+            return None
+        return oid
+
     result = _working_tree_blob(root, path, mode, warnings)
     return result[1] if result is not None else None
 
