@@ -370,19 +370,30 @@ def test_file_fallback_reports_structural_line_statistics(tmp_path, monkeypatch)
     assert "notes.txt  +2 / -1" in result.stdout
 
 
-def test_parse_failure_is_scoped_and_does_not_invent_symbol_changes(tmp_path):
+def test_parse_failure_is_scoped_and_matches_the_golden_fixture(tmp_path):
+    """A syntax error has a stable, scoped artifact instead of false topology."""
     root = repo(tmp_path)
     write(root, "broken.py", "def valid():\n    return 1\n")
     commit(root)
     write(root, "broken.py", "def broken(:\n")
+
     artifact = analyze_local_diff(str(root))
     assert_valid(artifact)
-    assert artifact["symbols"] == []
-    assert artifact["relationships"] == []
-    warning = artifact["metadata"]["warnings"][0]
-    assert warning["code"] == "PARSE_FAILURE"
-    assert warning["file"] == "broken.py"
-    assert warning["detail"].startswith("post-change:")
+    golden_path = Path(__file__).parent / "fixtures/python_parser_failure.json"
+    expected = json.loads(golden_path.read_text())
+    actual = {
+        "files": [{
+            key: file_entry[key]
+            for key in ("path", "old_path", "language", "change_kind")
+        } for file_entry in artifact["files"]],
+        "symbols": artifact["symbols"],
+        "relationships": artifact["relationships"],
+        "metadata": {
+            key: artifact["metadata"][key]
+            for key in ("files_analyzed", "files_skipped", "warnings")
+        },
+    }
+    assert actual == expected
 
 
 def test_no_network_calls(monkeypatch, tmp_path):
