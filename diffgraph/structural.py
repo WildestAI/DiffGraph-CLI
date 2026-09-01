@@ -116,6 +116,21 @@ def _binary_sides(old: Optional[bytes], new: Optional[bytes]) -> Tuple[str, ...]
     return tuple(sides)
 
 
+def _non_regular_modes(entry: SnapshotEntry) -> Tuple[str, ...]:
+    """Return Git modes whose contents must not be treated as source text.
+
+    Symlink targets and gitlinks are represented by object-like values in a
+    raw Git diff, but neither is a source-file snapshot. Parsing a symlink
+    target such as ``replacement.py`` as Python can otherwise yield a
+    misleading successful analysis with empty topology.
+    """
+    return tuple(sorted({
+        mode
+        for mode in (entry.old_mode, entry.new_mode)
+        if mode is not None and mode not in ("100644", "100755")
+    }))
+
+
 def _parser():
     parser = getattr(_PARSER_STATE, "python_parser", None)
     if parser is not None:
@@ -512,13 +527,20 @@ def analyze_local_diff(
         path = entry.new_path or entry.old_path
         if path is None:
             raise RuntimeError("snapshot entry has neither an old nor a new path")
+        # Gitlink (mode 160000) OIDs identify commits, not blobs, so content
+        # reads would fail or be misleading. Skip reads for gitlink sides and
+        # let _non_regular_modes() report the opaque entry cleanly; continue
+        # reading symlink sides normally.
         try:
-            old = _blob(root, entry.old_oid)
-            new = (
-                _blob(root, entry.new_oid)
-                if staged or is_commit_range
-                else _worktree_bytes(root, entry)
+            old = (
+                None if entry.old_mode == "160000" else _blob(root, entry.old_oid)
             )
+            if entry.new_mode == "160000":
+                new = None
+            elif staged or is_commit_range:
+                new = _blob(root, entry.new_oid)
+            else:
+                new = _worktree_bytes(root, entry)
         except (OSError, GitSnapshotError) as error:
             old = new = None
             warnings.append(_warning("PARTIAL_ANALYSIS", path, "snapshot read failed: {}".format(error)))
@@ -529,15 +551,20 @@ def analyze_local_diff(
             new is None and entry.new_oid is not None
         )
         binary_sides = () if snapshot_missing else _binary_sides(old, new)
+        non_regular_modes = _non_regular_modes(entry)
         lines_added, lines_removed = (
-            (None, None) if snapshot_missing or binary_sides else _line_counts(old, new)
+            (None, None)
+            if snapshot_missing or binary_sides or non_regular_modes
+            else _line_counts(old, new)
         )
         file_entry = {
             "id": "file::" + path, "path": path,
             "old_path": entry.old_path if entry.status in ("R", "C") else None,
             "language": (
                 "python"
-                if not binary_sides and Path(path).suffix.lower() == ".py"
+                if not binary_sides
+                and not non_regular_modes
+                and Path(path).suffix.lower() == ".py"
                 else None
             ),
             "change_kind": _change_kind(entry.status, entry.old_oid, entry.new_oid),
@@ -555,6 +582,15 @@ def analyze_local_diff(
                 "Binary content detected in {} snapshot; structural parsing and line counts were skipped.".format(
                     " and ".join(binary_sides)
                 ),
+            ))
+            continue
+        if non_regular_modes:
+            skipped += 1
+            warnings.append(_warning(
+                "PARTIAL_ANALYSIS",
+                path,
+                "Non-regular Git mode {} detected; structural parsing and line "
+                "counts were skipped.".format(", ".join(non_regular_modes)),
             ))
             continue
         if file_entry["language"] != "python":
