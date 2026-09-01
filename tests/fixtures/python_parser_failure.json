@@ -1,0 +1,23 @@
+{
+  "files": [
+    {
+      "path": "broken.py",
+      "old_path": null,
+      "language": "python",
+      "change_kind": "modified"
+    }
+  ],
+  "symbols": [],
+  "relationships": [],
+  "metadata": {
+    "files_analyzed": 0,
+    "files_skipped": 1,
+    "warnings": [
+      {
+        "code": "PARSE_FAILURE",
+        "file": "broken.py",
+        "detail": "post-change: ValueError: Tree-sitter reported a syntax error"
+      }
+    ]
+  }
+}
