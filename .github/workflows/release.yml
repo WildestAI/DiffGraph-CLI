@@ -39,8 +39,8 @@ jobs:
             smoke: ./release/wild-macos-arm64 --help
           - target: windows-x64
             runner: windows-latest
-            asset: wild-windows-x64.exe
-            smoke: ./release/wild-windows-x64.exe --help
+            asset: wild-win.exe
+            smoke: ./release/wild-win.exe --help
 
     runs-on: ${{ matrix.runner }}
     steps:
@@ -102,7 +102,7 @@ jobs:
             wild-linux-arm64
             wild-macos-x64
             wild-macos-arm64
-            wild-windows-x64.exe
+            wild-win.exe
           )
 
           for asset in "${expected[@]}"; do
@@ -121,8 +121,24 @@ jobs:
 
           (
             cd release
-            sha256sum "${expected[@]}" > checksums.txt
+            sha256sum "${expected[@]}" > SHA256SUMS
           )
+
+          node - <<'NODE'
+          const fs = require('node:fs');
+          const assets = [
+            'wild-linux-x64',
+            'wild-linux-arm64',
+            'wild-macos-x64',
+            'wild-macos-arm64',
+            'wild-win.exe',
+          ];
+          fs.writeFileSync('release/cli-manifest.json', JSON.stringify({
+            schemaVersion: 1,
+            version: process.env.GITHUB_REF_NAME,
+            assets,
+          }, null, 2) + '\n');
+          NODE
       - name: Create GitHub release
         env:
           GH_TOKEN: ${{ github.token }}
