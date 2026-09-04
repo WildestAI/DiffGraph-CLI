@@ -13,11 +13,11 @@ architecture, then runs its own `wild --help` smoke test:
 - `wild-linux-arm64`
 - `wild-macos-x64`
 - `wild-macos-arm64`
-- `wild-windows-x64.exe`
+- `wild-win.exe`
 
 The publish job downloads those five artifacts and fails before creating a
 release unless every expected file is present and there are exactly five
-binaries. It writes `checksums.txt` with SHA-256 checksums and uploads it with
+binaries. It writes `SHA256SUMS` with SHA-256 checksums and uploads it with
 the binaries to the GitHub release.
 
 ## Credential safety
