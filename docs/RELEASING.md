@@ -32,11 +32,12 @@ Use environment variables in CI and for releases.
 ## Runner availability
 
 The ARM jobs require GitHub-hosted ARM labels (`ubuntu-24.04-arm` and
-`macos-14`); the Intel macOS job uses `macos-13`. Availability and billing for
-these labels depend on the repository visibility and the GitHub plan. If a
-label is unavailable, the workflow fails at scheduling rather than silently
-cross-compiling an incorrect binary. Update the matrix only after confirming an
-alternative runner is native for the target architecture.
+`macos-15`); the Intel macOS job uses `macos-15-intel`. Availability and
+billing for these labels depend on the repository visibility and the GitHub
+plan, so confirm both macOS 15 labels are available before creating a release
+tag. If a label is unavailable, the workflow fails at scheduling rather than
+silently cross-compiling an incorrect binary. Update the matrix only after
+confirming an alternative runner is native for the target architecture.
 
 ## Local Linux check
 

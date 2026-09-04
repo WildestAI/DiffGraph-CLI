@@ -78,12 +78,22 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     return parser.parse_args(argv)
 
 
+def assert_output_dir_safe(output_dir: Path) -> None:
+    """Reject an output directory that would remove the checkout during cleanup."""
+    if ROOT.is_relative_to(output_dir):
+        raise SystemExit(
+            "refusing to use an output directory that is the repository root or an "
+            "ancestor of it"
+        )
+
+
 def main(argv: Sequence[str] | None = None) -> int:
     args = parse_args(argv)
     output_dir = args.output_dir.resolve()
     work_dir = ROOT / "build" / "pyinstaller"
     spec_dir = ROOT / "build" / "spec"
 
+    assert_output_dir_safe(output_dir)
     assert_release_workspace_safe(ROOT)
     if not ENTRYPOINT.is_file():
         raise SystemExit(f"build entrypoint is missing: {ENTRYPOINT}")

@@ -38,3 +38,16 @@ def test_release_build_rejects_nested_dotenv(tmp_path):
     nested_env.write_text("OPENAI_API_KEY=must-not-bundle\n", encoding="utf-8")
 
     assert build.find_forbidden_files(tmp_path) == [nested_env]
+
+@pytest.mark.parametrize("output_dir", [build.ROOT, build.ROOT.parent])
+def test_release_build_rejects_checkout_or_ancestor_output_dir_before_cleanup(
+    monkeypatch, output_dir
+):
+    monkeypatch.setattr(
+        build.shutil,
+        "rmtree",
+        lambda *args, **kwargs: pytest.fail("cleanup called for unsafe output directory"),
+    )
+
+    with pytest.raises(SystemExit, match="repository root or an ancestor"):
+        build.main(["--output-dir", str(output_dir)])

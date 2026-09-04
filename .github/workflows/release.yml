@@ -30,11 +30,11 @@ jobs:
             asset: wild-linux-arm64
             smoke: ./release/wild-linux-arm64 --help
           - target: macos-x64
-            runner: macos-13
+            runner: macos-15-intel
             asset: wild-macos-x64
             smoke: ./release/wild-macos-x64 --help
           - target: macos-arm64
-            runner: macos-14
+            runner: macos-15
             asset: wild-macos-arm64
             smoke: ./release/wild-macos-arm64 --help
           - target: windows-x64
