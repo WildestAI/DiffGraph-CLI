@@ -1,0 +1,151 @@
+name: Release native binaries
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  build:
+    name: Build ${{ matrix.target }}
+    permissions:
+      contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: linux-x64
+            runner: ubuntu-latest
+            asset: wild-linux-x64
+            smoke: ./release/wild-linux-x64 --help
+          - target: linux-arm64
+            runner: ubuntu-24.04-arm
+            asset: wild-linux-arm64
+            smoke: ./release/wild-linux-arm64 --help
+          - target: macos-x64
+            runner: macos-15-intel
+            asset: wild-macos-x64
+            smoke: ./release/wild-macos-x64 --help
+          - target: macos-arm64
+            runner: macos-15
+            asset: wild-macos-arm64
+            smoke: ./release/wild-macos-arm64 --help
+          - target: windows-x64
+            runner: windows-latest
+            asset: wild-win.exe
+            smoke: ./release/wild-win.exe --help
+
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+      - name: Install build dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -r requirements.txt
+      - name: Build native executable
+        run: python build.py --output-dir release --name wild
+      - name: Name release asset
+        shell: bash
+        run: |
+          if [ "${RUNNER_OS}" = "Windows" ]; then
+            mv release/wild.exe "release/${{ matrix.asset }}"
+          else
+            mv release/wild "release/${{ matrix.asset }}"
+          fi
+      - name: Smoke test native executable
+        shell: bash
+        run: ${{ matrix.smoke }}
+      - name: Upload release asset
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-${{ matrix.target }}
+          path: release/${{ matrix.asset }}
+          if-no-files-found: error
+          retention-days: 7
+
+  publish:
+    name: Verify assets and create release
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Download all native binaries
+        uses: actions/download-artifact@v4
+        with:
+          pattern: release-*
+          path: release
+          merge-multiple: true
+      - name: Fail closed and write checksums
+        shell: bash
+        run: |
+          set -euo pipefail
+          expected=(
+            wild-linux-x64
+            wild-linux-arm64
+            wild-macos-x64
+            wild-macos-arm64
+            wild-win.exe
+          )
+
+          for asset in "${expected[@]}"; do
+            test -f "release/${asset}" || {
+              echo "Missing expected release asset: ${asset}" >&2
+              exit 1
+            }
+          done
+
+          actual_count="$(find release -maxdepth 1 -type f | wc -l | tr -d ' ')"
+          test "${actual_count}" -eq "${#expected[@]}" || {
+            echo "Expected exactly ${#expected[@]} binaries, found ${actual_count}" >&2
+            find release -maxdepth 1 -type f -printf '%f\n' >&2
+            exit 1
+          }
+
+          (
+            cd release
+            sha256sum "${expected[@]}" > SHA256SUMS
+          )
+
+          node - <<'NODE'
+          const fs = require('node:fs');
+          const assets = [
+            'wild-linux-x64',
+            'wild-linux-arm64',
+            'wild-macos-x64',
+            'wild-macos-arm64',
+            'wild-win.exe',
+          ];
+          fs.writeFileSync('release/cli-manifest.json', JSON.stringify({
+            schemaVersion: 1,
+            version: process.env.GITHUB_REF_NAME,
+            assets,
+          }, null, 2) + '\n');
+          NODE
+      - name: Create GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          gh release create "${GITHUB_REF_NAME}" release/* \
+            --repo "${GITHUB_REPOSITORY}" \
+            --title "${GITHUB_REF_NAME}" \
+            --generate-notes

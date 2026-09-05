@@ -1,163 +1,125 @@
 #!/usr/bin/env python3
-"""
-Build script for DiffGraph CLI using PyInstaller
+"""Build a native, single-file ``wild`` executable with PyInstaller.
+
+This builder deliberately never supplies PyInstaller with ``--add-data``. In
+particular, a local ``.env`` is rejected before the build starts so credentials
+cannot accidentally become part of a release executable.
 """
 
+from __future__ import annotations
+
+import argparse
+import shutil
 import subprocess
 import sys
-import os
-import re
 from pathlib import Path
+from typing import Sequence
 
-def create_spec_file():
-    """Generate the wild.spec file using PyInstaller if it doesn't exist"""
-    spec_file = "wild.spec"
+ROOT = Path(__file__).resolve().parent
+ENTRYPOINT = ROOT / "diffgraph" / "cli.py"
+FORBIDDEN_BUNDLE_FILE_NAMES = frozenset({".env"})
 
-    if os.path.exists(spec_file):
-        print("✅ Spec file already exists")
-        return True
 
-    print("📝 Generating wild.spec file using PyInstaller...")
+def find_forbidden_files(root: Path) -> list[Path]:
+    """Return credential-like dotfiles that must not be present for a build."""
+    return sorted(
+        path
+        for path in root.rglob("*")
+        if path.is_file()
+        and path.name in FORBIDDEN_BUNDLE_FILE_NAMES
+        and ".git" not in path.parts
+        and ".venv" not in path.parts
+    )
 
-    # Generate spec file using PyInstaller
-    result = subprocess.run([
-        sys.executable, "-m", "PyInstaller",
-        "--name", "wild",
+
+def assert_release_workspace_safe(root: Path) -> None:
+    """Fail before PyInstaller runs if a local credential file is present."""
+    forbidden_files = find_forbidden_files(root)
+    if forbidden_files:
+        rendered_paths = ", ".join(str(path.relative_to(root)) for path in forbidden_files)
+        raise SystemExit(
+            "refusing to build from a workspace containing forbidden file(s): "
+            f"{rendered_paths}. Release builds never package .env files; "
+            "use process environment variables instead."
+        )
+
+
+def build_command(*, output_dir: Path, work_dir: Path, spec_dir: Path, name: str) -> list[str]:
+    """Return the intentionally data-free native PyInstaller invocation."""
+    return [
+        sys.executable,
+        "-m",
+        "PyInstaller",
+        "--noconfirm",
+        "--clean",
         "--onefile",
         "--console",
-        "--specpath", ".",
-        "--distpath", "dist",
-        "--workpath", "build",
-        "--clean",
-        "--noconfirm",
-        "diffgraph/cli.py"
-    ], capture_output=True, text=True)
+        "--name",
+        name,
+        "--distpath",
+        str(output_dir),
+        "--workpath",
+        str(work_dir),
+        "--specpath",
+        str(spec_dir),
+        str(ENTRYPOINT),
+    ]
 
-    if result.returncode != 0:
-        print(f"❌ Failed to generate spec file: {result.stderr}")
-        return False
 
-    print("✅ Generated wild.spec file")
-    return True
+def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--name", default="wild", help="name of the generated executable")
+    parser.add_argument(
+        "--output-dir",
+        type=Path,
+        default=ROOT / "dist",
+        help="directory that receives the executable (default: %(default)s)",
+    )
+    return parser.parse_args(argv)
 
-def ensure_env_in_spec():
-    """Ensure .env file is included in the spec file if it exists"""
-    spec_file = "wild.spec"
 
-    # Check if .env file exists
-    env_file_exists = os.path.exists(".env")
-
-    if not env_file_exists:
-        print("⚠️  .env file not found - skipping")
-        return True
-
-    # Read the spec file
-    with open(spec_file, 'r') as f:
-        content = f.read()
-
-    # Check if .env is already in datas
-    if "('.env', '.')" in content:
-        print("✅ .env file already included in spec file")
-        return True
-
-    print("📝 Adding .env file to spec file...")
-
-    # Find the datas line and add .env
-    # Handle both empty datas array and non-empty datas array
-    if "datas=[]," in content:
-        # Empty datas array
-        content = content.replace("datas=[],", "datas=[('.env', '.')],")
-    elif "datas=[" in content:
-        # Non-empty datas array - add to existing items
-        content = re.sub(
-            r'datas=\[([^\]]*)\],',
-            r'datas=[\1, (\'.env\', \'.\')],',
-            content
+def assert_output_dir_safe(output_dir: Path) -> None:
+    """Reject an output directory that would remove the checkout during cleanup."""
+    if ROOT.is_relative_to(output_dir):
+        raise SystemExit(
+            "refusing to use an output directory that is the repository root or an "
+            "ancestor of it"
         )
-    else:
-        print("⚠️  Could not find datas array in spec file")
-        return False
 
-    with open(spec_file, 'w') as f:
-        f.write(content)
-    print("✅ Added .env file to spec file")
-    return True
 
-def verify_env_in_bundle():
-    """Verify that the .env file is properly included in the built binary"""
-    print("🔍 Verifying .env file in bundle...")
+def main(argv: Sequence[str] | None = None) -> int:
+    args = parse_args(argv)
+    output_dir = args.output_dir.resolve()
+    work_dir = ROOT / "build" / "pyinstaller"
+    spec_dir = ROOT / "build" / "spec"
 
-    # Check if binary exists
-    binary_name = "wild.exe" if sys.platform == 'win32' else "wild"
-    binary_path = os.path.join("dist", binary_name)
+    assert_output_dir_safe(output_dir)
+    assert_release_workspace_safe(ROOT)
+    if not ENTRYPOINT.is_file():
+        raise SystemExit(f"build entrypoint is missing: {ENTRYPOINT}")
 
-    if not os.path.exists(binary_path):
-        print("❌ Binary not found - cannot verify bundle")
-        return False
+    for directory in (output_dir, work_dir, spec_dir):
+        shutil.rmtree(directory, ignore_errors=True)
 
-    # Check if .env file exists in the project directory
-    if os.path.exists(".env"):
-        print("✅ .env file exists in project directory")
-        print("   The binary should be able to load it from the current directory")
-        return True
-    else:
-        print("⚠️  .env file not found in project directory")
-        return False
-
-def main():
-    """Build the DiffGraph CLI binary using PyInstaller"""
-
-    # Check if PyInstaller is installed
     try:
-        import PyInstaller
-    except ImportError:
-        print("❌ PyInstaller not found. Installing...")
-        subprocess.run([sys.executable, "-m", "pip", "install", "pyinstaller"], check=True)
+        import PyInstaller  # noqa: F401
+    except ImportError as error:
+        raise SystemExit("PyInstaller is not installed; install requirements.txt first") from error
 
-    # Create spec file if it doesn't exist
-    create_spec_file()
+    command = build_command(
+        output_dir=output_dir,
+        work_dir=work_dir,
+        spec_dir=spec_dir,
+        name=args.name,
+    )
+    subprocess.run(command, cwd=ROOT, check=True)
 
-    # Ensure .env file is included in spec
-    ensure_env_in_spec()
+    executable = output_dir / (f"{args.name}.exe" if sys.platform == "win32" else args.name)
+    if not executable.is_file():
+        raise SystemExit(f"build completed without expected executable: {executable}")
+    print(executable)
+    return 0
 
-    # Clean previous builds
-    print("🧹 Cleaning previous builds...")
-    for path in ["build", "dist"]:
-        if os.path.exists(path):
-            import shutil
-            try:
-                shutil.rmtree(path)
-            except PermissionError:
-                print(f"⚠️  Could not remove {path} - permission denied. Continuing...")
-            except Exception as e:
-                print(f"⚠️  Could not remove {path}: {e}. Continuing...")
-
-    # Build using the spec file
-    print("🔨 Building DiffGraph CLI...")
-    result = subprocess.run([
-        sys.executable, "-m", "PyInstaller", "wild.spec", "--clean"
-    ], check=True)
-
-    if result.returncode == 0:
-        print("✅ Build completed successfully!")
-        if sys.platform == 'win32':
-            print(f"📦 Binary location: {os.path.join('dist', 'wild.exe')}")
-        else:
-            print(f"📦 Binary location: {os.path.join('dist', 'wild')}")
-
-        # Verify that .env file is properly included
-        verify_env_in_bundle()
-
-        print("\n💡 Environment Variable Loading Tips:")
-        print("   - The binary will look for .env file in multiple locations:")
-        print("     1. Current working directory")
-        print("     2. Next to the executable")
-        print("     3. Inside the bundled resources")
-        print("   - You can also set OPENAI_API_KEY as an environment variable")
-        print("   - Or use the --api-key command line option")
-    else:
-        print("❌ Build failed!")
-        sys.exit(1)
 
 if __name__ == "__main__":
-    main()
+    raise SystemExit(main())
