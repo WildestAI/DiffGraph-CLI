@@ -778,7 +778,7 @@ def test_cli_structural_json_rejects_four_dot_range(tmp_path, monkeypatch):
     assert "explicit non-empty BASE..HEAD or BASE...HEAD refs" in result.output
 
 
-def test_cli_structural_json_preserves_invalid_ref_warning(tmp_path, monkeypatch):
+def test_cli_structural_json_preserves_invalid_ref_warning_code(tmp_path, monkeypatch):
     from click.testing import CliRunner
     from diffgraph.cli import main
 
@@ -795,8 +795,33 @@ def test_cli_structural_json_preserves_invalid_ref_warning(tmp_path, monkeypatch
     artifact = json.loads(result.output)
     assert artifact["files"] == []
     warning = artifact["metadata"]["warnings"][0]
-    assert warning["code"] == "UNKNOWN"
+    assert warning["code"] == "invalid_base_ref"
     assert warning["detail"].startswith("invalid_base_ref:")
+
+
+def test_cli_structural_json_preserves_scoped_pathspec_warning_code(tmp_path, monkeypatch):
+    """Pathspec failures remain actionable structured artifact warnings."""
+    from click.testing import CliRunner
+    from diffgraph.cli import main
+
+    root = repo(tmp_path)
+    write(root, "app.py", "def value():\n    return 1\n")
+    commit(root)
+    monkeypatch.chdir(root)
+
+    outside = tmp_path / "outside.py"
+    result = CliRunner().invoke(
+        main, ["--structural-json", "-", "diff", "--", str(outside)]
+    )
+
+    assert result.exit_code == 0, result.output
+    artifact = json.loads(result.output)
+    assert artifact["files"] == []
+    assert artifact["metadata"]["warnings"] == [{
+        "code": "pathspec_outside_repository",
+        "file": str(outside),
+        "detail": "pathspec_outside_repository: Absolute pathspec is outside the repository and was not resolved",
+    }]
 
 
 def test_cli_structural_json_requires_separator_before_pathspecs(tmp_path, monkeypatch):
