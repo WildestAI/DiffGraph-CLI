@@ -395,6 +395,11 @@
             "UNKNOWN",
             "not_a_git_repository",
             "git_diff_failed",
+            "git_untracked_failed",
+            "invalid_base_ref",
+            "invalid_head_ref",
+            "merge_base_failed",
+            "malformed_merge_base",
             "malformed_git_output",
             "undecodable_path",
             "missing_object_id",
@@ -402,7 +407,10 @@
             "worktree_read_failed",
             "hash_object_failed",
             "malformed_hash_object_output",
-            "unmerged_index_entry"
+            "unmerged_index_entry",
+            "pathspec_outside_repository",
+            "gitlink_head_failed",
+            "malformed_gitlink_head"
           ],
           "description": "Machine-readable warning code. Consumers can surface these to the user."
         },

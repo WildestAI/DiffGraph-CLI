@@ -36,6 +36,31 @@ ANALYZER = "diffgraph-python-tree-sitter"
 QUERY_VERSION = "python-structure-v2"
 _PARSER_STATE = threading.local()
 
+# Resolver failures are part of the public artifact contract. Keep their
+# machine-readable identity instead of collapsing an actionable Git failure
+# into UNKNOWN, so clients can offer the right remediation without parsing
+# the human-oriented detail string.
+RESOLUTION_WARNING_CODES = frozenset({
+    "not_a_git_repository",
+    "git_diff_failed",
+    "git_untracked_failed",
+    "invalid_base_ref",
+    "invalid_head_ref",
+    "merge_base_failed",
+    "malformed_merge_base",
+    "malformed_git_output",
+    "undecodable_path",
+    "missing_object_id",
+    "unsupported_worktree_entry",
+    "worktree_read_failed",
+    "hash_object_failed",
+    "malformed_hash_object_output",
+    "unmerged_index_entry",
+    "pathspec_outside_repository",
+    "gitlink_head_failed",
+    "malformed_gitlink_head",
+})
+
 
 class StructuralDependencyError(ImportError):
     """A required local structural parser dependency is unavailable."""
@@ -370,19 +395,7 @@ def _warning(code: str, path: Optional[str], detail: str) -> Dict[str, str]:
 
 
 def _resolution_warning(item: ResolutionWarning) -> Dict[str, str]:
-    known_codes = {
-        "not_a_git_repository",
-        "git_diff_failed",
-        "malformed_git_output",
-        "undecodable_path",
-        "missing_object_id",
-        "unsupported_worktree_entry",
-        "worktree_read_failed",
-        "hash_object_failed",
-        "malformed_hash_object_output",
-        "unmerged_index_entry",
-    }
-    code = item.code if item.code in known_codes else "UNKNOWN"
+    code = item.code if item.code in RESOLUTION_WARNING_CODES else "UNKNOWN"
     return _warning(code, item.path, "{}: {}".format(item.code, item.message))
 
 
