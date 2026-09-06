@@ -3,20 +3,56 @@ name: Release native binaries
 on:
   push:
     tags:
-      - "v*"
+      - "cli-v*"
+  workflow_dispatch:
+    inputs:
+      release_tag:
+        description: "Immutable CLI tag to build and publish"
+        required: true
+        type: string
 
 permissions:
   contents: read
 
 concurrency:
-  group: release-${{ github.ref }}
+  group: release-${{ inputs.release_tag || github.ref_name }}
   cancel-in-progress: false
 
+env:
+  RELEASE_TAG: ${{ inputs.release_tag || github.ref_name }}
+
 jobs:
+  validate:
+    name: Validate immutable release tag
+    runs-on: ubuntu-latest
+    outputs:
+      source_sha: ${{ steps.source.outputs.sha }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.RELEASE_TAG }}
+          fetch-depth: 0
+          persist-credentials: false
+      - id: source
+        shell: bash
+        run: |
+          set -euo pipefail
+          tag="${RELEASE_TAG}"
+          if [[ ! "$tag" =~ ^cli-v[0-9]+\.[0-9]+\.[0-9]+-[0-9a-f]{12}$ ]]; then
+            echo "Expected cli-v<semver>-<12-char-sha>; got $tag" >&2
+            exit 1
+          fi
+          sha="$(git rev-parse HEAD)"
+          encoded_sha="${tag##*-}"
+          if [[ "${sha:0:12}" != "$encoded_sha" ]]; then
+            echo "Tag $tag must encode the checked-out commit; got $sha" >&2
+            exit 1
+          fi
+          echo "sha=$sha" >> "$GITHUB_OUTPUT"
+
   build:
     name: Build ${{ matrix.target }}
-    permissions:
-      contents: read
+    needs: validate
     strategy:
       fail-fast: false
       matrix:
@@ -46,6 +82,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
+          ref: ${{ env.RELEASE_TAG }}
           persist-credentials: false
       - uses: actions/setup-python@v5
         with:
@@ -78,13 +115,14 @@ jobs:
 
   publish:
     name: Verify assets and create release
-    needs: build
+    needs: [validate, build]
     runs-on: ubuntu-latest
     permissions:
       contents: write
     steps:
       - uses: actions/checkout@v4
         with:
+          ref: ${{ env.RELEASE_TAG }}
           fetch-depth: 0
           persist-credentials: false
       - name: Download all native binaries
@@ -135,17 +173,20 @@ jobs:
           ];
           fs.writeFileSync('release/cli-manifest.json', JSON.stringify({
             schemaVersion: 1,
-            version: process.env.GITHUB_REF_NAME,
+            version: process.env.RELEASE_TAG,
+            sourceCommit: process.env.SOURCE_SHA,
             assets,
           }, null, 2) + '\n');
           NODE
+        env:
+          SOURCE_SHA: ${{ needs.validate.outputs.source_sha }}
       - name: Create GitHub release
         env:
           GH_TOKEN: ${{ github.token }}
         shell: bash
         run: |
           set -euo pipefail
-          gh release create "${GITHUB_REF_NAME}" release/* \
+          gh release create "${RELEASE_TAG}" release/* \
             --repo "${GITHUB_REPOSITORY}" \
-            --title "${GITHUB_REF_NAME}" \
+            --title "${RELEASE_TAG}" \
             --generate-notes
