@@ -198,6 +198,9 @@ def test_sha256_repository_preserves_full_immutable_blob_identities(tmp_path):
     ranged = resolve_commit_range(str(repo), "before", "HEAD")
 
     assert ranged.warnings == ()
+    assert ranged.base_oid == oid(repo, "before")
+    assert ranged.head_oid == oid(repo, "HEAD")
+    assert ranged.comparison_base_oid == ranged.base_oid
     assert all(len(item) == 64 for item in (ranged.base_oid, ranged.head_oid, ranged.comparison_base_oid))
     assert [(entry.old_oid, entry.new_oid) for entry in ranged.entries] == [
         (old_oid, oid(repo, "HEAD:module.py"))
