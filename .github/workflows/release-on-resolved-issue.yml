@@ -6,7 +6,7 @@ on:
     types: [completed]
 
 permissions:
-  actions: read
+  actions: write
   contents: write
   issues: read
   pull-requests: read
@@ -82,12 +82,14 @@ jobs:
           echo "tag=$tag" >> "$GITHUB_OUTPUT"
       - name: Create immutable release tag at the tested commit
         env:
+          GH_TOKEN: ${{ github.token }}
           TAG: ${{ steps.release.outputs.tag }}
           TESTED_SHA: ${{ github.event.workflow_run.head_sha }}
         shell: bash
         run: |
           set -euo pipefail
           git tag -a "$TAG" "$TESTED_SHA" -m "Release $TAG"
+          git remote set-url origin "https://x-access-token:${GH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git"
           git push origin "$TAG"
       - name: Publish the immutable tag
         env:

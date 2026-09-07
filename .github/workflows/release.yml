@@ -38,12 +38,16 @@ jobs:
         run: |
           set -euo pipefail
           tag="${RELEASE_TAG}"
-          if [[ ! "$tag" =~ ^cli-v[0-9]+\.[0-9]+\.[0-9]+-[0-9a-f]{12}$ ]]; then
+          if [[ "$tag" =~ ^cli-v([0-9]+)\.([0-9]+)\.([0-9]+)-([0-9a-f]{12})$ ]]; then
+            version="${BASH_REMATCH[1]}.${BASH_REMATCH[2]}.${BASH_REMATCH[3]}"
+            encoded_sha="${BASH_REMATCH[4]}"
+          else
             echo "Expected cli-v<semver>-<12-char-sha>; got $tag" >&2
             exit 1
           fi
+          grep -Eq "version=[\"']${version}[\"']" setup.py || { echo "setup.py must declare ${version}." >&2; exit 1; }
+          grep -Eq "__version__[[:space:]]*=[[:space:]]*[\"']${version}[\"']" diffgraph/__init__.py || { echo "diffgraph/__init__.py must declare ${version}." >&2; exit 1; }
           sha="$(git rev-parse HEAD)"
-          encoded_sha="${tag##*-}"
           if [[ "${sha:0:12}" != "$encoded_sha" ]]; then
             echo "Tag $tag must encode the checked-out commit; got $sha" >&2
             exit 1
@@ -82,7 +86,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          ref: ${{ env.RELEASE_TAG }}
+          ref: ${{ needs.validate.outputs.source_sha }}
           persist-credentials: false
       - uses: actions/setup-python@v5
         with:
@@ -122,9 +126,21 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          ref: ${{ env.RELEASE_TAG }}
+          ref: ${{ needs.validate.outputs.source_sha }}
           fetch-depth: 0
           persist-credentials: false
+      - name: Verify immutable tag still resolves to the validated source
+        env:
+          SOURCE_SHA: ${{ needs.validate.outputs.source_sha }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          git fetch --no-tags origin "refs/tags/${RELEASE_TAG}:refs/tags/${RELEASE_TAG}"
+          tag_sha="$(git rev-parse "${RELEASE_TAG}^{commit}")"
+          test "$tag_sha" = "$SOURCE_SHA" || {
+            echo "Tag ${RELEASE_TAG} resolves to $tag_sha, not validated source $SOURCE_SHA." >&2
+            exit 1
+          }
       - name: Download all native binaries
         uses: actions/download-artifact@v4
         with:
