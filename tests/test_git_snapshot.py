@@ -49,6 +49,16 @@ def make_repo(tmp_path):
     return repo
 
 
+def make_sha256_repo(tmp_path):
+    """Create a repository whose immutable object IDs use SHA-256."""
+    repo = tmp_path / "sha256-repo"
+    repo.mkdir()
+    git(repo, "init", "--object-format=sha256")
+    git(repo, "config", "user.name", "Snapshot Tests")
+    git(repo, "config", "user.email", "snapshot@example.test")
+    return repo
+
+
 def make_conflicted_repo(tmp_path):
     """Create one unresolved merge conflict in an otherwise valid repository."""
 
@@ -155,6 +165,46 @@ def test_unstaged_modify_and_delete_have_exact_identities(tmp_path):
     assert deleted.status == "D"
     assert (deleted.old_oid, deleted.new_oid) == (old_delete, None)
     assert (deleted.old_mode, deleted.new_mode) == ("100644", None)
+
+
+def test_sha256_repository_preserves_full_immutable_blob_identities(tmp_path):
+    """Exact snapshot provenance must not assume Git's legacy SHA-1 format."""
+    repo = make_sha256_repo(tmp_path)
+    write(repo, "module.py", b"value = 1\n")
+    commit_all(repo, "base")
+    git(repo, "branch", "before")
+    old_oid = oid(repo, "HEAD:module.py")
+
+    write(repo, "module.py", b"value = 2\n")
+    unstaged = resolve_unstaged(str(repo), ["module.py"])
+
+    assert unstaged.warnings == ()
+    assert len(unstaged.entries) == 1
+    unstaged_entry = unstaged.entries[0]
+    assert (unstaged_entry.old_oid, unstaged_entry.new_oid) == (
+        old_oid,
+        git(
+            repo,
+            "hash-object",
+            "--stdin",
+            "--path=module.py",
+            input_bytes=b"value = 2\n",
+        ).decode("ascii").strip(),
+    )
+    assert all(len(item) == 64 for item in (unstaged_entry.old_oid, unstaged_entry.new_oid))
+
+    git(repo, "add", "--", "module.py")
+    commit_all(repo, "update")
+    ranged = resolve_commit_range(str(repo), "before", "HEAD")
+
+    assert ranged.warnings == ()
+    assert ranged.base_oid == oid(repo, "before")
+    assert ranged.head_oid == oid(repo, "HEAD")
+    assert ranged.comparison_base_oid == ranged.base_oid
+    assert all(len(item) == 64 for item in (ranged.base_oid, ranged.head_oid, ranged.comparison_base_oid))
+    assert [(entry.old_oid, entry.new_oid) for entry in ranged.entries] == [
+        (old_oid, oid(repo, "HEAD:module.py"))
+    ]
 
 
 def test_unstaged_hash_matches_git_add_clean_filter_semantics(tmp_path):
