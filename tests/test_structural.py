@@ -913,6 +913,53 @@ def test_async_python_functions_are_structural_symbols_and_callers(tmp_path):
     assert ("calls", "sym::service.py::Service.run", "sym::service.py::helper") in relationships
 
 
+def test_module_constants_and_type_aliases_are_deterministic_symbols(tmp_path):
+    """Python's unambiguous module declarations belong in the local graph."""
+    root = repo(tmp_path)
+    write(
+        root,
+        "settings.py",
+        "from typing import TypeAlias\n\n"
+        "MAX_RETRIES = 3\n"
+        "UserId: TypeAlias = str\n"
+        "type Payload = dict[str, int]\n"
+        "runtime_value = 1\n",
+    )
+    commit(root)
+    write(
+        root,
+        "settings.py",
+        "from typing import TypeAlias\n\n"
+        "MAX_RETRIES = 5\n"
+        "DEFAULT_TIMEOUT = 30\n"
+        "type Payload = dict[str, str]\n"
+        "runtime_value = 2\n",
+    )
+
+    artifact = analyze_local_diff(str(root))
+
+    assert_valid(artifact)
+    symbols = {item["qualified_name"]: item for item in artifact["symbols"]}
+    assert symbols["MAX_RETRIES"]["kind"] == "constant"
+    assert symbols["MAX_RETRIES"]["change_kind"] == "modified"
+    assert symbols["DEFAULT_TIMEOUT"]["kind"] == "constant"
+    assert symbols["DEFAULT_TIMEOUT"]["change_kind"] == "added"
+    assert symbols["UserId"]["kind"] == "type_alias"
+    assert symbols["UserId"]["change_kind"] == "deleted"
+    assert symbols["Payload"]["kind"] == "type_alias"
+    assert symbols["Payload"]["change_kind"] == "modified"
+    assert "runtime_value" not in symbols
+    defines = {
+        (item["source_id"], item["target_id"])
+        for item in artifact["relationships"]
+        if item["kind"] == "defines"
+    }
+    assert ("file::settings.py", "sym::settings.py::MAX_RETRIES") in defines
+    assert ("file::settings.py", "sym::settings.py::DEFAULT_TIMEOUT") in defines
+    assert ("file::settings.py", "sym::settings.py::Payload") in defines
+    assert ("file::settings.py", "sym::settings.py::UserId") not in defines
+
+
 def test_duplicate_symbol_occurrences_are_preserved(tmp_path):
     root = repo(tmp_path)
     write(
@@ -1336,6 +1383,26 @@ def test_module_declaration_rebinds_imported_alias(tmp_path, declaration):
     assert_valid(artifact)
     calls = [item for item in artifact["relationships"] if item["kind"] == "calls"]
     assert all(item["resolution_method"] != "import_grounded" for item in calls)
+
+
+def test_pep_695_type_alias_rebinds_imported_alias(tmp_path):
+    """A module alias shadows an earlier import for conservative call edges."""
+    root = repo(tmp_path)
+    write(
+        root,
+        "type_alias_rebind.py",
+        "from remote.worker import execute as Alias\n\n"
+        "type Alias = int\n\n"
+        "def caller():\n"
+        "    Alias()\n",
+    )
+    git(root, "add", "type_alias_rebind.py")
+
+    artifact = analyze_local_diff(str(root), staged=True)
+
+    assert_valid(artifact)
+    calls = [item for item in artifact["relationships"] if item["kind"] == "calls"]
+    assert calls == []
 
 
 def test_import_binding_remains_visible_before_later_rebind(tmp_path):

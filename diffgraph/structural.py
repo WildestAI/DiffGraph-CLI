@@ -187,6 +187,34 @@ def _name_child(node):
     return next((item for item in node.children if item.type == "identifier"), None)
 
 
+def _first_identifier(node):
+    """Return the first identifier below *node*, preserving source order."""
+    if node is None:
+        return None
+    if node.type == "identifier":
+        return node
+    for child in node.children:
+        identifier = _first_identifier(child)
+        if identifier is not None:
+            return identifier
+    return None
+
+
+def _is_type_alias_annotation(source: bytes, node) -> bool:
+    """Recognize the conservative ``TypeAlias`` assignment spelling.
+
+    PEP 613 aliases use an annotated assignment rather than a dedicated
+    Tree-sitter node. Treat only a literal ``TypeAlias`` annotation (including
+    the explicit ``typing.TypeAlias`` spelling) as a type alias; ordinary type
+    annotations remain values and must not become invented topology.
+    """
+    annotation = node.child_by_field_name("type")
+    if annotation is None:
+        return False
+    text = _node_text(source, annotation)
+    return text in ("TypeAlias", "typing.TypeAlias")
+
+
 def _parse_python(
     content: bytes,
 ) -> Tuple[
@@ -301,6 +329,49 @@ def _parse_python(
                         snippet,
                         tuple(imported),
                     ))
+        elif not parents and node.type in (
+            "assignment", "annotated_assignment", "type_alias_statement"
+        ):
+            # The schema already has ``constant`` and ``type_alias`` symbol
+            # kinds. Surface only module-level declarations whose syntax is
+            # unambiguous: ALL_CAPS value bindings and PEP 613/695 aliases.
+            # Local assignments remain bindings used for call-resolution
+            # safety, not promoted to structural symbols.
+            if node.type == "type_alias_statement":
+                name_node = _first_identifier(
+                    node.children[1] if len(node.children) > 1 else None
+                )
+                kind = "type_alias"
+            else:
+                name_node = node.child_by_field_name("left")
+                kind = (
+                    "type_alias"
+                    if _is_type_alias_annotation(content, node)
+                    else "constant"
+                )
+                if (
+                    kind == "constant"
+                    and (name_node is None or name_node.type != "identifier"
+                         or not _node_text(content, name_node).isupper())
+                ):
+                    name_node = None
+            if name_node is not None and name_node.type == "identifier":
+                name = _node_text(content, name_node)
+                occurrence = symbol_occurrences.get(name, 0)
+                symbol_occurrences[name] = occurrence + 1
+                qname = name if occurrence == 0 else "{}#{}".format(name, occurrence)
+                body = content[node.start_byte:node.end_byte]
+                symbols.append(
+                    _Symbol(
+                        name,
+                        qname,
+                        kind,
+                        None,
+                        node.start_point[0] + 1,
+                        node.end_point[0] + 1,
+                        hashlib.sha256(body).hexdigest(),
+                    )
+                )
         elif node.type == "call":
             function = node.child_by_field_name("function")
             if function is not None and function.type == "identifier":
@@ -330,6 +401,15 @@ def _parse_python(
             "import_statement", "import_from_statement"
         ):
             bindings.setdefault(scope, set()).update(identifiers(node))
+        elif node.type == "type_alias_statement":
+            name_node = _first_identifier(
+                node.children[1] if len(node.children) > 1 else None
+            )
+            if name_node is not None and name_node.type == "identifier":
+                name = _node_text(content, name_node)
+                bindings.setdefault(scope, set()).add(name)
+                if scope is None:
+                    module_rebindings.append((name, node.start_point[0] + 1))
         elif node.type in ("assignment", "annotated_assignment", "for_statement"):
             left = node.child_by_field_name("left")
             if left is not None:
@@ -674,7 +754,7 @@ def analyze_local_diff(
                     "source_id": target, "target_id": source, "analysis_source": "structural",
                     "evidence": _evidence(output_path, item, entry.new_oid),
                 })
-            elif item.kind in ("function", "class"):
+            elif item.kind in ("function", "class", "constant", "type_alias"):
                 relationships.append({
                     "id": "rel::file::{}->{}".format(output_path, source), "kind": "defines",
                     "source_id": "file::" + output_path, "target_id": source,
