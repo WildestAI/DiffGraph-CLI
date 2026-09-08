@@ -401,6 +401,15 @@ def _parse_python(
             "import_statement", "import_from_statement"
         ):
             bindings.setdefault(scope, set()).update(identifiers(node))
+        elif node.type == "type_alias_statement":
+            name_node = _first_identifier(
+                node.children[1] if len(node.children) > 1 else None
+            )
+            if name_node is not None and name_node.type == "identifier":
+                name = _node_text(content, name_node)
+                bindings.setdefault(scope, set()).add(name)
+                if scope is None:
+                    module_rebindings.append((name, node.start_point[0] + 1))
         elif node.type in ("assignment", "annotated_assignment", "for_statement"):
             left = node.child_by_field_name("left")
             if left is not None:

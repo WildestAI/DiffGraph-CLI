@@ -1385,6 +1385,26 @@ def test_module_declaration_rebinds_imported_alias(tmp_path, declaration):
     assert all(item["resolution_method"] != "import_grounded" for item in calls)
 
 
+def test_pep_695_type_alias_rebinds_imported_alias(tmp_path):
+    """A module alias shadows an earlier import for conservative call edges."""
+    root = repo(tmp_path)
+    write(
+        root,
+        "type_alias_rebind.py",
+        "from remote.worker import execute as Alias\n\n"
+        "type Alias = int\n\n"
+        "def caller():\n"
+        "    Alias()\n",
+    )
+    git(root, "add", "type_alias_rebind.py")
+
+    artifact = analyze_local_diff(str(root), staged=True)
+
+    assert_valid(artifact)
+    calls = [item for item in artifact["relationships"] if item["kind"] == "calls"]
+    assert calls == []
+
+
 def test_import_binding_remains_visible_before_later_rebind(tmp_path):
     root = repo(tmp_path)
     write(
