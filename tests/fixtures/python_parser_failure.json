@@ -16,7 +16,7 @@
       {
         "code": "PARSE_FAILURE",
         "file": "broken.py",
-        "detail": "post-change: ValueError: Tree-sitter reported a syntax error"
+        "detail": "post-change: ValueError: Tree-sitter reported a syntax error at line 1, column 12"
       }
     ]
   }
