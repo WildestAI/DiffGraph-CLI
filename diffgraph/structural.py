@@ -215,6 +215,27 @@ def _is_type_alias_annotation(source: bytes, node) -> bool:
     return text in ("TypeAlias", "typing.TypeAlias")
 
 
+def _syntax_error_detail(root) -> str:
+    """Return the first parser-reported error location in source order.
+
+    Tree-sitter's root error flag tells us a snapshot is unsafe to turn into
+    topology, but users still need a deterministic, file-scoped clue for the
+    repair.  Traverse children in source order and report the first explicit
+    ERROR or missing node without attempting error recovery or inventing a
+    structural claim.
+    """
+    pending = [root]
+    while pending:
+        node = pending.pop()
+        if node.is_error or node.is_missing:
+            line, column = node.start_point
+            return "Tree-sitter reported a syntax error at line {}, column {}".format(
+                line + 1, column + 1
+            )
+        pending.extend(reversed(node.children))
+    return "Tree-sitter reported a syntax error"
+
+
 def _parse_python(
     content: bytes,
 ) -> Tuple[
@@ -229,7 +250,7 @@ def _parse_python(
     content.decode("utf-8")
     tree = _parser().parse(content)
     if tree.root_node.has_error:
-        raise ValueError("Tree-sitter reported a syntax error")
+        raise ValueError(_syntax_error_detail(tree.root_node))
 
     symbols: List[_Symbol] = []
     imports: List[_Import] = []
