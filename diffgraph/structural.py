@@ -922,6 +922,11 @@ def analyze_local_diff(
                 resolution.comparison_base_oid if is_commit_range else "HEAD" if staged else None
             ),
             "head_ref": resolution.head_oid if is_commit_range else None,
+            "requested_base_ref": resolution.base_ref if is_commit_range else None,
+            "requested_head_ref": resolution.head_ref if is_commit_range else None,
+            "comparison_mode": (
+                "three_dot" if three_dot else "two_dot" if is_commit_range else None
+            ),
             "pathspecs": list(pathspecs or []), "repo_root": root,
         },
         "files": files, "symbols": symbols, "relationships": relationships,

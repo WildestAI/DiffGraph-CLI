@@ -696,6 +696,9 @@ def test_cli_structural_json_resolves_immutable_two_dot_range(tmp_path, monkeypa
     assert artifact["diff_ref"]["kind"] == "commit_range"
     assert artifact["diff_ref"]["base_ref"] == base_oid
     assert artifact["diff_ref"]["head_ref"] == head_oid
+    assert artifact["diff_ref"]["requested_base_ref"] == "HEAD~1"
+    assert artifact["diff_ref"]["requested_head_ref"] == "HEAD"
+    assert artifact["diff_ref"]["comparison_mode"] == "two_dot"
     provenance = json.loads(artifact["files"][0]["evidence"][0]["detail"])
     assert provenance["old_oid"] == old_blob
     assert provenance["new_oid"] == new_blob
@@ -734,6 +737,9 @@ def test_cli_structural_json_three_dot_uses_merge_base_and_pathspec(tmp_path, mo
         "kind": "commit_range",
         "base_ref": merge_base_oid,
         "head_ref": head_oid,
+        "requested_base_ref": "left",
+        "requested_head_ref": "right",
+        "comparison_mode": "three_dot",
         "pathspecs": ["included.py"],
         "repo_root": str(root),
     }
