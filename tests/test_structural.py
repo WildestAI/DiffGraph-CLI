@@ -1442,3 +1442,33 @@ def test_later_import_does_not_hide_earlier_local_call(tmp_path):
     assert len(calls) == 1
     assert calls[0]["target_id"] == "sym::local_before_import.py::run"
     assert calls[0]["resolution_method"] == "resolved"
+
+
+def test_decorator_change_is_part_of_python_declaration_evidence(tmp_path):
+    """Decorator edits modify the wrapped declaration rather than disappearing."""
+    root = repo(tmp_path)
+    write(
+        root,
+        "decorated.py",
+        "@first\ndef decorated():\n    return 1\n",
+    )
+    commit(root)
+    write(
+        root,
+        "decorated.py",
+        "@second\ndef decorated():\n    return 1\n",
+    )
+
+    artifact = analyze_local_diff(str(root))
+
+    assert_valid(artifact)
+    symbol = next(item for item in artifact["symbols"] if item["name"] == "decorated")
+    assert symbol["kind"] == "function"
+    assert symbol["change_kind"] == "modified"
+    assert symbol["evidence"] == [{
+        "kind": "ast_parse",
+        "file": "decorated.py",
+        "line_start": 1,
+        "line_end": 3,
+        "detail": symbol["evidence"][0]["detail"],
+    }]
