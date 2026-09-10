@@ -290,15 +290,27 @@ def _parse_python(
                     if occurrence == 0
                     else "{}#{}".format(base_qname, occurrence)
                 )
-                body = content[node.start_byte:node.end_byte]
+                # Tree-sitter wraps decorated declarations in a
+                # ``decorated_definition`` node. The decorator is part of the
+                # declaration's exact source-level behavior, so include that
+                # wrapper in the symbol span and hash. Otherwise changing
+                # ``@decorator`` could incorrectly leave the declaration
+                # unchanged in a deterministic DiffGraph artifact.
+                declaration = (
+                    node.parent
+                    if node.parent is not None
+                    and node.parent.type == "decorated_definition"
+                    else node
+                )
+                body = content[declaration.start_byte:declaration.end_byte]
                 symbols.append(
                     _Symbol(
                         name,
                         qname,
                         kind,
                         parent,
-                        node.start_point[0] + 1,
-                        node.end_point[0] + 1,
+                        declaration.start_point[0] + 1,
+                        declaration.end_point[0] + 1,
                         hashlib.sha256(body).hexdigest(),
                     )
                 )
