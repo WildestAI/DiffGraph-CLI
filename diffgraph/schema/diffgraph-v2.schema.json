@@ -41,7 +41,7 @@
         },
         "base_ref": {
           "type": ["string", "null"],
-          "description": "Commit SHA or ref for the base side. null for working-tree diffs."
+          "description": "Resolved comparison-base commit object ID; for three_dot ranges this is the resolved merge base. null for working-tree diffs."
         },
         "head_ref": {
           "type": ["string", "null"],

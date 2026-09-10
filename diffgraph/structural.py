@@ -925,7 +925,7 @@ def analyze_local_diff(
             "requested_base_ref": resolution.base_ref if is_commit_range else None,
             "requested_head_ref": resolution.head_ref if is_commit_range else None,
             "comparison_mode": (
-                "three_dot" if three_dot else "two_dot" if is_commit_range else None
+                ("three_dot" if three_dot else "two_dot") if is_commit_range else None
             ),
             "pathspecs": list(pathspecs or []), "repo_root": root,
         },
