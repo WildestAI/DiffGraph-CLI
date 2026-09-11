@@ -41,11 +41,24 @@
         },
         "base_ref": {
           "type": ["string", "null"],
-          "description": "Commit SHA or ref for the base side. null for working-tree diffs."
+          "description": "Resolved comparison-base commit object ID; for three_dot ranges this is the resolved merge base. null for working-tree diffs."
         },
         "head_ref": {
           "type": ["string", "null"],
-          "description": "Commit SHA or ref for the head side. null for working-tree diffs."
+          "description": "Immutable commit object ID for the head side. null for working-tree diffs."
+        },
+        "requested_base_ref": {
+          "type": ["string", "null"],
+          "description": "User-supplied base ref before immutable resolution. null for working-tree diffs."
+        },
+        "requested_head_ref": {
+          "type": ["string", "null"],
+          "description": "User-supplied head ref before immutable resolution. null for working-tree diffs."
+        },
+        "comparison_mode": {
+          "type": ["string", "null"],
+          "enum": ["two_dot", "three_dot", null],
+          "description": "Commit-range semantics. three_dot uses the resolved merge-base in base_ref. null for working-tree diffs."
         },
         "pathspecs": {
           "type": "array",

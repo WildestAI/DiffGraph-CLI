@@ -96,8 +96,10 @@ Canonical output supports local unstaged (`index` → working tree), staged
 (`HEAD` → index), explicit two-dot (`BASE..HEAD`), and explicit three-dot
 (`BASE...HEAD`) comparisons. Two-dot resolves both refs to immutable commits;
 three-dot resolves their merge base and compares it with the immutable head,
-matching Git diff semantics. The artifact records those exact comparison OIDs
-and every file's pre/post blob identities. Invalid refs and unavailable merge
+matching Git diff semantics. For commit ranges, `diff_ref` records both the
+user-requested base/head refs (`requested_base_ref`, `requested_head_ref`) and
+the resolved immutable comparison endpoints (`base_ref`, `head_ref`), plus
+`comparison_mode`; every file records its pre/post blob identities. Invalid refs and unavailable merge
 bases produce structured warnings instead of false changes.
 
 Put pathspecs after `--`. Pathspecs are interpreted relative to the directory
