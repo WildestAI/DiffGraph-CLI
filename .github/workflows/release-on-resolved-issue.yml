@@ -25,6 +25,7 @@ jobs:
     runs-on: ubuntu-latest
     outputs:
       eligible: ${{ steps.eligibility.outputs.eligible }}
+      bump: ${{ steps.eligibility.outputs.bump }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -39,13 +40,20 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          query='query($owner:String!, $repo:String!) { repository(owner:$owner, name:$repo) { pullRequests(first:100, states:MERGED, baseRefName:"main", orderBy:{field:UPDATED_AT,direction:DESC}) { nodes { number mergeCommit { oid } labels(first:20) { nodes { name } } closingIssuesReferences(first:20) { nodes { number repository { nameWithOwner } labels(first:30) { nodes { name } } } } } } } }'
+          query='query($owner:String!, $repo:String!) { repository(owner:$owner, name:$repo) { pullRequests(first:100, states:MERGED, baseRefName:"main", orderBy:{field:UPDATED_AT,direction:DESC}) { pageInfo { hasNextPage } nodes { number mergeCommit { oid } labels(first:20) { pageInfo { hasNextPage } nodes { name } } closingIssuesReferences(first:20) { pageInfo { hasNextPage } nodes { number repository { nameWithOwner } labels(first:30) { pageInfo { hasNextPage } nodes { name } } } } } } } } }'
           result="$(gh api graphql -f query="$query" -f owner="${GITHUB_REPOSITORY_OWNER}" -f repo="${GITHUB_REPOSITORY#*/}")"
-          pull_requests="$(jq -c '.data.repository.pullRequests.nodes' <<< "$result")"
-          outcome="$(python scripts/release_eligibility.py --tested-sha "$TESTED_SHA" --repository "$GITHUB_REPOSITORY" --pull-requests-json "$pull_requests")"
-          echo "$outcome"
+          repository="$(jq -c '.data.repository' <<< "$result")"
+          if outcome="$(python scripts/release_eligibility.py --tested-sha "$TESTED_SHA" --repository "$GITHUB_REPOSITORY" --pull-requests-json "$repository")"; then
+            echo "$outcome"
+          else
+            status=$?
+            echo "$outcome"
+            exit "$status"
+          fi
           eligible="$(jq -r '.eligible' <<< "$outcome")"
+          bump="$(jq -r '.bump' <<< "$outcome")"
           echo "eligible=$eligible" >> "$GITHUB_OUTPUT"
+          echo "bump=$bump" >> "$GITHUB_OUTPUT"
 
       - id: release
         name: Validate an eligible release and calculate a tag
@@ -56,11 +64,11 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          query='query($owner:String!, $repo:String!) { repository(owner:$owner, name:$repo) { pullRequests(first:100, states:MERGED, baseRefName:"main", orderBy:{field:UPDATED_AT,direction:DESC}) { nodes { number mergeCommit { oid } labels(first:20) { nodes { name } } closingIssuesReferences(first:20) { nodes { number repository { nameWithOwner } labels(first:30) { nodes { name } } } } } } } }'
-          result="$(gh api graphql -f query="$query" -f owner="${GITHUB_REPOSITORY_OWNER}" -f repo="${GITHUB_REPOSITORY#*/}")"
-          matching="$(jq --arg sha "$TESTED_SHA" '[.data.repository.pullRequests.nodes[] | select(.mergeCommit.oid == $sha)]' <<< "$result")"
-          labels="$(jq -r '.[0].labels.nodes[].name' <<< "$matching")"
-          bump="$(grep -E '^release:(patch|minor|major)$' <<< "$labels" | sed 's/^release://')"
+          bump="${{ steps.eligibility.outputs.bump }}"
+          case "$bump" in
+            patch|minor|major) ;;
+            *) echo "Eligibility snapshot did not provide a valid release bump." >&2; exit 1 ;;
+          esac
 
           latest="$(git tag -l 'cli-v*' --sort=-v:refname | head -n1 || true)"
           if [[ "$latest" =~ ^cli-v([0-9]+)\.([0-9]+)\.([0-9]+)-[0-9a-f]{12}$ ]]; then

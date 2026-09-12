@@ -23,12 +23,36 @@ def labels(node: dict[str, Any]) -> set[str]:
     return {item["name"] for item in node.get("labels", {}).get("nodes", [])}
 
 
-def result(eligible: bool, reason: str, *, error: bool = False) -> int:
-    print(json.dumps({"eligible": eligible, "reason": reason}))
+def result(eligible: bool, reason: str, *, bump: str | None = None, error: bool = False) -> int:
+    payload: dict[str, Any] = {"eligible": eligible, "reason": reason}
+    if bump is not None:
+        payload["bump"] = bump
+    print(json.dumps(payload))
     return 2 if error else 0
 
 
-def classify(pull_requests: list[dict[str, Any]], tested_sha: str, repository: str) -> int:
+def has_truncated_connection(repository: dict[str, Any]) -> bool:
+    """Return whether any bounded release-policy GraphQL connection is incomplete."""
+    pull_requests = repository.get("pullRequests", {})
+    if pull_requests.get("pageInfo", {}).get("hasNextPage"):
+        return True
+    for pr in pull_requests.get("nodes", []):
+        if pr.get("labels", {}).get("pageInfo", {}).get("hasNextPage"):
+            return True
+        issues = pr.get("closingIssuesReferences", {})
+        if issues.get("pageInfo", {}).get("hasNextPage"):
+            return True
+        for issue in issues.get("nodes", []):
+            if issue.get("labels", {}).get("pageInfo", {}).get("hasNextPage"):
+                return True
+    return False
+
+
+def classify(repository_data: dict[str, Any], tested_sha: str, repository: str) -> int:
+    if has_truncated_connection(repository_data):
+        return result(False, "Release-policy query is incomplete; refusing to classify bounded results.", error=True)
+
+    pull_requests = repository_data.get("pullRequests", {}).get("nodes", [])
     matching = [pr for pr in pull_requests if pr.get("mergeCommit", {}).get("oid") == tested_sha]
     if len(matching) != 1:
         return result(False, f"Skipped: expected one merged PR for tested SHA {tested_sha}; found {len(matching)}.")
@@ -62,7 +86,8 @@ def classify(pull_requests: list[dict[str, Any]], tested_sha: str, repository: s
             details.append("has " + ", ".join(sorted(blocked)))
         return result(False, f"PR #{pr['number']} opted into release:publish but issue #{issue['number']} is ineligible ({'; '.join(details)}).", error=True)
 
-    return result(True, f"Eligible: PR #{pr['number']} closes release-ready issue #{issue['number']} with {next(iter(bump_labels))}.")
+    bump = next(iter(bump_labels)).removeprefix("release:")
+    return result(True, f"Eligible: PR #{pr['number']} closes release-ready issue #{issue['number']} with release:{bump}.", bump=bump)
 
 
 def main() -> int:
