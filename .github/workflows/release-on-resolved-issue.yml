@@ -16,21 +16,40 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
-  tag:
-    name: Tag a reviewed, integrated product release
+  eligibility:
+    name: Determine immutable release eligibility
     if: >-
       github.event.workflow_run.conclusion == 'success' &&
       github.event.workflow_run.event == 'push' &&
       github.event.workflow_run.head_branch == 'main'
     runs-on: ubuntu-latest
+    outputs:
+      eligible: ${{ steps.eligibility.outputs.eligible }}
     steps:
       - uses: actions/checkout@v4
         with:
           ref: ${{ github.event.workflow_run.head_sha }}
           fetch-depth: 0
           persist-credentials: false
+      - id: eligibility
+        name: Classify the tested resolving PR
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TESTED_SHA: ${{ github.event.workflow_run.head_sha }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          query='query($owner:String!, $repo:String!) { repository(owner:$owner, name:$repo) { pullRequests(first:100, states:MERGED, baseRefName:"main", orderBy:{field:UPDATED_AT,direction:DESC}) { nodes { number mergeCommit { oid } labels(first:20) { nodes { name } } closingIssuesReferences(first:20) { nodes { number repository { nameWithOwner } labels(first:30) { nodes { name } } } } } } } }'
+          result="$(gh api graphql -f query="$query" -f owner="${GITHUB_REPOSITORY_OWNER}" -f repo="${GITHUB_REPOSITORY#*/}")"
+          pull_requests="$(jq -c '.data.repository.pullRequests.nodes' <<< "$result")"
+          outcome="$(python scripts/release_eligibility.py --tested-sha "$TESTED_SHA" --repository "$GITHUB_REPOSITORY" --pull-requests-json "$pull_requests")"
+          echo "$outcome"
+          eligible="$(jq -r '.eligible' <<< "$outcome")"
+          echo "eligible=$eligible" >> "$GITHUB_OUTPUT"
+
       - id: release
-        name: Validate the tested resolving PR and calculate a tag
+        name: Validate an eligible release and calculate a tag
+        if: steps.eligibility.outputs.eligible == 'true'
         env:
           GH_TOKEN: ${{ github.token }}
           TESTED_SHA: ${{ github.event.workflow_run.head_sha }}
@@ -40,26 +59,8 @@ jobs:
           query='query($owner:String!, $repo:String!) { repository(owner:$owner, name:$repo) { pullRequests(first:100, states:MERGED, baseRefName:"main", orderBy:{field:UPDATED_AT,direction:DESC}) { nodes { number mergeCommit { oid } labels(first:20) { nodes { name } } closingIssuesReferences(first:20) { nodes { number repository { nameWithOwner } labels(first:30) { nodes { name } } } } } } } }'
           result="$(gh api graphql -f query="$query" -f owner="${GITHUB_REPOSITORY_OWNER}" -f repo="${GITHUB_REPOSITORY#*/}")"
           matching="$(jq --arg sha "$TESTED_SHA" '[.data.repository.pullRequests.nodes[] | select(.mergeCommit.oid == $sha)]' <<< "$result")"
-          count="$(jq 'length' <<< "$matching")"
-          [ "$count" -eq 1 ] || { echo "Expected exactly one merged PR for tested SHA $TESTED_SHA; found $count." >&2; exit 1; }
-
           labels="$(jq -r '.[0].labels.nodes[].name' <<< "$matching")"
-          has_label() { grep -Fxq "$1" <<< "$labels"; }
-          has_label 'release:publish' || { echo 'Resolving PR must carry release:publish.' >&2; exit 1; }
-          mapfile -t bump_labels < <(grep -E '^release:(patch|minor|major)$' <<< "$labels" || true)
-          [ "${#bump_labels[@]}" -eq 1 ] || { echo 'Resolving PR must carry exactly one release:patch, release:minor, or release:major label.' >&2; exit 1; }
-          bump="${bump_labels[0]#release:}"
-
-          issues="$(jq --arg repo "$GITHUB_REPOSITORY" '[.[0].closingIssuesReferences.nodes[] | select(.repository.nameWithOwner == $repo)]' <<< "$matching")"
-          issue_count="$(jq 'length' <<< "$issues")"
-          [ "$issue_count" -eq 1 ] || { echo "Expected exactly one same-repository issue closed by the PR; found $issue_count." >&2; exit 1; }
-          issue_labels="$(jq -r '.[0].labels.nodes[].name' <<< "$issues")"
-          issue_has_label() { grep -Fxq "$1" <<< "$issue_labels"; }
-          issue_has_label 'release:ready' || { echo 'Closed issue must carry release:ready before merge.' >&2; exit 1; }
-          issue_has_label 'direction:aligned' || { echo 'Closed issue must carry direction:aligned.' >&2; exit 1; }
-          issue_has_label 'roadmap' || { echo 'Closed issue must carry roadmap.' >&2; exit 1; }
-          ! issue_has_label 'direction:revise' || { echo 'Issue is still direction:revise.' >&2; exit 1; }
-          ! issue_has_label 'direction:discuss-close' || { echo 'Issue is direction:discuss-close.' >&2; exit 1; }
+          bump="$(grep -E '^release:(patch|minor|major)$' <<< "$labels" | sed 's/^release://')"
 
           latest="$(git tag -l 'cli-v*' --sort=-v:refname | head -n1 || true)"
           if [[ "$latest" =~ ^cli-v([0-9]+)\.([0-9]+)\.([0-9]+)-[0-9a-f]{12}$ ]]; then
@@ -81,6 +82,7 @@ jobs:
           git rev-parse -q --verify "refs/tags/${tag}" >/dev/null && { echo "Release tag already exists: ${tag}" >&2; exit 1; }
           echo "tag=$tag" >> "$GITHUB_OUTPUT"
       - name: Create immutable release tag at the tested commit
+        if: steps.eligibility.outputs.eligible == 'true'
         env:
           GH_TOKEN: ${{ github.token }}
           TAG: ${{ steps.release.outputs.tag }}
@@ -92,6 +94,7 @@ jobs:
           git remote set-url origin "https://x-access-token:${GH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git"
           git push origin "$TAG"
       - name: Publish the immutable tag
+        if: steps.eligibility.outputs.eligible == 'true'
         env:
           GH_TOKEN: ${{ github.token }}
           TAG: ${{ steps.release.outputs.tag }}

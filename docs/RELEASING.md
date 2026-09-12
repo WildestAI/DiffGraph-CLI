@@ -1,7 +1,13 @@
 # Releasing native DiffGraph CLI binaries
 
-Pushing a tag beginning with `v` (for example, `v1.1.0`) starts the **Release
-native binaries** GitHub Actions workflow. The workflow is intentionally tag
+## Immutable release eligibility
+
+Every successful test run for a merge to `main` records an explicit eligibility result. Ordinary product merges without `release:publish` succeed as **skipped / not eligible** and do not create a tag.
+
+To opt a merged PR into an immutable release, apply `release:publish` and exactly one of `release:patch`, `release:minor`, or `release:major`, and close exactly one same-repository roadmap issue labelled `release:ready`, `direction:aligned`, and `roadmap`. Once publication is requested, a missing prerequisite fails with the PR/issue-specific corrective diagnostic; no tag is created.
+
+
+Dispatching the **Release native binaries** workflow with an immutable `cli-v<semver>-<12-char-sha>` tag (for example, `cli-v1.1.0-0123456789ab`) starts the native-binary release. The workflow is intentionally tag
 only; a pull request or branch push cannot publish a release.
 
 ## What the workflow produces
