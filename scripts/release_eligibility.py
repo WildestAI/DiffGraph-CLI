@@ -50,7 +50,7 @@ def classify(repository_data: dict[str, Any], tested_sha: str, repository: str) 
         return result(False, "Release-policy query is incomplete; refusing to classify bounded results.", error=True)
 
     pull_requests = pull_request_connection.get("nodes", [])
-    matching = [pr for pr in pull_requests if pr.get("mergeCommit", {}).get("oid") == tested_sha]
+    matching = [pr for pr in pull_requests if (pr.get("mergeCommit") or {}).get("oid") == tested_sha]
     if len(matching) != 1:
         return result(False, f"Skipped: expected one merged PR for tested SHA {tested_sha}; found {len(matching)}.")
 
