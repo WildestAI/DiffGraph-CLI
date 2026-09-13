@@ -36,6 +36,16 @@ def pull_request(*, labels=(), issue_labels=(), include_issue=True):
     return pr
 
 
+def test_null_merge_commit_is_not_treated_as_the_tested_pr():
+    unrelated = pull_request()
+    unrelated["mergeCommit"] = None
+
+    code, output = run(unrelated)
+
+    assert code == 0
+    assert output == {"eligible": False, "reason": f"Skipped: expected one merged PR for tested SHA {SHA}; found 0."}
+
+
 def test_non_release_merge_is_green_and_explicitly_skipped():
     code, output = run(pull_request())
     assert code == 0
