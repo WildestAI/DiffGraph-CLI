@@ -65,6 +65,11 @@ def test_html_formatter_renders_complete_golden_artifact_without_inference():
     assert "likely impact" not in report.lower()
     assert "AI analysis" not in report
     assert "https://" not in report
+    assert (
+        "Content-Security-Policy\" content=\"default-src 'none'; "
+        "style-src 'unsafe-inline'; img-src data:; base-uri 'none'; "
+        "form-action 'none'"
+    ) in report
 
 
 def test_html_formatter_sorts_topology_and_escapes_artifact_text():
