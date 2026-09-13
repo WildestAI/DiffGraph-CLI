@@ -9,8 +9,8 @@ SHA = "a" * 40
 REPO = "WildestAI/DiffGraph-CLI"
 
 
-def run(pr, **page_info):
-    repository = {"pullRequests": {"nodes": [pr], "pageInfo": {"hasNextPage": False}}}
+def run(pr, *, other_prs=(), **page_info):
+    repository = {"pullRequests": {"nodes": [pr, *other_prs], "pageInfo": {"hasNextPage": False}}}
     repository["pullRequests"].update(page_info.pop("pull_requests", {}))
     pr["labels"].update(page_info.pop("pr_labels", {}))
     pr["closingIssuesReferences"].update(page_info.pop("closing_issues", {}))
@@ -83,3 +83,19 @@ def test_incomplete_bounded_release_policy_connections_fail_closed():
         assert code == 2
         assert output["eligible"] is False
         assert "query is incomplete" in output["reason"]
+
+
+def test_unrelated_truncated_policy_data_does_not_block_the_tested_pr():
+    issue_labels = ("release:ready", "direction:aligned", "roadmap")
+    unrelated = pull_request()
+    unrelated["number"] = 52
+    unrelated["mergeCommit"]["oid"] = "b" * 40
+    unrelated["labels"]["pageInfo"]["hasNextPage"] = True
+
+    code, output = run(
+        pull_request(labels=("release:publish", "release:patch"), issue_labels=issue_labels),
+        other_prs=(unrelated,),
+    )
+
+    assert code == 0
+    assert output["eligible"] is True

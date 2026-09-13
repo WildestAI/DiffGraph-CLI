@@ -31,33 +31,32 @@ def result(eligible: bool, reason: str, *, bump: str | None = None, error: bool 
     return 2 if error else 0
 
 
-def has_truncated_connection(repository: dict[str, Any]) -> bool:
-    """Return whether any bounded release-policy GraphQL connection is incomplete."""
-    pull_requests = repository.get("pullRequests", {})
-    if pull_requests.get("pageInfo", {}).get("hasNextPage"):
+def has_truncated_policy_connection(pr: dict[str, Any]) -> bool:
+    """Return whether the selected PR's bounded policy data is incomplete."""
+    if pr.get("labels", {}).get("pageInfo", {}).get("hasNextPage"):
         return True
-    for pr in pull_requests.get("nodes", []):
-        if pr.get("labels", {}).get("pageInfo", {}).get("hasNextPage"):
-            return True
-        issues = pr.get("closingIssuesReferences", {})
-        if issues.get("pageInfo", {}).get("hasNextPage"):
-            return True
-        for issue in issues.get("nodes", []):
-            if issue.get("labels", {}).get("pageInfo", {}).get("hasNextPage"):
-                return True
-    return False
+    issues = pr.get("closingIssuesReferences", {})
+    if issues.get("pageInfo", {}).get("hasNextPage"):
+        return True
+    return any(
+        issue.get("labels", {}).get("pageInfo", {}).get("hasNextPage")
+        for issue in issues.get("nodes", [])
+    )
 
 
 def classify(repository_data: dict[str, Any], tested_sha: str, repository: str) -> int:
-    if has_truncated_connection(repository_data):
+    pull_request_connection = repository_data.get("pullRequests", {})
+    if pull_request_connection.get("pageInfo", {}).get("hasNextPage"):
         return result(False, "Release-policy query is incomplete; refusing to classify bounded results.", error=True)
 
-    pull_requests = repository_data.get("pullRequests", {}).get("nodes", [])
+    pull_requests = pull_request_connection.get("nodes", [])
     matching = [pr for pr in pull_requests if pr.get("mergeCommit", {}).get("oid") == tested_sha]
     if len(matching) != 1:
         return result(False, f"Skipped: expected one merged PR for tested SHA {tested_sha}; found {len(matching)}.")
 
     pr = matching[0]
+    if has_truncated_policy_connection(pr):
+        return result(False, "Release-policy query is incomplete; refusing to classify bounded results.", error=True)
     pr_labels = labels(pr)
     if "release:publish" not in pr_labels:
         return result(False, f"Skipped: PR #{pr['number']} is not release-eligible (missing release:publish).")

@@ -40,9 +40,9 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          query='query($owner:String!, $repo:String!) { repository(owner:$owner, name:$repo) { pullRequests(first:100, states:MERGED, baseRefName:"main", orderBy:{field:UPDATED_AT,direction:DESC}) { pageInfo { hasNextPage } nodes { number mergeCommit { oid } labels(first:20) { pageInfo { hasNextPage } nodes { name } } closingIssuesReferences(first:20) { pageInfo { hasNextPage } nodes { number repository { nameWithOwner } labels(first:30) { pageInfo { hasNextPage } nodes { name } } } } } } } } }'
-          result="$(gh api graphql -f query="$query" -f owner="${GITHUB_REPOSITORY_OWNER}" -f repo="${GITHUB_REPOSITORY#*/}")"
-          repository="$(jq -c '.data.repository' <<< "$result")"
+          query='query($owner:String!, $repo:String!, $sha:String!) { repository(owner:$owner, name:$repo) { object(expression:$sha) { ... on Commit { associatedPullRequests(first:100) { pageInfo { hasNextPage } nodes { number mergeCommit { oid } labels(first:20) { pageInfo { hasNextPage } nodes { name } } closingIssuesReferences(first:20) { pageInfo { hasNextPage } nodes { number repository { nameWithOwner } labels(first:30) { pageInfo { hasNextPage } nodes { name } } } } } } } } } } }'
+          result="$(gh api graphql -f query="$query" -f owner="${GITHUB_REPOSITORY_OWNER}" -f repo="${GITHUB_REPOSITORY#*/}" -f sha="$TESTED_SHA")"
+          repository="$(jq -ce '{pullRequests: (.data.repository.object.associatedPullRequests // error("tested SHA is not a commit"))}' <<< "$result")"
           if outcome="$(python scripts/release_eligibility.py --tested-sha "$TESTED_SHA" --repository "$GITHUB_REPOSITORY" --pull-requests-json "$repository")"; then
             echo "$outcome"
           else
