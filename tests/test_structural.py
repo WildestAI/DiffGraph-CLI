@@ -1370,6 +1370,46 @@ def test_explicit_from_import_creates_import_grounded_call_edge(tmp_path):
     assert "query=python-structure-v2" in call["evidence"][0]["detail"]
 
 
+def test_relative_from_imports_preserve_package_evidence_and_call_bindings(tmp_path):
+    """Relative imports are explicit package-local external dependencies.
+
+    The extractor intentionally does not guess whether the target module is in
+    the changed snapshot, but it must preserve the exact relative spelling and
+    alias binding so clients can distinguish ``..pkg`` from an absolute module.
+    """
+    root = repo(tmp_path)
+    write(
+        root,
+        "relative_calls.py",
+        "from ..pkg import execute as run_local\n\n"
+        "def caller():\n"
+        "    run_local()\n",
+    )
+    git(root, "add", "relative_calls.py")
+
+    artifact = analyze_local_diff(str(root), staged=True)
+    assert_valid(artifact)
+    imported = next(
+        item
+        for item in artifact["symbols"]
+        if item["id"] == "sym::relative_calls.py::import::..pkg"
+    )
+    assert imported["name"] == "..pkg"
+    assert imported["change_kind"] == "added"
+    import_edge = next(
+        item
+        for item in artifact["relationships"]
+        if item["kind"] == "imports"
+    )
+    assert import_edge["label"] == "unresolved/external module: ..pkg"
+    calls = [item for item in artifact["relationships"] if item["kind"] == "calls"]
+    assert len(calls) == 1
+    assert calls[0]["source_id"] == "sym::relative_calls.py::caller"
+    assert calls[0]["target_id"] == "sym::relative_calls.py::import::..pkg"
+    assert calls[0]["resolution_method"] == "import_grounded"
+    assert calls[0]["evidence"][0]["snippet"] == "run_local()"
+
+
 def test_rebound_import_does_not_create_import_grounded_call_edge(tmp_path):
     root = repo(tmp_path)
     write(

@@ -340,7 +340,19 @@ def _parse_python(
                         raw, node.start_point[0] + 1, snippet, (binding,)
                     ))
             else:
-                module_node = node.child_by_field_name("module_name")
+                # Tree-sitter exposes absolute modules through ``module_name``
+                # but represents ``from .pkg import value`` as a
+                # ``relative_import`` child. Keep the leading dots instead of
+                # dropping the import: they are deterministic source evidence
+                # and distinguish a package-local dependency from an unrelated
+                # absolute module with the same name.
+                module_node = (
+                    node.child_by_field_name("module_name")
+                    or next(
+                        (child for child in node.children if child.type == "relative_import"),
+                        None,
+                    )
+                )
                 if module_node is not None:
                     imported = []
                     after_import = False
