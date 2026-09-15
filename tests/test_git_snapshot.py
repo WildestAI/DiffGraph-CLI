@@ -316,6 +316,33 @@ def test_undecodable_untracked_path_is_a_scoped_warning(tmp_path):
     ]
 
 
+def test_staged_undecodable_tracked_path_is_a_scoped_warning(tmp_path):
+    """One invalid tracked pathname must not hide valid staged provenance."""
+    repo = make_repo(tmp_path)
+    write(repo, "good.py", b"before = 1\n")
+    raw_path = os.fsencode(repo) + b"/bad-\xff.py"
+    with open(raw_path, "wb") as handle:
+        handle.write(b"before = 2\n")
+    commit_all(repo)
+
+    write(repo, "good.py", b"after = 1\n")
+    with open(raw_path, "wb") as handle:
+        handle.write(b"after = 2\n")
+    git(repo, "add", "-A")
+
+    result = resolve_staged(str(repo))
+
+    assert len(result.entries) == 1
+    entry = result.entries[0]
+    assert entry.status == "M"
+    assert entry.old_path == entry.new_path == "good.py"
+    assert entry.old_oid == oid(repo, "HEAD:good.py")
+    assert entry.new_oid == index_oid(repo, "good.py")
+    assert [(warning.code, warning.path) for warning in result.warnings] == [
+        ("undecodable_path", "bad-\\xff.py")
+    ]
+
+
 def test_repeated_resolution_is_deterministic(tmp_path):
     repo = make_repo(tmp_path)
     for name in ("z.txt", "a.txt", "middle.txt"):
