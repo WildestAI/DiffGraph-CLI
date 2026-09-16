@@ -244,7 +244,9 @@ def _resolve_commit(
 
 
 def _is_hex_oid(value: str) -> bool:
-    return bool(value) and all(
+    """Return whether *value* is a complete Git SHA-1 or SHA-256 object ID."""
+
+    return len(value) in (40, 64) and all(
         character in "0123456789abcdef" for character in value
     )
 
@@ -593,13 +595,16 @@ def _oid(value: bytes) -> Optional[str]:
 def _exact_staged_entry(
     raw: _RawEntry, warnings: List[ResolutionWarning]
 ) -> Optional[SnapshotEntry]:
-    if (raw.old_path is not None and raw.old_oid is None) or (
-        raw.new_path is not None and raw.new_oid is None
-    ):
+    object_ids = (
+        (raw.old_path, raw.old_oid),
+        (raw.new_path, raw.new_oid),
+    )
+    if any(path is not None and (oid is None or not _is_hex_oid(oid))
+           for path, oid in object_ids):
         warnings.append(
             ResolutionWarning(
                 "missing_object_id",
-                "Git did not provide an exact staged object ID",
+                "Git did not provide a complete exact staged object ID",
                 raw.new_path or raw.old_path,
             )
         )
@@ -610,11 +615,13 @@ def _exact_staged_entry(
 def _exact_unstaged_entry(
     root: str, raw: _RawEntry, warnings: List[ResolutionWarning]
 ) -> Optional[SnapshotEntry]:
-    if raw.old_path is not None and raw.old_oid is None:
+    if raw.old_path is not None and (
+        raw.old_oid is None or not _is_hex_oid(raw.old_oid)
+    ):
         warnings.append(
             ResolutionWarning(
                 "missing_object_id",
-                "Git did not provide an exact index object ID",
+                "Git did not provide a complete exact index object ID",
                 raw.old_path,
             )
         )
@@ -716,7 +723,7 @@ def _working_tree_blob(
     if output is None:
         return None
     oid = os.fsdecode(output).strip()
-    if not oid or any(character not in "0123456789abcdef" for character in oid):
+    if not _is_hex_oid(oid):
         warnings.append(
             ResolutionWarning("malformed_hash_object_output", "Git returned an invalid object ID", path)
         )
