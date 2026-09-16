@@ -1,6 +1,7 @@
 import os
 import subprocess
 
+import diffgraph.git_snapshot as git_snapshot
 from diffgraph.git_snapshot import (
     resolve_commit_range,
     resolve_staged,
@@ -649,6 +650,32 @@ def test_three_dot_without_merge_base_is_a_warning_not_a_change(tmp_path):
     assert result.entries == ()
     assert result.comparison_base_oid is None
     assert [warning.code for warning in result.warnings] == ["merge_base_failed"]
+
+
+def test_incomplete_raw_object_ids_are_not_reported_as_exact_snapshots():
+    raw = git_snapshot._RawEntry(
+        status="M",
+        old_path="tracked.py",
+        new_path="tracked.py",
+        old_mode="100644",
+        new_mode="100644",
+        old_oid="a" * 39,
+        new_oid="b" * 40,
+    )
+    warnings = []
+
+    assert git_snapshot._exact_staged_entry(raw, warnings) is None
+    assert [(warning.code, warning.path) for warning in warnings] == [
+        ("missing_object_id", "tracked.py")
+    ]
+
+
+def test_complete_git_object_ids_support_sha1_and_sha256_only():
+    assert git_snapshot._is_hex_oid("a" * 40)
+    assert git_snapshot._is_hex_oid("b" * 64)
+    assert not git_snapshot._is_hex_oid("c" * 39)
+    assert not git_snapshot._is_hex_oid("d" * 65)
+    assert not git_snapshot._is_hex_oid("A" * 40)
 
 
 def test_file_mode_transitions_preserve_exact_blob_provenance(tmp_path):
