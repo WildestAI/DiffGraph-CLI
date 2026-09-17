@@ -90,6 +90,20 @@ def test_html_formatter_sorts_topology_and_escapes_artifact_text():
     assert embedded_artifact(report) == value
 
 
+def test_html_formatter_links_relationship_endpoints_to_stable_object_anchors():
+    value = golden_artifact()
+    artifact = ValidatedArtifact.from_value(value)
+
+    report = HtmlFormatter(artifact).render()
+
+    relationship = value["relationships"][0]
+    for item_id in (relationship["source_id"], relationship["target_id"]):
+        anchor = HtmlFormatter._object_anchor(item_id)
+        assert f'<article id="{anchor}">' in report
+        assert f'href="#{anchor}"' in report
+        assert f'aria-label="Jump to {item_id}"' in report
+
+
 def test_canonical_html_cli_is_atomic_honors_output_and_no_open(tmp_path, monkeypatch):
     root = changed_repo(tmp_path)
     destination = root / "report.html"
