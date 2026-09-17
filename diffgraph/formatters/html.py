@@ -8,6 +8,7 @@ HTML path with external CDN assets.
 from __future__ import annotations
 
 import html
+import hashlib
 import json
 import os
 import tempfile
@@ -57,9 +58,18 @@ class HtmlFormatter:
         metadata = self.dg["metadata"]
         warnings = metadata.get("warnings", [])
 
-        file_items = self._object_items(files, "No files in the selected snapshot.")
-        symbol_items = self._object_items(symbols, "No symbols in the artifact.")
-        relationship_items = self._relationship_items(relationships)
+        self._validate_unique_object_ids(files, symbols)
+        anchors = {
+            item["id"]: self._object_anchor(item["id"])
+            for item in (*files, *symbols)
+        }
+        file_items = self._object_items(
+            files, "No files in the selected snapshot.", anchors
+        )
+        symbol_items = self._object_items(
+            symbols, "No symbols in the artifact.", anchors
+        )
+        relationship_items = self._relationship_items(relationships, anchors)
         warning_items = (
             "".join(f"<li><pre>{_json(warning)}</pre></li>" for warning in warnings)
             or "<li>None</li>"
@@ -116,23 +126,61 @@ class HtmlFormatter:
 """
 
     @staticmethod
-    def _object_items(items: list[dict], empty_message: str) -> str:
+    def _object_anchor(item_id: str) -> str:
+        """Return a stable, safe fragment target for a canonical object ID."""
+        return "object-{}".format(
+            hashlib.sha256(item_id.encode("utf-8")).hexdigest()
+        )
+
+    @staticmethod
+    def _validate_unique_object_ids(
+        files: list[dict], symbols: list[dict]
+    ) -> None:
+        """Reject duplicate object IDs before rendering ambiguous anchor targets."""
+        object_ids = [item["id"] for item in (*files, *symbols)]
+        duplicate_ids = sorted(
+            item_id for item_id in set(object_ids) if object_ids.count(item_id) > 1
+        )
+        if duplicate_ids:
+            raise ValueError(
+                "DiffGraph HTML rendering requires unique file and symbol IDs; "
+                f"duplicates: {', '.join(duplicate_ids)}"
+            )
+
+    @staticmethod
+    def _object_items(
+        items: list[dict], empty_message: str, anchors: dict[str, str]
+    ) -> str:
         if not items:
             return f'<p class="panel">{html.escape(empty_message)}</p>'
         return "".join(
-            f'<article><h3><code>{_text(item["id"])}</code></h3><pre>{_json(item)}</pre></article>'
+            f'<article id="{anchors[item["id"]]}"><h3><code>{_text(item["id"])}</code></h3>'
+            f'<pre>{_json(item)}</pre></article>'
             for item in items
         )
 
     @staticmethod
-    def _relationship_items(relationships: list[dict]) -> str:
+    def _relationship_items(
+        relationships: list[dict], anchors: dict[str, str]
+    ) -> str:
         if not relationships:
             return '<p class="panel">No relationships in the artifact.</p>'
+
+        def endpoint(item_id: str) -> str:
+            anchor = anchors.get(item_id)
+            text = _text(item_id)
+            if anchor is None:
+                return f"<code>{text}</code>"
+            return (
+                f'<a href="#{anchor}" aria-label="Jump to {text}">'
+                f"<code>{text}</code></a>"
+            )
+
         return "".join(
             "<article>"
-            f'<div class="edge"><code>{_text(item["source_id"])}</code>'
+            f'<div class="edge">{endpoint(item["source_id"])}'
             f'<span class="kind">{_text(item["kind"])}</span>'
-            f'<code>{_text(item["target_id"])}</code></div>'
+            f'{endpoint(item["target_id"])}</div>'
             f'<pre>{_json(item)}</pre>'
             "</article>"
             for item in relationships
