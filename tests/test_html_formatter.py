@@ -104,6 +104,16 @@ def test_html_formatter_links_relationship_endpoints_to_stable_object_anchors():
         assert f'aria-label="Jump to {item_id}"' in report
 
 
+def test_html_formatter_rejects_duplicate_object_ids_before_rendering_anchors():
+    value = golden_artifact()
+    duplicate_file = dict(value["files"][0])
+    value["files"].append(duplicate_file)
+    artifact = ValidatedArtifact.from_value(value)
+
+    with pytest.raises(ValueError, match="requires unique file and symbol IDs"):
+        HtmlFormatter(artifact).render()
+
+
 def test_canonical_html_cli_is_atomic_honors_output_and_no_open(tmp_path, monkeypatch):
     root = changed_repo(tmp_path)
     destination = root / "report.html"

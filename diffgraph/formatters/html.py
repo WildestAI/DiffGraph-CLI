@@ -58,6 +58,7 @@ class HtmlFormatter:
         metadata = self.dg["metadata"]
         warnings = metadata.get("warnings", [])
 
+        self._validate_unique_object_ids(files, symbols)
         anchors = {
             item["id"]: self._object_anchor(item["id"])
             for item in (*files, *symbols)
@@ -130,6 +131,21 @@ class HtmlFormatter:
         return "object-{}".format(
             hashlib.sha256(item_id.encode("utf-8")).hexdigest()
         )
+
+    @staticmethod
+    def _validate_unique_object_ids(
+        files: list[dict], symbols: list[dict]
+    ) -> None:
+        """Reject duplicate object IDs before rendering ambiguous anchor targets."""
+        object_ids = [item["id"] for item in (*files, *symbols)]
+        duplicate_ids = sorted(
+            item_id for item_id in set(object_ids) if object_ids.count(item_id) > 1
+        )
+        if duplicate_ids:
+            raise ValueError(
+                "DiffGraph HTML rendering requires unique file and symbol IDs; "
+                f"duplicates: {', '.join(duplicate_ids)}"
+            )
 
     @staticmethod
     def _object_items(
