@@ -150,7 +150,7 @@ def resolve_commit_range(
     comparison_base_oid = base_oid
     if three_dot:
         output = _run(
-            ["git", "merge-base", base_oid, head_oid], root, warnings,
+            ["git", "merge-base", "--all", base_oid, head_oid], root, warnings,
             "merge_base_failed",
         )
         if output is None:
@@ -158,8 +158,8 @@ def resolve_commit_range(
                 base_ref, head_ref, three_dot, warnings=warnings,
                 base_oid=base_oid, head_oid=head_oid,
             )
-        comparison_base_oid = os.fsdecode(output).strip()
-        if not _is_hex_oid(comparison_base_oid):
+        merge_bases = sorted(set(os.fsdecode(output).splitlines()))
+        if not merge_bases or any(not _is_hex_oid(oid) for oid in merge_bases):
             warnings.append(ResolutionWarning(
                 "malformed_merge_base",
                 "Git returned an invalid merge-base object ID",
@@ -168,6 +168,18 @@ def resolve_commit_range(
                 base_ref, head_ref, three_dot, warnings=warnings,
                 base_oid=base_oid, head_oid=head_oid,
             )
+        if len(merge_bases) != 1:
+            warnings.append(ResolutionWarning(
+                "ambiguous_merge_base",
+                "Git returned {} merge bases; a three-dot comparison requires one exact base".format(
+                    len(merge_bases)
+                ),
+            ))
+            return _commit_range_result(
+                base_ref, head_ref, three_dot, warnings=warnings,
+                base_oid=base_oid, head_oid=head_oid,
+            )
+        comparison_base_oid = merge_bases[0]
 
     command = [
         "git", "diff", "--raw", "-z", "--no-abbrev", "--no-ext-diff",
