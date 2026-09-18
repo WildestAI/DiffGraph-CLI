@@ -652,6 +652,44 @@ def test_three_dot_without_merge_base_is_a_warning_not_a_change(tmp_path):
     assert [warning.code for warning in result.warnings] == ["merge_base_failed"]
 
 
+def test_three_dot_with_multiple_merge_bases_is_a_warning_not_a_change(tmp_path):
+    """A criss-cross history must not silently select one merge base."""
+    repo = make_repo(tmp_path)
+    write(repo, "shared.txt", b"common\n")
+    commit_all(repo, "common")
+    git(repo, "branch", "left-start")
+
+    write(repo, "left.txt", b"left\n")
+    commit_all(repo, "left change")
+    left_change = oid(repo, "HEAD")
+    git(repo, "branch", "left-change")
+
+    git(repo, "switch", "left-start")
+    write(repo, "right.txt", b"right\n")
+    commit_all(repo, "right change")
+    right_change = oid(repo, "HEAD")
+    git(repo, "branch", "right-change")
+
+    git(repo, "switch", "left-change")
+    git(repo, "merge", "--no-ff", "right-change", "-m", "left merge")
+    git(repo, "branch", "left")
+
+    git(repo, "switch", "right-change")
+    git(repo, "merge", "--no-ff", left_change, "-m", "right merge")
+    git(repo, "branch", "right")
+
+    assert set(git(repo, "merge-base", "--all", "left", "right").splitlines()) == {
+        left_change.encode(), right_change.encode(),
+    }
+    result = resolve_commit_range(str(repo), "left", "right", three_dot=True)
+
+    assert result.entries == ()
+    assert result.comparison_base_oid is None
+    assert [(warning.code, warning.path) for warning in result.warnings] == [
+        ("ambiguous_merge_base", None),
+    ]
+
+
 def test_incomplete_raw_object_ids_are_not_reported_as_exact_snapshots():
     raw = git_snapshot._RawEntry(
         status="M",
