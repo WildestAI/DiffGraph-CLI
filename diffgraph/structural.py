@@ -566,17 +566,21 @@ def _resolve_call_target(
         current = symbols.get(current_name)
         if current is None:
             break
-        # Function and method scopes participate in lexical lookup. Class
-        # namespaces do not: a bare name in a method never resolves through
-        # sibling class attributes or methods.
-        if current.kind in ("function", "method"):
+        # Function and method scopes participate in lexical lookup. A class
+        # body also needs its own imports, but a method must never resolve
+        # through its enclosing class namespace.
+        is_initial_class_body = (
+            current_name == call.caller and current.kind == "class"
+        )
+        if current.kind in ("function", "method") or is_initial_class_body:
             if call.name in bindings.get(current_name, set()):
                 history = imported_targets.get(current_name, {}).get(call.name, [])
                 visible = [target for line, target in history if line <= call.line]
                 if visible:
                     return visible[-1]
                 return None
-            candidates.append("{}.{}".format(current_name, call.name))
+            if current.kind in ("function", "method"):
+                candidates.append("{}.{}".format(current_name, call.name))
         current_name = current.parent
 
     if call.name in bindings.get(None, set()):

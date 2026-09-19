@@ -1395,6 +1395,38 @@ def test_function_local_imports_ground_only_their_lexical_calls(tmp_path):
     assert calls[0]["evidence"][0]["snippet"] == "run_remote()"
 
 
+def test_class_body_imports_do_not_shadow_nested_method_lookups(tmp_path):
+    """Class-body imports resolve there but remain outside method lexical scope."""
+    root = repo(tmp_path)
+    write(
+        root,
+        "class_import.py",
+        "def enclosing():\n"
+        "    from outer.worker import execute as run_remote\n\n"
+        "    class Worker:\n"
+        "        from class_body.worker import execute as run_remote\n"
+        "        run_remote()\n\n"
+        "        def method(self):\n"
+        "            run_remote()\n",
+    )
+    git(root, "add", "class_import.py")
+
+    artifact = analyze_local_diff(str(root), staged=True)
+
+    assert_valid(artifact)
+    calls = [item for item in artifact["relationships"] if item["kind"] == "calls"]
+    assert len(calls) == 2
+    assert [item["source_id"] for item in calls] == [
+        "sym::class_import.py::enclosing.Worker",
+        "sym::class_import.py::enclosing.Worker.method",
+    ]
+    assert [item["target_id"] for item in calls] == [
+        "sym::class_import.py::import::class_body.worker",
+        "sym::class_import.py::import::outer.worker",
+    ]
+    assert all(item["resolution_method"] == "import_grounded" for item in calls)
+
+
 def test_relative_from_imports_preserve_package_evidence_and_call_bindings(tmp_path):
     """Relative imports are explicit package-local external dependencies.
 
