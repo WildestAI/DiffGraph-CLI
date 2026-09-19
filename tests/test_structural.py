@@ -1370,6 +1370,31 @@ def test_explicit_from_import_creates_import_grounded_call_edge(tmp_path):
     assert "query=python-structure-v2" in call["evidence"][0]["detail"]
 
 
+def test_function_local_imports_ground_only_their_lexical_calls(tmp_path):
+    """A local import is exact evidence for its own function, not its siblings."""
+    root = repo(tmp_path)
+    write(
+        root,
+        "local_import.py",
+        "def imports_and_calls():\n"
+        "    from remote.worker import execute as run_remote\n"
+        "    run_remote()\n\n"
+        "def sibling():\n"
+        "    run_remote()\n",
+    )
+    git(root, "add", "local_import.py")
+
+    artifact = analyze_local_diff(str(root), staged=True)
+
+    assert_valid(artifact)
+    calls = [item for item in artifact["relationships"] if item["kind"] == "calls"]
+    assert len(calls) == 1
+    assert calls[0]["source_id"] == "sym::local_import.py::imports_and_calls"
+    assert calls[0]["target_id"] == "sym::local_import.py::import::remote.worker"
+    assert calls[0]["resolution_method"] == "import_grounded"
+    assert calls[0]["evidence"][0]["snippet"] == "run_remote()"
+
+
 def test_relative_from_imports_preserve_package_evidence_and_call_bindings(tmp_path):
     """Relative imports are explicit package-local external dependencies.
 

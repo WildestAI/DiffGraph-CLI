@@ -83,6 +83,7 @@ class _Import:
     line: int
     snippet: str
     bindings: Tuple[str, ...]
+    scope: Optional[str]
 
 
 @dataclass(frozen=True)
@@ -337,7 +338,8 @@ def _parse_python(
                         # ``import package.submodule`` binds ``package``.
                         binding = raw.split(".", 1)[0]
                     imports.append(_Import(
-                        raw, node.start_point[0] + 1, snippet, (binding,)
+                        raw, node.start_point[0] + 1, snippet, (binding,),
+                        parents[-1][0] if parents else None,
                     ))
             else:
                 # Tree-sitter exposes absolute modules through ``module_name``
@@ -373,6 +375,7 @@ def _parse_python(
                         node.start_point[0] + 1,
                         snippet,
                         tuple(imported),
+                        parents[-1][0] if parents else None,
                     ))
         elif not parents and node.type in (
             "assignment", "annotated_assignment", "type_alias_statement"
@@ -549,7 +552,7 @@ def _resolve_call_target(
     call: _Call,
     symbols: Dict[str, _Symbol],
     bindings: Dict[Optional[str], set],
-    imported_targets: Dict[str, List[Tuple[int, Optional[str]]]],
+    imported_targets: Dict[Optional[str], Dict[str, List[Tuple[int, Optional[str]]]]],
 ) -> Optional[str]:
     """Resolve only syntax-grounded, same-file Python calls.
 
@@ -568,6 +571,10 @@ def _resolve_call_target(
         # sibling class attributes or methods.
         if current.kind in ("function", "method"):
             if call.name in bindings.get(current_name, set()):
+                history = imported_targets.get(current_name, {}).get(call.name, [])
+                visible = [target for line, target in history if line <= call.line]
+                if visible:
+                    return visible[-1]
                 return None
             candidates.append("{}.{}".format(current_name, call.name))
         current_name = current.parent
@@ -577,7 +584,7 @@ def _resolve_call_target(
         # bindings (for example an assignment) remain intentionally unresolved.
         # Select the binding visible at this call site rather than applying a
         # later top-level rebind retroactively.
-        history = imported_targets.get(call.name, [])
+        history = imported_targets.get(None, {}).get(call.name, [])
         visible = [target for line, target in history if line <= call.line]
         if visible and visible[-1] is not None:
             return visible[-1]
@@ -604,27 +611,35 @@ def _resolve_call_target(
 def _imported_call_targets(
     imports: Dict[Tuple[str, int], _Import],
     module_rebindings: List[Tuple[str, int]],
-) -> Dict[str, List[Tuple[int, Optional[str]]]]:
-    """Map each import binding to its conservative, line-aware history."""
+) -> Dict[Optional[str], Dict[str, List[Tuple[int, Optional[str]]]]]:
+    """Map import bindings to conservative, lexical and line-aware histories.
 
-    targets: Dict[str, List[Tuple[int, Optional[str]]]] = {}
-    imported_bindings = set()
+    Imports inside a function bind only that function's local scope. Keeping
+    that scope alongside the source line permits a direct call to an imported
+    name without leaking the binding into sibling functions or the module.
+    """
+
+    targets: Dict[Optional[str], Dict[str, List[Tuple[int, Optional[str]]]]] = {}
+    imported_bindings: Dict[Optional[str], set] = {}
     for (module, occurrence), item in imports.items():
         suffix = "" if occurrence == 0 else "#{}".format(occurrence)
         target = "import::{}{}".format(module, suffix)
+        scope_targets = targets.setdefault(item.scope, {})
+        scope_bindings = imported_bindings.setdefault(item.scope, set())
         for binding in item.bindings:
             # A later import of the same local name is intentionally
             # unresolved, but calls before it retain the earlier binding.
-            targets.setdefault(binding, []).append((
-                item.line, None if binding in imported_bindings else target
+            scope_targets.setdefault(binding, []).append((
+                item.line, None if binding in scope_bindings else target
             ))
-            imported_bindings.add(binding)
+            scope_bindings.add(binding)
     for binding, line in module_rebindings:
         # A declaration, assignment, or loop target replaces the imported
         # binding only for calls at or after its source line.
-        targets.setdefault(binding, []).append((line, None))
-    for history in targets.values():
-        history.sort(key=lambda item: item[0])
+        targets.setdefault(None, {}).setdefault(binding, []).append((line, None))
+    for scope_targets in targets.values():
+        for history in scope_targets.values():
+            history.sort(key=lambda item: item[0])
     return targets
 
 
