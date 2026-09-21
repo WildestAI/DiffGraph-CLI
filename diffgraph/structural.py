@@ -314,6 +314,13 @@ def _parse_python(
             )
             if target is not None:
                 found.update(as_target_identifiers(target))
+        elif node.type == "splat_pattern":
+            target = next(
+                (child for child in node.children if child.type == "identifier"),
+                None,
+            )
+            if target is not None:
+                found.add(_node_text(content, target))
         for child in node.children:
             found.update(case_pattern_identifiers(child))
         return found

@@ -1493,7 +1493,7 @@ def test_as_pattern_bindings_do_not_create_import_grounded_call_edges(tmp_path):
 
 
 def test_match_pattern_captures_do_not_create_import_grounded_call_edges(tmp_path):
-    """Python match captures shadow imports throughout their case bodies."""
+    """Python match captures, including splats, shadow imports in case bodies."""
     root = repo(tmp_path)
     write(
         root,
@@ -1506,6 +1506,10 @@ def test_match_pattern_captures_do_not_create_import_grounded_call_edges(tmp_pat
         "def sequence_capture(value):\n"
         "    match value:\n"
         "        case [run_remote]:\n"
+        "            run_remote()\n\n"
+        "def splat_capture(value):\n"
+        "    match value:\n"
+        "        case [*run_remote]:\n"
         "            run_remote()\n\n"
         "def keyword_capture(value):\n"
         "    match value:\n"
