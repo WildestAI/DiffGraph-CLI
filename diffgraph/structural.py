@@ -268,6 +268,17 @@ def _parse_python(
             found.update(identifiers(child))
         return found
 
+    def as_target_identifiers(node) -> set:
+        """Return names assigned by an ``as`` target, excluding object references."""
+        if node.type in ("attribute", "subscript"):
+            return set()
+        if node.type == "identifier":
+            return {_node_text(content, node)}
+        found = set()
+        for child in node.children:
+            found.update(as_target_identifiers(child))
+        return found
+
     def visit(node, parents: Tuple[Tuple[str, str], ...] = ()) -> None:
         next_parents = parents
         if node.type in ("class_definition", "function_definition"):
@@ -462,6 +473,26 @@ def _parse_python(
             left = node.child_by_field_name("left")
             if left is not None:
                 bound_names = identifiers(left)
+                bindings.setdefault(scope, set()).update(bound_names)
+                if scope is None:
+                    module_rebindings.extend(
+                        (name, node.start_point[0] + 1) for name in bound_names
+                    )
+        elif (
+            node.type == "as_pattern"
+            and node.parent is not None
+            and node.parent.type in ("with_item", "except_clause")
+        ):
+            # ``with resource() as name`` and ``except Error as name`` bind
+            # their target in the enclosing lexical scope before the body is
+            # evaluated. Treat it like other local bindings so an imported
+            # function of the same name cannot produce a false call edge.
+            target = next(
+                (child for child in node.children if child.type == "as_pattern_target"),
+                None,
+            )
+            if target is not None:
+                bound_names = as_target_identifiers(target)
                 bindings.setdefault(scope, set()).update(bound_names)
                 if scope is None:
                     module_rebindings.extend(

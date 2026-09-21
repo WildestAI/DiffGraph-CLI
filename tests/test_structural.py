@@ -1467,6 +1467,31 @@ def test_relative_from_imports_preserve_package_evidence_and_call_bindings(tmp_p
     assert calls[0]["evidence"][0]["snippet"] == "run_local()"
 
 
+def test_as_pattern_bindings_do_not_create_import_grounded_call_edges(tmp_path):
+    """with/except aliases shadow imports before their bodies execute."""
+    root = repo(tmp_path)
+    write(
+        root,
+        "as_pattern_bindings.py",
+        "from remote.worker import execute as run_remote\n\n"
+        "def with_shadow(resource):\n"
+        "    with resource() as run_remote:\n"
+        "        run_remote()\n\n"
+        "def except_shadow():\n"
+        "    try:\n"
+        "        pass\n"
+        "    except Exception as run_remote:\n"
+        "        run_remote()\n",
+    )
+    git(root, "add", "as_pattern_bindings.py")
+
+    artifact = analyze_local_diff(str(root), staged=True)
+
+    assert_valid(artifact)
+    calls = [item for item in artifact["relationships"] if item["kind"] == "calls"]
+    assert calls == []
+
+
 def test_rebound_import_does_not_create_import_grounded_call_edge(tmp_path):
     root = repo(tmp_path)
     write(
@@ -1480,6 +1505,75 @@ def test_rebound_import_does_not_create_import_grounded_call_edge(tmp_path):
     git(root, "add", "rebound_import.py")
 
     artifact = analyze_local_diff(str(root), staged=True)
+    assert_valid(artifact)
+    calls = [item for item in artifact["relationships"] if item["kind"] == "calls"]
+    assert calls == []
+
+
+@pytest.mark.parametrize(
+    "binding_statement",
+    [
+        "with context() as run_remote:\n    pass",
+        "try:\n    pass\nexcept Exception as run_remote:\n    pass",
+    ],
+)
+def test_module_as_binding_rebinds_imported_alias(tmp_path, binding_statement):
+    """Module ``as`` bindings suppress later import-grounded call edges."""
+    root = repo(tmp_path)
+    write(
+        root,
+        "as_binding_rebind.py",
+        "from remote.worker import execute as run_remote\n\n"
+        + binding_statement
+        + "\n\nrun_remote()\n",
+    )
+    git(root, "add", "as_binding_rebind.py")
+
+    artifact = analyze_local_diff(str(root), staged=True)
+
+    assert_valid(artifact)
+    calls = [item for item in artifact["relationships"] if item["kind"] == "calls"]
+    assert calls == []
+
+
+def test_as_binding_attribute_target_does_not_shadow_import(tmp_path):
+    """An attribute ``as`` target does not assign its object name."""
+    root = repo(tmp_path)
+    write(
+        root,
+        "as_attribute_target.py",
+        "from remote.worker import execute as run_remote\n\n"
+        "with context() as run_remote.result:\n"
+        "    pass\n\n"
+        "run_remote()\n",
+    )
+    git(root, "add", "as_attribute_target.py")
+
+    artifact = analyze_local_diff(str(root), staged=True)
+
+    assert_valid(artifact)
+    calls = [item for item in artifact["relationships"] if item["kind"] == "calls"]
+    assert len(calls) == 1
+    assert calls[0]["resolution_method"] == "import_grounded"
+
+
+def test_as_binding_destructuring_rebinds_each_imported_alias(tmp_path):
+    """A destructured ``as`` target binds each assigned identifier."""
+    root = repo(tmp_path)
+    write(
+        root,
+        "as_destructure.py",
+        "from remote.worker import execute as run_remote\n"
+        "from remote.worker import summarize as summarize_remote\n\n"
+        "with context() as (run_remote, summarize_remote):\n"
+        "    pass\n\n"
+        "run_remote()\n"
+        "summarize_remote()\n",
+    )
+    git(root, "add", "as_destructure.py")
+
+    artifact = analyze_local_diff(str(root), staged=True)
+
     assert_valid(artifact)
     calls = [item for item in artifact["relationships"] if item["kind"] == "calls"]
     assert calls == []
