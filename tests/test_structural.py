@@ -1510,6 +1510,53 @@ def test_rebound_import_does_not_create_import_grounded_call_edge(tmp_path):
     assert calls == []
 
 
+@pytest.mark.parametrize(
+    "binding_statement",
+    [
+        "with context() as run_remote:\n    pass",
+        "try:\n    pass\nexcept Exception as run_remote:\n    pass",
+    ],
+)
+def test_module_as_binding_rebinds_imported_alias(tmp_path, binding_statement):
+    """Module ``as`` bindings suppress later import-grounded call edges."""
+    root = repo(tmp_path)
+    write(
+        root,
+        "as_binding_rebind.py",
+        "from remote.worker import execute as run_remote\n\n"
+        + binding_statement
+        + "\n\nrun_remote()\n",
+    )
+    git(root, "add", "as_binding_rebind.py")
+
+    artifact = analyze_local_diff(str(root), staged=True)
+
+    assert_valid(artifact)
+    calls = [item for item in artifact["relationships"] if item["kind"] == "calls"]
+    assert calls == []
+
+
+def test_as_binding_attribute_target_does_not_shadow_import(tmp_path):
+    """An attribute ``as`` target does not assign its object name."""
+    root = repo(tmp_path)
+    write(
+        root,
+        "as_attribute_target.py",
+        "from remote.worker import execute as run_remote\n\n"
+        "with context() as run_remote.result:\n"
+        "    pass\n\n"
+        "run_remote()\n",
+    )
+    git(root, "add", "as_attribute_target.py")
+
+    artifact = analyze_local_diff(str(root), staged=True)
+
+    assert_valid(artifact)
+    calls = [item for item in artifact["relationships"] if item["kind"] == "calls"]
+    assert len(calls) == 1
+    assert calls[0]["resolution_method"] == "import_grounded"
+
+
 @pytest.mark.parametrize("declaration", ["def run_remote():\n    return None", "class run_remote:\n    pass"])
 def test_module_declaration_rebinds_imported_alias(tmp_path, declaration):
     root = repo(tmp_path)
