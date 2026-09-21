@@ -1467,6 +1467,31 @@ def test_relative_from_imports_preserve_package_evidence_and_call_bindings(tmp_p
     assert calls[0]["evidence"][0]["snippet"] == "run_local()"
 
 
+def test_as_pattern_bindings_do_not_create_import_grounded_call_edges(tmp_path):
+    """with/except aliases shadow imports before their bodies execute."""
+    root = repo(tmp_path)
+    write(
+        root,
+        "as_pattern_bindings.py",
+        "from remote.worker import execute as run_remote\n\n"
+        "def with_shadow(resource):\n"
+        "    with resource() as run_remote:\n"
+        "        run_remote()\n\n"
+        "def except_shadow():\n"
+        "    try:\n"
+        "        pass\n"
+        "    except Exception as run_remote:\n"
+        "        run_remote()\n",
+    )
+    git(root, "add", "as_pattern_bindings.py")
+
+    artifact = analyze_local_diff(str(root), staged=True)
+
+    assert_valid(artifact)
+    calls = [item for item in artifact["relationships"] if item["kind"] == "calls"]
+    assert calls == []
+
+
 def test_rebound_import_does_not_create_import_grounded_call_edge(tmp_path):
     root = repo(tmp_path)
     write(

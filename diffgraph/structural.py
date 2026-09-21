@@ -467,6 +467,21 @@ def _parse_python(
                     module_rebindings.extend(
                         (name, node.start_point[0] + 1) for name in bound_names
                     )
+        elif (
+            node.type == "as_pattern"
+            and node.parent is not None
+            and node.parent.type in ("with_item", "except_clause")
+        ):
+            # ``with resource() as name`` and ``except Error as name`` bind
+            # their target in the enclosing lexical scope before the body is
+            # evaluated. Treat it like other local bindings so an imported
+            # function of the same name cannot produce a false call edge.
+            target = next(
+                (child for child in node.children if child.type == "as_pattern_target"),
+                None,
+            )
+            if target is not None:
+                bindings.setdefault(scope, set()).update(identifiers(target))
         for child in node.children:
             visit(child, next_parents)
 
