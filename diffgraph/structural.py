@@ -279,6 +279,45 @@ def _parse_python(
             found.update(as_target_identifiers(child))
         return found
 
+    def case_pattern_identifiers(node) -> set:
+        """Return capture names assigned by a Python structural match pattern.
+
+        Bare names in ``case`` patterns capture, while qualified names and the
+        leading name in a class pattern are value lookups. Record only the
+        former so imported call targets cannot leak into a capture's case body.
+        """
+        found = set()
+        if node.type == "case_pattern":
+            dotted_name = next(
+                (child for child in node.children if child.type == "dotted_name"),
+                None,
+            )
+            if dotted_name is not None:
+                name = _node_text(content, dotted_name)
+                if "." not in name and name not in ("_", "False", "None", "True"):
+                    found.add(name)
+        elif node.type == "keyword_pattern":
+            # The leading identifier is the class attribute label; only the
+            # value pattern to the right of ``=`` can capture a local name.
+            dotted_name = next(
+                (child for child in node.children if child.type == "dotted_name"),
+                None,
+            )
+            if dotted_name is not None:
+                name = _node_text(content, dotted_name)
+                if "." not in name and name not in ("_", "False", "None", "True"):
+                    found.add(name)
+        elif node.type == "as_pattern":
+            target = next(
+                (child for child in node.children if child.type == "as_pattern_target"),
+                None,
+            )
+            if target is not None:
+                found.update(as_target_identifiers(target))
+        for child in node.children:
+            found.update(case_pattern_identifiers(child))
+        return found
+
     def visit(node, parents: Tuple[Tuple[str, str], ...] = ()) -> None:
         next_parents = parents
         if node.type in ("class_definition", "function_definition"):
@@ -469,6 +508,15 @@ def _parse_python(
                 bindings.setdefault(scope, set()).add(name)
                 if scope is None:
                     module_rebindings.append((name, node.start_point[0] + 1))
+        elif node.type == "case_clause":
+            # Capture patterns bind their names before the case body executes.
+            # Keep them lexical and line-aware just like assignment bindings.
+            bound_names = case_pattern_identifiers(node)
+            bindings.setdefault(scope, set()).update(bound_names)
+            if scope is None:
+                module_rebindings.extend(
+                    (name, node.start_point[0] + 1) for name in bound_names
+                )
         elif node.type in ("assignment", "annotated_assignment", "for_statement"):
             left = node.child_by_field_name("left")
             if left is not None:
