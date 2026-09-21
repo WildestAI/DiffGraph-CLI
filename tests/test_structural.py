@@ -1557,6 +1557,28 @@ def test_as_binding_attribute_target_does_not_shadow_import(tmp_path):
     assert calls[0]["resolution_method"] == "import_grounded"
 
 
+def test_as_binding_destructuring_rebinds_each_imported_alias(tmp_path):
+    """A destructured ``as`` target binds each assigned identifier."""
+    root = repo(tmp_path)
+    write(
+        root,
+        "as_destructure.py",
+        "from remote.worker import execute as run_remote\n"
+        "from remote.worker import summarize as summarize_remote\n\n"
+        "with context() as (run_remote, summarize_remote):\n"
+        "    pass\n\n"
+        "run_remote()\n"
+        "summarize_remote()\n",
+    )
+    git(root, "add", "as_destructure.py")
+
+    artifact = analyze_local_diff(str(root), staged=True)
+
+    assert_valid(artifact)
+    calls = [item for item in artifact["relationships"] if item["kind"] == "calls"]
+    assert calls == []
+
+
 @pytest.mark.parametrize("declaration", ["def run_remote():\n    return None", "class run_remote:\n    pass"])
 def test_module_declaration_rebinds_imported_alias(tmp_path, declaration):
     root = repo(tmp_path)
