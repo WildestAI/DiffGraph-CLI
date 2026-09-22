@@ -327,12 +327,13 @@ def _parse_python(
         return found
 
     def enclosing_comprehension_bindings(node) -> Tuple[str, ...]:
-        """Return ``for`` targets visible to a call in a comprehension body.
+        """Return comprehension targets bound before ``node`` executes.
 
-        Tree-sitter represents comprehension clauses as siblings of the
-        expression they govern, so they cannot be treated as bindings in the
-        enclosing function. Record them on calls within the comprehension
-        instead; that keeps the shadowing local to the comprehension scope.
+        A comprehension target is not visible in its own iterable or in an
+        earlier clause's iterable. Tree-sitter stores each ``for_in_clause``
+        beside the expression it governs, so derive visibility from the call's
+        position within the direct clauses rather than treating every target as
+        an enclosing-function binding.
         """
         found = set()
         ancestor = node.parent
@@ -343,10 +344,28 @@ def _parse_python(
                 "dictionary_comprehension",
                 "generator_expression",
             ):
-                for child in ancestor.children:
-                    if child.type != "for_in_clause":
+                clauses = [
+                    child for child in ancestor.children if child.type == "for_in_clause"
+                ]
+                visible_clauses = clauses
+                for index, clause in enumerate(clauses):
+                    if not (
+                        clause.start_byte <= node.start_byte
+                        and node.end_byte <= clause.end_byte
+                    ):
                         continue
-                    left = child.child_by_field_name("left")
+                    iterable = clause.child_by_field_name("right")
+                    if (
+                        iterable is not None
+                        and iterable.start_byte <= node.start_byte
+                        and node.end_byte <= iterable.end_byte
+                    ):
+                        visible_clauses = clauses[:index]
+                    else:
+                        visible_clauses = clauses[: index + 1]
+                    break
+                for clause in visible_clauses:
+                    left = clause.child_by_field_name("left")
                     if left is not None:
                         found.update(identifiers(left))
             ancestor = ancestor.parent

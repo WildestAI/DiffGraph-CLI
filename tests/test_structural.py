@@ -1516,6 +1516,29 @@ def test_comprehension_targets_shadow_imports_only_inside_comprehensions(tmp_pat
     assert all(item["resolution_method"] == "import_grounded" for item in calls)
 
 
+def test_comprehension_clauses_bind_targets_in_evaluation_order(tmp_path):
+    """Comprehension iterables see only targets from earlier clauses."""
+    root = repo(tmp_path)
+    write(
+        root,
+        "comprehension_clause_order.py",
+        "from remote.worker import execute as run_remote\n\n"
+        "def build(values):\n"
+        "    own_iterable = [item for run_remote in run_remote()]\n"
+        "    earlier_iterable = [item for item in run_remote() for run_remote in values]\n"
+        "    later_iterable = [item for run_remote in values for item in run_remote()]\n"
+        "    return own_iterable, earlier_iterable, later_iterable\n",
+    )
+    git(root, "add", "comprehension_clause_order.py")
+
+    artifact = analyze_local_diff(str(root), staged=True)
+
+    assert_valid(artifact)
+    calls = [item for item in artifact["relationships"] if item["kind"] == "calls"]
+    assert {item["evidence"][0]["line_start"] for item in calls} == {4, 5}
+    assert all(item["resolution_method"] == "import_grounded" for item in calls)
+
+
 def test_match_pattern_captures_do_not_create_import_grounded_call_edges(tmp_path):
     """Python match captures, including splats, shadow imports in case bodies."""
     root = repo(tmp_path)
