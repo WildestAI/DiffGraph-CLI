@@ -1,0 +1,46 @@
+query($owner: String!, $repo: String!, $sha: String!) {
+  repository(owner: $owner, name: $repo) {
+    object(expression: $sha) {
+      ... on Commit {
+        associatedPullRequests(first: 100) {
+          pageInfo {
+            hasNextPage
+          }
+          nodes {
+            number
+            mergeCommit {
+              oid
+            }
+            labels(first: 20) {
+              pageInfo {
+                hasNextPage
+              }
+              nodes {
+                name
+              }
+            }
+            closingIssuesReferences(first: 20) {
+              pageInfo {
+                hasNextPage
+              }
+              nodes {
+                number
+                repository {
+                  nameWithOwner
+                }
+                labels(first: 30) {
+                  pageInfo {
+                    hasNextPage
+                  }
+                  nodes {
+                    name
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+}
