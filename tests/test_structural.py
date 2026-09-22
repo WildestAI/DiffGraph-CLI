@@ -1539,6 +1539,28 @@ def test_comprehension_clauses_bind_targets_in_evaluation_order(tmp_path):
     assert all(item["resolution_method"] == "import_grounded" for item in calls)
 
 
+def test_comprehension_filter_does_not_bind_later_targets(tmp_path):
+    """A filter sees prior targets but not names bound by later clauses."""
+    root = repo(tmp_path)
+    write(
+        root,
+        "comprehension_filter_order.py",
+        "from remote.worker import execute as run_remote\n\n"
+        "def build(values, sources):\n"
+        "    return [item for item in values "
+        "if run_remote() for run_remote in sources]\n",
+    )
+    git(root, "add", "comprehension_filter_order.py")
+
+    artifact = analyze_local_diff(str(root), staged=True)
+
+    assert_valid(artifact)
+    calls = [item for item in artifact["relationships"] if item["kind"] == "calls"]
+    assert len(calls) == 1
+    assert calls[0]["evidence"][0]["line_start"] == 4
+    assert calls[0]["resolution_method"] == "import_grounded"
+
+
 def test_match_pattern_captures_do_not_create_import_grounded_call_edges(tmp_path):
     """Python match captures, including splats, shadow imports in case bodies."""
     root = repo(tmp_path)

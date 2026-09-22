@@ -345,7 +345,9 @@ def _parse_python(
                 "generator_expression",
             ):
                 clauses = [
-                    child for child in ancestor.children if child.type == "for_in_clause"
+                    child
+                    for child in ancestor.children
+                    if child.type in ("for_in_clause", "if_clause")
                 ]
                 visible_clauses = clauses
                 for index, clause in enumerate(clauses):
@@ -365,6 +367,8 @@ def _parse_python(
                         visible_clauses = clauses[: index + 1]
                     break
                 for clause in visible_clauses:
+                    if clause.type != "for_in_clause":
+                        continue
                     left = clause.child_by_field_name("left")
                     if left is not None:
                         found.update(identifiers(left))
