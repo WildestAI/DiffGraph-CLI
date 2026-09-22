@@ -1492,6 +1492,25 @@ def test_as_pattern_bindings_do_not_create_import_grounded_call_edges(tmp_path):
     assert calls == []
 
 
+def test_comprehension_targets_do_not_create_import_grounded_call_edges(tmp_path):
+    """Comprehension targets lexically shadow imported call bindings."""
+    root = repo(tmp_path)
+    write(
+        root,
+        "comprehension_bindings.py",
+        "from remote.worker import execute as run_remote\n\n"
+        "def build(values):\n"
+        "    return [run_remote() for run_remote in values]\n",
+    )
+    git(root, "add", "comprehension_bindings.py")
+
+    artifact = analyze_local_diff(str(root), staged=True)
+
+    assert_valid(artifact)
+    calls = [item for item in artifact["relationships"] if item["kind"] == "calls"]
+    assert calls == []
+
+
 def test_match_pattern_captures_do_not_create_import_grounded_call_edges(tmp_path):
     """Python match captures, including splats, shadow imports in case bodies."""
     root = repo(tmp_path)

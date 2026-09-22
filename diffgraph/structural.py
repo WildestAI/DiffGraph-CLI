@@ -524,7 +524,17 @@ def _parse_python(
                 module_rebindings.extend(
                     (name, node.start_point[0] + 1) for name in bound_names
                 )
-        elif node.type in ("assignment", "annotated_assignment", "for_statement"):
+        elif node.type in (
+            "assignment",
+            "annotated_assignment",
+            "for_statement",
+            "for_in_clause",
+        ):
+            # Comprehension ``for`` targets use ``for_in_clause`` rather than
+            # a statement-level ``for_statement`` in the Python grammar.
+            # They are still lexical bindings, so a target named like an
+            # imported callable must not create an import-grounded call edge
+            # from the comprehension expression.
             left = node.child_by_field_name("left")
             if left is not None:
                 bound_names = identifiers(left)
