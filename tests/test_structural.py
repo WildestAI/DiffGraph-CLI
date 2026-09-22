@@ -1492,6 +1492,39 @@ def test_as_pattern_bindings_do_not_create_import_grounded_call_edges(tmp_path):
     assert calls == []
 
 
+def test_match_pattern_captures_do_not_create_import_grounded_call_edges(tmp_path):
+    """Python match captures, including splats, shadow imports in case bodies."""
+    root = repo(tmp_path)
+    write(
+        root,
+        "match_pattern_bindings.py",
+        "from remote.worker import execute as run_remote\n\n"
+        "def bare_capture(value):\n"
+        "    match value:\n"
+        "        case run_remote:\n"
+        "            run_remote()\n\n"
+        "def sequence_capture(value):\n"
+        "    match value:\n"
+        "        case [run_remote]:\n"
+        "            run_remote()\n\n"
+        "def splat_capture(value):\n"
+        "    match value:\n"
+        "        case [*run_remote]:\n"
+        "            run_remote()\n\n"
+        "def keyword_capture(value):\n"
+        "    match value:\n"
+        "        case Point(callback=run_remote):\n"
+        "            run_remote()\n",
+    )
+    git(root, "add", "match_pattern_bindings.py")
+
+    artifact = analyze_local_diff(str(root), staged=True)
+
+    assert_valid(artifact)
+    calls = [item for item in artifact["relationships"] if item["kind"] == "calls"]
+    assert calls == []
+
+
 def test_rebound_import_does_not_create_import_grounded_call_edge(tmp_path):
     root = repo(tmp_path)
     write(
