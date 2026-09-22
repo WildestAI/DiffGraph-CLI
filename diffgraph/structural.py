@@ -92,6 +92,7 @@ class _Call:
     name: str
     line: int
     snippet: str
+    comprehension_bindings: Tuple[str, ...] = ()
 
 
 def _blob(repository: str, oid: Optional[str]) -> Optional[bytes]:
@@ -325,6 +326,32 @@ def _parse_python(
             found.update(case_pattern_identifiers(child))
         return found
 
+    def enclosing_comprehension_bindings(node) -> Tuple[str, ...]:
+        """Return ``for`` targets visible to a call in a comprehension body.
+
+        Tree-sitter represents comprehension clauses as siblings of the
+        expression they govern, so they cannot be treated as bindings in the
+        enclosing function. Record them on calls within the comprehension
+        instead; that keeps the shadowing local to the comprehension scope.
+        """
+        found = set()
+        ancestor = node.parent
+        while ancestor is not None:
+            if ancestor.type in (
+                "list_comprehension",
+                "set_comprehension",
+                "dictionary_comprehension",
+                "generator_expression",
+            ):
+                for child in ancestor.children:
+                    if child.type != "for_in_clause":
+                        continue
+                    left = child.child_by_field_name("left")
+                    if left is not None:
+                        found.update(identifiers(left))
+            ancestor = ancestor.parent
+        return tuple(sorted(found))
+
     def visit(node, parents: Tuple[Tuple[str, str], ...] = ()) -> None:
         next_parents = parents
         if node.type in ("class_definition", "function_definition"):
@@ -498,6 +525,7 @@ def _parse_python(
                         _node_text(content, function),
                         node.start_point[0] + 1,
                         _node_text(content, node),
+                        enclosing_comprehension_bindings(node),
                     )
                 )
 
@@ -524,17 +552,7 @@ def _parse_python(
                 module_rebindings.extend(
                     (name, node.start_point[0] + 1) for name in bound_names
                 )
-        elif node.type in (
-            "assignment",
-            "annotated_assignment",
-            "for_statement",
-            "for_in_clause",
-        ):
-            # Comprehension ``for`` targets use ``for_in_clause`` rather than
-            # a statement-level ``for_statement`` in the Python grammar.
-            # They are still lexical bindings, so a target named like an
-            # imported callable must not create an import-grounded call edge
-            # from the comprehension expression.
+        elif node.type in ("assignment", "annotated_assignment", "for_statement"):
             left = node.child_by_field_name("left")
             if left is not None:
                 bound_names = identifiers(left)
@@ -656,6 +674,8 @@ def _resolve_call_target(
     are deliberately left unresolved. Attribute calls and ambiguous duplicate
     definitions are likewise omitted rather than guessed.
     """
+    if call.name in call.comprehension_bindings:
+        return None
     candidates: List[str] = []
     current_name = call.caller
     while current_name is not None:

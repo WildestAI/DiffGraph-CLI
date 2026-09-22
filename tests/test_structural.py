@@ -1492,15 +1492,18 @@ def test_as_pattern_bindings_do_not_create_import_grounded_call_edges(tmp_path):
     assert calls == []
 
 
-def test_comprehension_targets_do_not_create_import_grounded_call_edges(tmp_path):
-    """Comprehension targets lexically shadow imported call bindings."""
+def test_comprehension_targets_shadow_imports_only_inside_comprehensions(tmp_path):
+    """Comprehension targets shadow imports without leaking into their function."""
     root = repo(tmp_path)
     write(
         root,
         "comprehension_bindings.py",
         "from remote.worker import execute as run_remote\n\n"
         "def build(values):\n"
-        "    return [run_remote() for run_remote in values]\n",
+        "    run_remote()\n"
+        "    result = [run_remote() for run_remote in values]\n"
+        "    run_remote()\n"
+        "    return result\n",
     )
     git(root, "add", "comprehension_bindings.py")
 
@@ -1508,7 +1511,9 @@ def test_comprehension_targets_do_not_create_import_grounded_call_edges(tmp_path
 
     assert_valid(artifact)
     calls = [item for item in artifact["relationships"] if item["kind"] == "calls"]
-    assert calls == []
+    assert len(calls) == 2
+    assert {item["evidence"][0]["line_start"] for item in calls} == {4, 6}
+    assert all(item["resolution_method"] == "import_grounded" for item in calls)
 
 
 def test_match_pattern_captures_do_not_create_import_grounded_call_edges(tmp_path):
