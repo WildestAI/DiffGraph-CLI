@@ -1492,6 +1492,30 @@ def test_as_pattern_bindings_do_not_create_import_grounded_call_edges(tmp_path):
     assert calls == []
 
 
+def test_named_expression_bindings_do_not_create_import_grounded_call_edges(tmp_path):
+    """A walrus target shadows an import for calls after the assignment."""
+    root = repo(tmp_path)
+    write(
+        root,
+        "named_expression_bindings.py",
+        "from remote.worker import execute as run_remote\n\n"
+        "def factory():\n"
+        "    return lambda: None\n\n"
+        "def caller():\n"
+        "    if (run_remote := factory()):\n"
+        "        run_remote()\n",
+    )
+    git(root, "add", "named_expression_bindings.py")
+
+    artifact = analyze_local_diff(str(root), staged=True)
+
+    assert_valid(artifact)
+    calls = [item for item in artifact["relationships"] if item["kind"] == "calls"]
+    assert [(item["source_id"], item["target_id"]) for item in calls] == [
+        ("sym::named_expression_bindings.py::caller", "sym::named_expression_bindings.py::factory")
+    ]
+
+
 def test_comprehension_targets_shadow_imports_only_inside_comprehensions(tmp_path):
     """Comprehension targets shadow imports without leaking into their function."""
     root = repo(tmp_path)

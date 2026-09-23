@@ -575,8 +575,16 @@ def _parse_python(
                 module_rebindings.extend(
                     (name, node.start_point[0] + 1) for name in bound_names
                 )
-        elif node.type in ("assignment", "annotated_assignment", "for_statement"):
-            left = node.child_by_field_name("left")
+        elif node.type in (
+            "assignment", "annotated_assignment", "for_statement", "named_expression"
+        ):
+            # Assignment expressions (``name := value``) bind their target in
+            # the enclosing scope before later expressions execute. Treat them
+            # like ordinary assignments so an imported name cannot produce a
+            # false import-grounded call edge after it has been rebound.
+            left = node.child_by_field_name(
+                "name" if node.type == "named_expression" else "left"
+            )
             if left is not None:
                 bound_names = identifiers(left)
                 bindings.setdefault(scope, set()).update(bound_names)
