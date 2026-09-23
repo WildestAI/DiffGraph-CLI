@@ -588,7 +588,14 @@ def _parse_python(
                 bound_names = identifiers(left)
                 bindings.setdefault(scope, set()).update(bound_names)
                 if scope is None:
-                    module_rebindings.extend((name, node.end_byte) for name in bound_names)
+                    binding_position = node.end_byte
+                    if node.type == "for_statement":
+                        iterable = node.child_by_field_name("right")
+                        if iterable is not None:
+                            binding_position = iterable.end_byte
+                    module_rebindings.extend(
+                        (name, binding_position) for name in bound_names
+                    )
         elif (
             node.type == "as_pattern"
             and node.parent is not None

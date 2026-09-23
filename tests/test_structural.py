@@ -1536,6 +1536,26 @@ def test_module_named_expression_keeps_import_visible_during_its_value(tmp_path)
     assert calls[0]["resolution_method"] == "import_grounded"
 
 
+def test_module_for_target_keeps_import_visible_during_iterable_evaluation(tmp_path):
+    """A loop target binds after its iterable expression is evaluated."""
+    root = repo(tmp_path)
+    write(
+        root,
+        "for_binding_order.py",
+        "from remote.worker import execute as run_remote\n\n"
+        "for run_remote in range(run_remote()):\n"
+        "    pass\n",
+    )
+    git(root, "add", "for_binding_order.py")
+
+    artifact = analyze_local_diff(str(root), staged=True)
+
+    assert_valid(artifact)
+    calls = [item for item in artifact["relationships"] if item["kind"] == "calls"]
+    assert len(calls) == 1
+    assert calls[0]["resolution_method"] == "import_grounded"
+
+
 def test_comprehension_targets_shadow_imports_only_inside_comprehensions(tmp_path):
     """Comprehension targets shadow imports without leaking into their function."""
     root = repo(tmp_path)
