@@ -1492,6 +1492,70 @@ def test_as_pattern_bindings_do_not_create_import_grounded_call_edges(tmp_path):
     assert calls == []
 
 
+def test_named_expression_bindings_do_not_create_import_grounded_call_edges(tmp_path):
+    """A walrus target shadows an import for calls after the assignment."""
+    root = repo(tmp_path)
+    write(
+        root,
+        "named_expression_bindings.py",
+        "from remote.worker import execute as run_remote\n\n"
+        "def factory():\n"
+        "    return lambda: None\n\n"
+        "def caller():\n"
+        "    if (run_remote := factory()):\n"
+        "        run_remote()\n",
+    )
+    git(root, "add", "named_expression_bindings.py")
+
+    artifact = analyze_local_diff(str(root), staged=True)
+
+    assert_valid(artifact)
+    calls = [item for item in artifact["relationships"] if item["kind"] == "calls"]
+    assert [(item["source_id"], item["target_id"]) for item in calls] == [
+        ("sym::named_expression_bindings.py::caller", "sym::named_expression_bindings.py::factory")
+    ]
+
+
+def test_module_named_expression_keeps_import_visible_during_its_value(tmp_path):
+    """A walrus rebind takes effect after its value expression is evaluated."""
+    root = repo(tmp_path)
+    write(
+        root,
+        "named_expression_order.py",
+        "from remote.worker import execute as run_remote\n\n"
+        "if (run_remote := run_remote()):\n"
+        "    pass\n",
+    )
+    git(root, "add", "named_expression_order.py")
+
+    artifact = analyze_local_diff(str(root), staged=True)
+
+    assert_valid(artifact)
+    calls = [item for item in artifact["relationships"] if item["kind"] == "calls"]
+    assert len(calls) == 1
+    assert calls[0]["resolution_method"] == "import_grounded"
+
+
+def test_module_for_target_keeps_import_visible_during_iterable_evaluation(tmp_path):
+    """A loop target binds after its iterable expression is evaluated."""
+    root = repo(tmp_path)
+    write(
+        root,
+        "for_binding_order.py",
+        "from remote.worker import execute as run_remote\n\n"
+        "for run_remote in range(run_remote()):\n"
+        "    pass\n",
+    )
+    git(root, "add", "for_binding_order.py")
+
+    artifact = analyze_local_diff(str(root), staged=True)
+
+    assert_valid(artifact)
+    calls = [item for item in artifact["relationships"] if item["kind"] == "calls"]
+    assert len(calls) == 1
+    assert calls[0]["resolution_method"] == "import_grounded"
+
+
 def test_comprehension_targets_shadow_imports_only_inside_comprehensions(tmp_path):
     """Comprehension targets shadow imports without leaking into their function."""
     root = repo(tmp_path)
@@ -1679,6 +1743,49 @@ def test_as_binding_destructuring_rebinds_each_imported_alias(tmp_path):
     assert_valid(artifact)
     calls = [item for item in artifact["relationships"] if item["kind"] == "calls"]
     assert calls == []
+
+
+def test_lambda_named_expression_does_not_shadow_an_enclosing_import(tmp_path):
+    """A lambda-local walrus target must not leak into the enclosing function."""
+    root = repo(tmp_path)
+    write(
+        root,
+        "lambda_named_expression.py",
+        "from remote.worker import execute as run_remote\n\n"
+        "def caller():\n"
+        "    thunk = lambda: (run_remote := 1)\n"
+        "    return run_remote()\n",
+    )
+    git(root, "add", "lambda_named_expression.py")
+
+    artifact = analyze_local_diff(str(root), staged=True)
+
+    assert_valid(artifact)
+    calls = [item for item in artifact["relationships"] if item["kind"] == "calls"]
+    assert len(calls) == 1
+    assert calls[0]["resolution_method"] == "import_grounded"
+
+
+def test_declaration_headers_keep_imports_visible_before_rebinding(tmp_path):
+    """Default and base expressions run before their top-level names bind."""
+    root = repo(tmp_path)
+    write(
+        root,
+        "declaration_header_order.py",
+        "from remote.worker import execute as run_remote\n\n"
+        "def function_rebind(value=run_remote()):\n"
+        "    pass\n\n"
+        "class class_rebind(run_remote()):\n"
+        "    pass\n",
+    )
+    git(root, "add", "declaration_header_order.py")
+
+    artifact = analyze_local_diff(str(root), staged=True)
+
+    assert_valid(artifact)
+    calls = [item for item in artifact["relationships"] if item["kind"] == "calls"]
+    assert len(calls) == 2
+    assert all(item["resolution_method"] == "import_grounded" for item in calls)
 
 
 @pytest.mark.parametrize("declaration", ["def run_remote():\n    return None", "class run_remote:\n    pass"])
