@@ -81,6 +81,7 @@ class _Symbol:
 class _Import:
     module: str
     line: int
+    position: int
     snippet: str
     bindings: Tuple[str, ...]
     scope: Optional[str]
@@ -91,6 +92,7 @@ class _Call:
     caller: Optional[str]
     name: str
     line: int
+    position: int
     snippet: str
     comprehension_bindings: Tuple[str, ...] = ()
 
@@ -426,7 +428,7 @@ def _parse_python(
                 if not parents:
                     # A top-level declaration overwrites an imported binding at
                     # runtime just like a top-level assignment does.
-                    module_rebindings.append((name, node.start_point[0] + 1))
+                    module_rebindings.append((name, node.start_byte))
         elif node.type in ("import_statement", "import_from_statement"):
             snippet = _node_text(content, node)
             if node.type == "import_statement":
@@ -445,7 +447,7 @@ def _parse_python(
                         # ``import package.submodule`` binds ``package``.
                         binding = raw.split(".", 1)[0]
                     imports.append(_Import(
-                        raw, node.start_point[0] + 1, snippet, (binding,),
+                        raw, node.start_point[0] + 1, node.end_byte, snippet, (binding,),
                         parents[-1][0] if parents else None,
                     ))
             else:
@@ -478,10 +480,8 @@ def _parse_python(
                         else:
                             imported.append(_node_text(content, child).split(".", 1)[0])
                     imports.append(_Import(
-                        _node_text(content, module_node),
-                        node.start_point[0] + 1,
-                        snippet,
-                        tuple(imported),
+                        _node_text(content, module_node), node.start_point[0] + 1,
+                        node.end_byte, snippet, tuple(imported),
                         parents[-1][0] if parents else None,
                     ))
         elif not parents and node.type in (
@@ -547,6 +547,7 @@ def _parse_python(
                         caller,
                         _node_text(content, function),
                         node.start_point[0] + 1,
+                        node.start_byte,
                         _node_text(content, node),
                         enclosing_comprehension_bindings(node),
                     )
@@ -565,16 +566,14 @@ def _parse_python(
                 name = _node_text(content, name_node)
                 bindings.setdefault(scope, set()).add(name)
                 if scope is None:
-                    module_rebindings.append((name, node.start_point[0] + 1))
+                    module_rebindings.append((name, node.start_byte))
         elif node.type == "case_clause":
             # Capture patterns bind their names before the case body executes.
             # Keep them lexical and line-aware just like assignment bindings.
             bound_names = case_pattern_identifiers(node)
             bindings.setdefault(scope, set()).update(bound_names)
             if scope is None:
-                module_rebindings.extend(
-                    (name, node.start_point[0] + 1) for name in bound_names
-                )
+                module_rebindings.extend((name, node.start_byte) for name in bound_names)
         elif node.type in (
             "assignment", "annotated_assignment", "for_statement", "named_expression"
         ):
@@ -589,9 +588,7 @@ def _parse_python(
                 bound_names = identifiers(left)
                 bindings.setdefault(scope, set()).update(bound_names)
                 if scope is None:
-                    module_rebindings.extend(
-                        (name, node.start_point[0] + 1) for name in bound_names
-                    )
+                    module_rebindings.extend((name, node.end_byte) for name in bound_names)
         elif (
             node.type == "as_pattern"
             and node.parent is not None
@@ -609,9 +606,7 @@ def _parse_python(
                 bound_names = as_target_identifiers(target)
                 bindings.setdefault(scope, set()).update(bound_names)
                 if scope is None:
-                    module_rebindings.extend(
-                        (name, node.start_point[0] + 1) for name in bound_names
-                    )
+                    module_rebindings.extend((name, node.start_byte) for name in bound_names)
         for child in node.children:
             visit(child, next_parents)
 
@@ -722,7 +717,7 @@ def _resolve_call_target(
         if current.kind in ("function", "method") or is_initial_class_body:
             if call.name in bindings.get(current_name, set()):
                 history = imported_targets.get(current_name, {}).get(call.name, [])
-                visible = [target for line, target in history if line <= call.line]
+                visible = [target for position, target in history if position <= call.position]
                 if visible:
                     return visible[-1]
                 return None
@@ -736,7 +731,7 @@ def _resolve_call_target(
         # Select the binding visible at this call site rather than applying a
         # later top-level rebind retroactively.
         history = imported_targets.get(None, {}).get(call.name, [])
-        visible = [target for line, target in history if line <= call.line]
+        visible = [target for position, target in history if position <= call.position]
         if visible and visible[-1] is not None:
             return visible[-1]
         # A later import must not hide a declaration that was already visible
@@ -781,13 +776,13 @@ def _imported_call_targets(
             # A later import of the same local name is intentionally
             # unresolved, but calls before it retain the earlier binding.
             scope_targets.setdefault(binding, []).append((
-                item.line, None if binding in scope_bindings else target
+                item.position, None if binding in scope_bindings else target
             ))
             scope_bindings.add(binding)
-    for binding, line in module_rebindings:
+    for binding, position in module_rebindings:
         # A declaration, assignment, or loop target replaces the imported
-        # binding only for calls at or after its source line.
-        targets.setdefault(None, {}).setdefault(binding, []).append((line, None))
+        # binding after its source expression has been evaluated.
+        targets.setdefault(None, {}).setdefault(binding, []).append((position, None))
     for scope_targets in targets.values():
         for history in scope_targets.values():
             history.sort(key=lambda item: item[0])
