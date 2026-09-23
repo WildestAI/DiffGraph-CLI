@@ -1745,6 +1745,49 @@ def test_as_binding_destructuring_rebinds_each_imported_alias(tmp_path):
     assert calls == []
 
 
+def test_lambda_named_expression_does_not_shadow_an_enclosing_import(tmp_path):
+    """A lambda-local walrus target must not leak into the enclosing function."""
+    root = repo(tmp_path)
+    write(
+        root,
+        "lambda_named_expression.py",
+        "from remote.worker import execute as run_remote\n\n"
+        "def caller():\n"
+        "    thunk = lambda: (run_remote := 1)\n"
+        "    return run_remote()\n",
+    )
+    git(root, "add", "lambda_named_expression.py")
+
+    artifact = analyze_local_diff(str(root), staged=True)
+
+    assert_valid(artifact)
+    calls = [item for item in artifact["relationships"] if item["kind"] == "calls"]
+    assert len(calls) == 1
+    assert calls[0]["resolution_method"] == "import_grounded"
+
+
+def test_declaration_headers_keep_imports_visible_before_rebinding(tmp_path):
+    """Default and base expressions run before their top-level names bind."""
+    root = repo(tmp_path)
+    write(
+        root,
+        "declaration_header_order.py",
+        "from remote.worker import execute as run_remote\n\n"
+        "def function_rebind(value=run_remote()):\n"
+        "    pass\n\n"
+        "class class_rebind(run_remote()):\n"
+        "    pass\n",
+    )
+    git(root, "add", "declaration_header_order.py")
+
+    artifact = analyze_local_diff(str(root), staged=True)
+
+    assert_valid(artifact)
+    calls = [item for item in artifact["relationships"] if item["kind"] == "calls"]
+    assert len(calls) == 2
+    assert all(item["resolution_method"] == "import_grounded" for item in calls)
+
+
 @pytest.mark.parametrize("declaration", ["def run_remote():\n    return None", "class run_remote:\n    pass"])
 def test_module_declaration_rebinds_imported_alias(tmp_path, declaration):
     root = repo(tmp_path)

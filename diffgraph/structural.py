@@ -377,6 +377,28 @@ def _parse_python(
             ancestor = ancestor.parent
         return tuple(sorted(found))
 
+    def is_inside_lambda(node) -> bool:
+        """Return whether node belongs to a lambda's lexical scope."""
+        ancestor = node.parent
+        while ancestor is not None:
+            if ancestor.type == "lambda":
+                return True
+            ancestor = ancestor.parent
+        return False
+
+    def is_declaration_header(node) -> bool:
+        """Return whether node is evaluated before its declaration binds."""
+        ancestor = node.parent
+        while ancestor is not None:
+            if ancestor.type not in ("class_definition", "function_definition"):
+                ancestor = ancestor.parent
+                continue
+            body = ancestor.child_by_field_name("body")
+            return body is None or not (
+                body.start_byte <= node.start_byte and node.end_byte <= body.end_byte
+            )
+        return False
+
     def visit(node, parents: Tuple[Tuple[str, str], ...] = ()) -> None:
         next_parents = parents
         if node.type in ("class_definition", "function_definition"):
@@ -427,8 +449,15 @@ def _parse_python(
                 next_parents = (*parents, (qname, kind))
                 if not parents:
                     # A top-level declaration overwrites an imported binding at
-                    # runtime just like a top-level assignment does.
-                    module_rebindings.append((name, node.start_byte))
+                    # runtime just like a top-level assignment does, but only
+                    # after the declaration header has been evaluated.
+                    body = node.child_by_field_name("body")
+                    binding_position = (
+                        body.start_byte
+                        if node.type == "function_definition" and body is not None
+                        else node.end_byte
+                    )
+                    module_rebindings.append((name, binding_position))
         elif node.type in ("import_statement", "import_from_statement"):
             snippet = _node_text(content, node)
             if node.type == "import_statement":
@@ -586,8 +615,17 @@ def _parse_python(
             )
             if left is not None:
                 bound_names = identifiers(left)
-                bindings.setdefault(scope, set()).update(bound_names)
-                if scope is None:
+                binding_scope = scope
+                if node.type == "named_expression":
+                    # Lambdas have their own lexical scope, but are not
+                    # structural symbols. Do not let their local targets leak
+                    # into the enclosing function or module.
+                    if is_inside_lambda(node):
+                        bound_names = set()
+                    elif is_declaration_header(node):
+                        binding_scope = parents[-2][0] if len(parents) > 1 else None
+                bindings.setdefault(binding_scope, set()).update(bound_names)
+                if binding_scope is None:
                     binding_position = node.end_byte
                     if node.type == "for_statement":
                         iterable = node.child_by_field_name("right")
