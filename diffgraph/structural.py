@@ -92,6 +92,7 @@ class _Call:
     name: str
     line: int
     snippet: str
+    comprehension_bindings: Tuple[str, ...] = ()
 
 
 def _blob(repository: str, oid: Optional[str]) -> Optional[bytes]:
@@ -325,6 +326,55 @@ def _parse_python(
             found.update(case_pattern_identifiers(child))
         return found
 
+    def enclosing_comprehension_bindings(node) -> Tuple[str, ...]:
+        """Return comprehension targets bound before ``node`` executes.
+
+        A comprehension target is not visible in its own iterable or in an
+        earlier clause's iterable. Tree-sitter stores each ``for_in_clause``
+        beside the expression it governs, so derive visibility from the call's
+        position within the direct clauses rather than treating every target as
+        an enclosing-function binding.
+        """
+        found = set()
+        ancestor = node.parent
+        while ancestor is not None:
+            if ancestor.type in (
+                "list_comprehension",
+                "set_comprehension",
+                "dictionary_comprehension",
+                "generator_expression",
+            ):
+                clauses = [
+                    child
+                    for child in ancestor.children
+                    if child.type in ("for_in_clause", "if_clause")
+                ]
+                visible_clauses = clauses
+                for index, clause in enumerate(clauses):
+                    if not (
+                        clause.start_byte <= node.start_byte
+                        and node.end_byte <= clause.end_byte
+                    ):
+                        continue
+                    iterable = clause.child_by_field_name("right")
+                    if (
+                        iterable is not None
+                        and iterable.start_byte <= node.start_byte
+                        and node.end_byte <= iterable.end_byte
+                    ):
+                        visible_clauses = clauses[:index]
+                    else:
+                        visible_clauses = clauses[: index + 1]
+                    break
+                for clause in visible_clauses:
+                    if clause.type != "for_in_clause":
+                        continue
+                    left = clause.child_by_field_name("left")
+                    if left is not None:
+                        found.update(identifiers(left))
+            ancestor = ancestor.parent
+        return tuple(sorted(found))
+
     def visit(node, parents: Tuple[Tuple[str, str], ...] = ()) -> None:
         next_parents = parents
         if node.type in ("class_definition", "function_definition"):
@@ -498,6 +548,7 @@ def _parse_python(
                         _node_text(content, function),
                         node.start_point[0] + 1,
                         _node_text(content, node),
+                        enclosing_comprehension_bindings(node),
                     )
                 )
 
@@ -646,6 +697,8 @@ def _resolve_call_target(
     are deliberately left unresolved. Attribute calls and ambiguous duplicate
     definitions are likewise omitted rather than guessed.
     """
+    if call.name in call.comprehension_bindings:
+        return None
     candidates: List[str] = []
     current_name = call.caller
     while current_name is not None:
