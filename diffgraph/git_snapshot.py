@@ -527,6 +527,9 @@ def _pathspec_escapes_repository(pathspec: str) -> bool:
     elif pathspec.startswith((":!", ":^")):
         pathspec = pathspec[2:]
 
+    if os.sep == "\\":
+        pathspec = pathspec.replace("\\", "/")
+    pathspec = posixpath.normpath(pathspec)
     return pathspec == ".." or pathspec.startswith("../")
 
 
