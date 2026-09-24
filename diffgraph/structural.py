@@ -260,7 +260,7 @@ def _parse_python(
     imports: List[_Import] = []
     calls: List[_Call] = []
     bindings: Dict[Optional[str], set] = {}
-    module_rebindings: List[Tuple[str, int]] = []
+    rebindings: List[Tuple[Optional[str], str, int]] = []
     symbol_occurrences: Dict[str, int] = {}
 
     def identifiers(node) -> set:
@@ -399,6 +399,12 @@ def _parse_python(
             )
         return False
 
+    def record_rebindings(
+        scope: Optional[str], names: set, position: int
+    ) -> None:
+        """Record lexical rebindings after the expression that creates them."""
+        rebindings.extend((scope, name, position) for name in names)
+
     def visit(node, parents: Tuple[Tuple[str, str], ...] = ()) -> None:
         next_parents = parents
         if node.type in ("class_definition", "function_definition"):
@@ -457,7 +463,7 @@ def _parse_python(
                         if node.type == "function_definition" and body is not None
                         else node.end_byte
                     )
-                    module_rebindings.append((name, binding_position))
+                    record_rebindings(None, {name}, binding_position)
         elif node.type in ("import_statement", "import_from_statement"):
             snippet = _node_text(content, node)
             if node.type == "import_statement":
@@ -594,15 +600,13 @@ def _parse_python(
             if name_node is not None and name_node.type == "identifier":
                 name = _node_text(content, name_node)
                 bindings.setdefault(scope, set()).add(name)
-                if scope is None:
-                    module_rebindings.append((name, node.start_byte))
+                record_rebindings(scope, {name}, node.start_byte)
         elif node.type == "case_clause":
             # Capture patterns bind their names before the case body executes.
             # Keep them lexical and line-aware just like assignment bindings.
             bound_names = case_pattern_identifiers(node)
             bindings.setdefault(scope, set()).update(bound_names)
-            if scope is None:
-                module_rebindings.extend((name, node.start_byte) for name in bound_names)
+            record_rebindings(scope, bound_names, node.start_byte)
         elif node.type in (
             "assignment", "annotated_assignment", "for_statement", "named_expression"
         ):
@@ -625,15 +629,12 @@ def _parse_python(
                     elif is_declaration_header(node):
                         binding_scope = parents[-2][0] if len(parents) > 1 else None
                 bindings.setdefault(binding_scope, set()).update(bound_names)
-                if binding_scope is None:
-                    binding_position = node.end_byte
-                    if node.type == "for_statement":
-                        iterable = node.child_by_field_name("right")
-                        if iterable is not None:
-                            binding_position = iterable.end_byte
-                    module_rebindings.extend(
-                        (name, binding_position) for name in bound_names
-                    )
+                binding_position = node.end_byte
+                if node.type == "for_statement":
+                    iterable = node.child_by_field_name("right")
+                    if iterable is not None:
+                        binding_position = iterable.end_byte
+                record_rebindings(binding_scope, bound_names, binding_position)
         elif (
             node.type == "as_pattern"
             and node.parent is not None
@@ -650,8 +651,7 @@ def _parse_python(
             if target is not None:
                 bound_names = as_target_identifiers(target)
                 bindings.setdefault(scope, set()).update(bound_names)
-                if scope is None:
-                    module_rebindings.extend((name, node.start_byte) for name in bound_names)
+                record_rebindings(scope, bound_names, node.start_byte)
         for child in node.children:
             visit(child, next_parents)
 
@@ -661,7 +661,7 @@ def _parse_python(
         sorted(imports, key=lambda item: (item.line, item.module, item.snippet)),
         sorted(calls, key=lambda item: (item.line, item.caller or "", item.name, item.snippet)),
         bindings,
-        module_rebindings,
+        rebindings,
     )
 
 
@@ -801,7 +801,7 @@ def _resolve_call_target(
 
 def _imported_call_targets(
     imports: Dict[Tuple[str, int], _Import],
-    module_rebindings: List[Tuple[str, int]],
+    rebindings: List[Tuple[Optional[str], str, int]],
 ) -> Dict[Optional[str], Dict[str, List[Tuple[int, Optional[str]]]]]:
     """Map import bindings to conservative, lexical and line-aware histories.
 
@@ -824,10 +824,10 @@ def _imported_call_targets(
                 item.position, None if binding in scope_bindings else target
             ))
             scope_bindings.add(binding)
-    for binding, position in module_rebindings:
+    for scope, binding, position in rebindings:
         # A declaration, assignment, or loop target replaces the imported
         # binding after its source expression has been evaluated.
-        targets.setdefault(None, {}).setdefault(binding, []).append((position, None))
+        targets.setdefault(scope, {}).setdefault(binding, []).append((position, None))
     for scope_targets in targets.values():
         for history in scope_targets.values():
             history.sort(key=lambda item: item[0])

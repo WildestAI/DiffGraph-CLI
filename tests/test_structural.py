@@ -1492,6 +1492,30 @@ def test_as_pattern_bindings_do_not_create_import_grounded_call_edges(tmp_path):
     assert calls == []
 
 
+def test_local_import_rebinding_stops_import_grounded_call_edges(tmp_path):
+    """A local assignment must replace a same-scope imported call target."""
+    root = repo(tmp_path)
+    write(
+        root,
+        "local_import_rebinding.py",
+        "def caller():\n"
+        "    from remote.worker import execute as run_remote\n"
+        "    run_remote()\n"
+        "    run_remote = lambda: None\n"
+        "    run_remote()\n",
+    )
+    git(root, "add", "local_import_rebinding.py")
+
+    artifact = analyze_local_diff(str(root), staged=True)
+
+    assert_valid(artifact)
+    calls = [item for item in artifact["relationships"] if item["kind"] == "calls"]
+    assert len(calls) == 1
+    assert calls[0]["source_id"] == "sym::local_import_rebinding.py::caller"
+    assert calls[0]["resolution_method"] == "import_grounded"
+    assert calls[0]["evidence"][0]["line_start"] == 3
+
+
 def test_named_expression_bindings_do_not_create_import_grounded_call_edges(tmp_path):
     """A walrus target shadows an import for calls after the assignment."""
     root = repo(tmp_path)
