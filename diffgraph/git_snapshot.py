@@ -440,10 +440,10 @@ def _root_relative_pathspecs(
 ) -> Optional[List[str]]:
     """Translate caller-relative pathspecs for a Git process run at ``root``.
 
-    An absolute scope outside the repository cannot be passed to Git safely.
-    Reject it rather than normalising it to ``../...`` and relying on a
-    command failure, so callers receive an actionable warning and never risk
-    falling back to a broader query.
+    A scope outside the repository cannot be passed to Git safely. Reject it
+    rather than normalising it to ``../...`` and relying on a command failure,
+    so callers receive an actionable warning and never risk falling back to a
+    broader query. This applies to relative scopes from a subdirectory too.
     """
 
     if not pathspecs:
@@ -474,7 +474,15 @@ def _root_relative_pathspecs(
                 os.path.relpath(absolute_path, canonical_root).replace(os.sep, "/")
             )
         else:
-            scoped.append(_prefix_pathspec(pathspec, prefix))
+            prefixed = _prefix_pathspec(pathspec, prefix)
+            if _pathspec_escapes_repository(prefixed):
+                warnings.append(ResolutionWarning(
+                    "pathspec_outside_repository",
+                    "Relative pathspec escapes the repository and was not resolved",
+                    pathspec,
+                ))
+                return None
+            scoped.append(prefixed)
     return scoped
 
 
@@ -496,6 +504,30 @@ def _prefix_pathspec(pathspec: str, prefix: str) -> str:
     if pathspec.startswith((":!", ":^")):
         return pathspec[:2] + prefixed(pathspec[2:])
     return prefixed(pathspec)
+
+
+def _pathspec_escapes_repository(pathspec: str) -> bool:
+    """Return whether a root-relative pathspec traverses above the repository.
+
+    ``_prefix_pathspec`` preserves Git's long and short pathspec magic. Strip
+    only that prefix before checking the path portion so exclusions and glob
+    pathspecs cannot turn a caller-relative ``../...`` scope into a Git
+    command rooted outside the requested repository.
+    """
+
+    if pathspec.startswith(":/"):
+        return False
+    if pathspec.startswith(":("):
+        end = pathspec.find(")")
+        if end != -1:
+            magic = pathspec[2:end].split(",")
+            if "top" in magic:
+                return False
+            pathspec = pathspec[end + 1 :]
+    elif pathspec.startswith((":!", ":^")):
+        pathspec = pathspec[2:]
+
+    return pathspec == ".." or pathspec.startswith("../")
 
 
 def _run(
