@@ -267,6 +267,35 @@ def test_absolute_pathspec_outside_repository_is_a_scoped_warning(tmp_path):
         ]
 
 
+def test_relative_pathspec_outside_repository_is_a_scoped_warning(tmp_path):
+    """A subdirectory caller must not pass an escaping scope to Git's root."""
+    repo = make_repo(tmp_path)
+    write(repo, "inside/tracked.txt", b"old\n")
+    commit_all(repo)
+    write(repo, "inside/tracked.txt", b"new\n")
+
+    caller = repo / "inside"
+    pathspec = "../../outside"
+    staged = resolve_staged(str(caller), [pathspec])
+    unstaged = resolve_unstaged(str(caller), [pathspec])
+    ranged = resolve_commit_range(
+        str(caller), "HEAD", "HEAD", pathspecs=[pathspec]
+    )
+
+    for result in (staged, unstaged, ranged):
+        assert result.entries == ()
+        assert [(warning.code, warning.path) for warning in result.warnings] == [
+            ("pathspec_outside_repository", pathspec)
+        ]
+
+
+def test_windows_relative_pathspec_outside_repository_is_detected(monkeypatch):
+    """Windows separators must not bypass the repository-boundary check."""
+    monkeypatch.setattr(git_snapshot.os, "sep", "\\")
+
+    assert git_snapshot._pathspec_escapes_repository("inside/..\\..\\outside")
+
+
 def test_absolute_pathspec_via_symlink_alias_is_in_repository(tmp_path):
     """A symlinked repository path resolves to the canonical repository scope."""
     repo = make_repo(tmp_path)
