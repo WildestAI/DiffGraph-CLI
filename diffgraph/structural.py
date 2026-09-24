@@ -282,6 +282,17 @@ def _parse_python(
             found.update(as_target_identifiers(child))
         return found
 
+    def assignment_target_identifiers(node) -> set:
+        """Return names assigned by an assignment target, not names it reads."""
+        if node.type in ("attribute", "subscript"):
+            return set()
+        if node.type == "identifier":
+            return {_node_text(content, node)}
+        found = set()
+        for child in node.children:
+            found.update(assignment_target_identifiers(child))
+        return found
+
     def case_pattern_identifiers(node) -> set:
         """Return capture names assigned by a Python structural match pattern.
 
@@ -453,17 +464,15 @@ def _parse_python(
                     )
                 )
                 next_parents = (*parents, (qname, kind))
-                if not parents:
-                    # A top-level declaration overwrites an imported binding at
-                    # runtime just like a top-level assignment does, but only
-                    # after the declaration header has been evaluated.
-                    body = node.child_by_field_name("body")
-                    binding_position = (
-                        body.start_byte
-                        if node.type == "function_definition" and body is not None
-                        else node.end_byte
-                    )
-                    record_rebindings(None, {name}, binding_position)
+                # A declaration overwrites an imported binding in its enclosing
+                # scope, but only after its declaration header is evaluated.
+                body = node.child_by_field_name("body")
+                binding_position = (
+                    body.start_byte
+                    if node.type == "function_definition" and body is not None
+                    else node.end_byte
+                )
+                record_rebindings(parent, {name}, binding_position)
         elif node.type in ("import_statement", "import_from_statement"):
             snippet = _node_text(content, node)
             if node.type == "import_statement":
@@ -618,7 +627,7 @@ def _parse_python(
                 "name" if node.type == "named_expression" else "left"
             )
             if left is not None:
-                bound_names = identifiers(left)
+                bound_names = assignment_target_identifiers(left)
                 binding_scope = scope
                 if node.type == "named_expression":
                     # Lambdas have their own lexical scope, but are not
@@ -634,7 +643,11 @@ def _parse_python(
                     iterable = node.child_by_field_name("right")
                     if iterable is not None:
                         binding_position = iterable.end_byte
-                record_rebindings(binding_scope, bound_names, binding_position)
+                annotation_only = node.type in (
+                    "assignment", "annotated_assignment"
+                ) and not any(child.type == "=" for child in node.children)
+                if not annotation_only:
+                    record_rebindings(binding_scope, bound_names, binding_position)
         elif (
             node.type == "as_pattern"
             and node.parent is not None
@@ -651,7 +664,7 @@ def _parse_python(
             if target is not None:
                 bound_names = as_target_identifiers(target)
                 bindings.setdefault(scope, set()).update(bound_names)
-                record_rebindings(scope, bound_names, node.start_byte)
+                record_rebindings(scope, bound_names, target.start_byte)
         for child in node.children:
             visit(child, next_parents)
 

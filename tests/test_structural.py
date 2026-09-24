@@ -1492,6 +1492,27 @@ def test_as_pattern_bindings_do_not_create_import_grounded_call_edges(tmp_path):
     assert calls == []
 
 
+def test_as_binding_keeps_import_visible_in_context_expression(tmp_path):
+    """An ``as`` alias binds only after its context expression runs."""
+    root = repo(tmp_path)
+    write(
+        root,
+        "as_binding_order.py",
+        "from remote.worker import execute as run_remote\n\n"
+        "with run_remote() as run_remote:\n"
+        "    run_remote()\n",
+    )
+    git(root, "add", "as_binding_order.py")
+
+    artifact = analyze_local_diff(str(root), staged=True)
+
+    assert_valid(artifact)
+    calls = [item for item in artifact["relationships"] if item["kind"] == "calls"]
+    assert len(calls) == 1
+    assert calls[0]["resolution_method"] == "import_grounded"
+    assert calls[0]["evidence"][0]["line_start"] == 3
+
+
 def test_local_import_rebinding_stops_import_grounded_call_edges(tmp_path):
     """A local assignment must replace a same-scope imported call target."""
     root = repo(tmp_path)
@@ -1514,6 +1535,48 @@ def test_local_import_rebinding_stops_import_grounded_call_edges(tmp_path):
     assert calls[0]["source_id"] == "sym::local_import_rebinding.py::caller"
     assert calls[0]["resolution_method"] == "import_grounded"
     assert calls[0]["evidence"][0]["line_start"] == 3
+
+
+def test_attribute_and_annotation_only_assignments_do_not_shadow_imports(tmp_path):
+    """Only assignment targets with a value replace an imported binding."""
+    root = repo(tmp_path)
+    write(
+        root,
+        "assignment_binding_precision.py",
+        "from remote.worker import execute as run_remote\n\n"
+        "run_remote.result = None\n"
+        "run_remote: object\n"
+        "run_remote()\n",
+    )
+    git(root, "add", "assignment_binding_precision.py")
+
+    artifact = analyze_local_diff(str(root), staged=True)
+
+    assert_valid(artifact)
+    calls = [item for item in artifact["relationships"] if item["kind"] == "calls"]
+    assert len(calls) == 1
+    assert calls[0]["resolution_method"] == "import_grounded"
+
+
+@pytest.mark.parametrize("declaration", ["def run_remote():\n    pass", "class run_remote:\n    pass"])
+def test_nested_declaration_rebinds_function_local_import(tmp_path, declaration):
+    """Nested declarations replace same-scope imported call targets."""
+    root = repo(tmp_path)
+    write(
+        root,
+        "nested_declaration_rebind.py",
+        "def caller():\n"
+        "    from remote.worker import execute as run_remote\n\n"
+        + "    " + declaration.replace("\n", "\n    ") + "\n\n"
+        "    run_remote()\n",
+    )
+    git(root, "add", "nested_declaration_rebind.py")
+
+    artifact = analyze_local_diff(str(root), staged=True)
+
+    assert_valid(artifact)
+    calls = [item for item in artifact["relationships"] if item["kind"] == "calls"]
+    assert calls == []
 
 
 def test_named_expression_bindings_do_not_create_import_grounded_call_edges(tmp_path):
