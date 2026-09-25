@@ -7,7 +7,12 @@ from pathlib import Path
 import jsonschema
 import pytest
 
-from diffgraph.git_snapshot import GitSnapshotError, ResolutionWarning, SnapshotResolution
+from diffgraph.git_snapshot import (
+    CommitRangeResolution,
+    GitSnapshotError,
+    ResolutionWarning,
+    SnapshotResolution,
+)
 from diffgraph.structural import analyze_local_diff
 
 SCHEMA = json.loads((Path(__file__).parents[1] / "diffgraph/schema/diffgraph-v2.schema.json").read_text())
@@ -1096,6 +1101,30 @@ def test_resolution_warning_preserves_machine_readable_code(monkeypatch, tmp_pat
             "detail": "hash_object_failed: simulated failure",
         }
     ]
+
+
+def test_ambiguous_merge_base_warning_is_not_downgraded(monkeypatch, tmp_path):
+    """Three-dot ambiguity remains actionable for JSON consumers."""
+    root = repo(tmp_path)
+    warning = ResolutionWarning(
+        "ambiguous_merge_base", "Git returned 2 merge bases; choose a base", None
+    )
+    monkeypatch.setattr(
+        "diffgraph.structural.resolve_commit_range",
+        lambda *args, **kwargs: CommitRangeResolution(
+            (), (warning,), "left", "right", None, None, None, True
+        ),
+    )
+
+    artifact = analyze_local_diff(
+        str(root), base_ref="left", head_ref="right", three_dot=True
+    )
+
+    assert_valid(artifact)
+    assert artifact["metadata"]["warnings"] == [{
+        "code": "ambiguous_merge_base",
+        "detail": "ambiguous_merge_base: Git returned 2 merge bases; choose a base",
+    }]
 
 
 def test_undecodable_path_warning_is_schema_valid(monkeypatch, tmp_path):
