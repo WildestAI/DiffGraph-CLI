@@ -48,6 +48,7 @@ RESOLUTION_WARNING_CODES = frozenset({
     "invalid_head_ref",
     "merge_base_failed",
     "malformed_merge_base",
+    "ambiguous_merge_base",
     "malformed_git_output",
     "undecodable_path",
     "missing_object_id",
