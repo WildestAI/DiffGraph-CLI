@@ -28,6 +28,11 @@
       "change_kind": "added"
     },
     {
+      "id": "sym::add.py::added.child",
+      "kind": "function",
+      "change_kind": "added"
+    },
+    {
       "id": "sym::add.py::import::external.pkg",
       "kind": "import",
       "change_kind": "added"
@@ -87,6 +92,14 @@
     {
       "id": "rel::file::renamed.py->sym::renamed.py::moved",
       "kind": "defines"
+    },
+    {
+      "id": "rel::sym::add.py::added->sym::add.py::added.child",
+      "kind": "calls"
+    },
+    {
+      "id": "rel::sym::add.py::added->sym::add.py::added.child",
+      "kind": "contains"
     }
   ]
 }
