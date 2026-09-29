@@ -67,7 +67,7 @@ def test_staged_add_modify_delete_rename_import_is_schema_valid_and_golden(tmp_p
     write(root, "rename.py", "def moved():\n    return 1\n")
     commit(root)
 
-    write(root, "add.py", "import os\nfrom external.pkg import value\n\ndef added():\n    return value\n")
+    write(root, "add.py", "import os\nfrom external.pkg import value\n\ndef added():\n    def child():\n        return value\n    return child()\n")
     write(root, "modify.py", "def retained():\n    return 2\n\ndef created():\n    return 3\n")
     os.unlink(root / "delete.py")
     git(root, "mv", "rename.py", "renamed.py")
@@ -92,6 +92,10 @@ def test_staged_add_modify_delete_rename_import_is_schema_valid_and_golden(tmp_p
     assert [r["label"] for r in imports] == [
         "unresolved/external module: external.pkg", "unresolved/external module: os"
     ]
+    assert {(r["kind"], r["source_id"], r["target_id"]) for r in artifact["relationships"] if r["kind"] in ("contains", "calls")} == {
+        ("contains", "sym::add.py::added", "sym::add.py::added.child"),
+        ("calls", "sym::add.py::added", "sym::add.py::added.child"),
+    }
     for file_entry in artifact["files"]:
         provenance = json.loads(file_entry["evidence"][0]["detail"])
         assert provenance["old_oid"] is None or len(provenance["old_oid"]) == 40
