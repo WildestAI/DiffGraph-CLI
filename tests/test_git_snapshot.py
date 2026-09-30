@@ -772,3 +772,47 @@ def test_file_mode_transitions_preserve_exact_blob_provenance(tmp_path):
     staged_entry = staged.entries[0]
     assert (staged_entry.old_mode, staged_entry.new_mode) == ("100644", "100755")
     assert (staged_entry.old_oid, staged_entry.new_oid) == (original_oid, original_oid)
+
+
+def test_regular_file_to_symlink_transition_preserves_exact_provenance(tmp_path):
+    """Type changes retain endpoint modes and raw symlink blob identities."""
+    repo = make_repo(tmp_path)
+    path = "current.py"
+    previous_content = b"print('previous')\n"
+    link_target = "next.py"
+    write(repo, path, previous_content)
+    commit_all(repo, "regular file")
+    git(repo, "branch", "before-type-change")
+    previous_oid = oid(repo, "HEAD:" + path)
+    link_oid = git(
+        repo, "hash-object", "--stdin", input_bytes=link_target.encode("utf-8")
+    ).decode("ascii").strip()
+
+    (repo / path).unlink()
+    os.symlink(link_target, repo / path)
+
+    unstaged = resolve_unstaged(str(repo), [path])
+
+    assert unstaged.warnings == ()
+    assert len(unstaged.entries) == 1
+    assert unstaged.entries[0] == git_snapshot.SnapshotEntry(
+        status="T",
+        old_path=path,
+        new_path=path,
+        old_mode="100644",
+        new_mode="120000",
+        old_oid=previous_oid,
+        new_oid=link_oid,
+    )
+
+    git(repo, "add", "--", path)
+    staged = resolve_staged(str(repo), [path])
+
+    assert staged.warnings == ()
+    assert staged.entries == unstaged.entries
+
+    commit_all(repo, "symlink file")
+    ranged = resolve_commit_range(str(repo), "before-type-change", "HEAD", pathspecs=[path])
+
+    assert ranged.warnings == ()
+    assert ranged.entries == staged.entries
