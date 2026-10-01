@@ -421,6 +421,30 @@ def test_parse_failure_is_scoped_and_matches_the_golden_fixture(tmp_path):
     assert actual == expected
 
 
+def test_pre_change_parse_failure_names_the_immutable_blob(tmp_path):
+    """A broken pre-change snapshot remains reproducible after it is fixed."""
+    root = repo(tmp_path)
+    write(root, "recovered.py", "def broken(:\n")
+    commit(root)
+    old_oid = git(root, "rev-parse", "HEAD:recovered.py")
+    write(root, "recovered.py", "def recovered():\n    return True\n")
+
+    artifact = analyze_local_diff(str(root))
+
+    assert_valid(artifact)
+    assert artifact["metadata"]["files_analyzed"] == 0
+    assert artifact["metadata"]["files_skipped"] == 1
+    assert artifact["symbols"] == []
+    assert artifact["metadata"]["warnings"] == [{
+        "code": "PARSE_FAILURE",
+        "file": "recovered.py",
+        "detail": (
+            "pre-change blob {}: ValueError: Tree-sitter reported a syntax error "
+            "at line 1, column 12"
+        ).format(old_oid),
+    }]
+
+
 def test_no_network_calls(monkeypatch, tmp_path):
     root = repo(tmp_path)
     write(root, "a.py", "def a():\n    pass\n")
@@ -1254,9 +1278,9 @@ def test_missing_parser_dependency_is_a_scoped_structural_warning(tmp_path, monk
         "code": "PARSE_FAILURE",
         "file": "app.py",
         "detail": (
-            "post-change: StructuralDependencyError: "
+            "post-change blob {}: StructuralDependencyError: "
             "parser dependency is unavailable"
-        ),
+        ).format(git(root, "hash-object", "app.py")),
     }]
 
 

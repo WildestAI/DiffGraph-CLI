@@ -726,6 +726,19 @@ def _resolution_warning(item: ResolutionWarning) -> Dict[str, str]:
     return _warning(code, item.path, "{}: {}".format(item.code, item.message))
 
 
+def _parse_failure_warning(
+    side: str, path: str, oid: Optional[str], error: Exception,
+) -> Dict[str, str]:
+    """Preserve the exact immutable snapshot that Tree-sitter could not parse."""
+    return _warning(
+        "PARSE_FAILURE",
+        path,
+        "{}-change blob {}: {}: {}".format(
+            side, oid or "absent", type(error).__name__, error,
+        ),
+    )
+
+
 def _symbol_id(path: str, qualified_name: str) -> str:
     return "sym::{}::{}".format(path, qualified_name)
 
@@ -974,7 +987,9 @@ def analyze_local_diff(
                 _parse_python(old) if old is not None else ([], [], [], {}, [])
             )
         except parser_errors as error:
-            warnings.append(_warning("PARSE_FAILURE", entry.old_path or path, "pre-change: {}: {}".format(type(error).__name__, error)))
+            warnings.append(_parse_failure_warning(
+                "pre", entry.old_path or path, entry.old_oid, error,
+            ))
             skipped += 1
             continue
         try:
@@ -982,7 +997,9 @@ def analyze_local_diff(
                 _parse_python(new) if new is not None else ([], [], [], {}, [])
             )
         except parser_errors as error:
-            warnings.append(_warning("PARSE_FAILURE", path, "post-change: {}: {}".format(type(error).__name__, error)))
+            warnings.append(_parse_failure_warning(
+                "post", path, entry.new_oid, error,
+            ))
             skipped += 1
             continue
         analyzed += 1
