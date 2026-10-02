@@ -739,6 +739,18 @@ def _parse_failure_warning(
     )
 
 
+def _unsupported_language_warning(entry: SnapshotEntry, path: str) -> Dict[str, str]:
+    """Record the immutable snapshots outside the deterministic baseline."""
+    return _warning(
+        "UNSUPPORTED_LANGUAGE",
+        path,
+        "Deterministic extraction currently supports Python (.py) only; "
+        "pre-change blob {}; post-change blob {}.".format(
+            entry.old_oid or "absent", entry.new_oid or "absent",
+        ),
+    )
+
+
 def _symbol_id(path: str, qualified_name: str) -> str:
     return "sym::{}::{}".format(path, qualified_name)
 
@@ -966,7 +978,7 @@ def analyze_local_diff(
             continue
         if file_entry["language"] != "python":
             skipped += 1
-            warnings.append(_warning("UNSUPPORTED_LANGUAGE", path, "Deterministic extraction currently supports Python (.py) only."))
+            warnings.append(_unsupported_language_warning(entry, path))
             continue
         if (old is None and entry.old_oid is not None) or (
             new is None and entry.new_oid is not None

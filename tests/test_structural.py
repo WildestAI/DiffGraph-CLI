@@ -185,12 +185,17 @@ def test_unsupported_language_is_explicit_and_not_overclaimed(tmp_path):
     write(root, "main.js", "export function value() { return 1; }\n")
     commit(root)
     write(root, "main.js", "export function value() { return 2; }\n")
+    old_oid = git(root, "rev-parse", "HEAD:main.js")
+    new_oid = git(root, "hash-object", "main.js")
     artifact = analyze_local_diff(str(root))
     assert_valid(artifact)
     assert artifact["symbols"] == []
     assert artifact["metadata"]["files_skipped"] == 1
     assert artifact["metadata"]["warnings"][0]["code"] == "UNSUPPORTED_LANGUAGE"
-    assert "Python" in artifact["metadata"]["warnings"][0]["detail"]
+    assert artifact["metadata"]["warnings"][0]["detail"] == (
+        "Deterministic extraction currently supports Python (.py) only; "
+        "pre-change blob {}; post-change blob {}."
+    ).format(old_oid, new_oid)
 
 
 @pytest.mark.parametrize("staged", [False, True])
