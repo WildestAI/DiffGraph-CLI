@@ -181,6 +181,7 @@ def test_pathspec_scope_is_not_widened(tmp_path):
 
 
 def test_unsupported_language_is_explicit_and_not_overclaimed(tmp_path):
+    """Unsupported snapshots keep their explicit capability boundary and blobs."""
     root = repo(tmp_path)
     write(root, "main.js", "export function value() { return 1; }\n")
     commit(root)
@@ -200,6 +201,7 @@ def test_unsupported_language_is_explicit_and_not_overclaimed(tmp_path):
 
 @pytest.mark.parametrize("change_kind", ["added", "deleted"])
 def test_unsupported_language_one_sided_blob_is_absent(tmp_path, change_kind):
+    """Added and deleted unsupported snapshots identify their missing blob side."""
     root = repo(tmp_path)
     write(root, "main.js", "export function value() { return 1; }\n")
     commit(root)
