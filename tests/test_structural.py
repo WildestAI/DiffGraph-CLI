@@ -180,6 +180,26 @@ def test_pathspec_scope_is_not_widened(tmp_path):
     assert [item["path"] for item in artifact["files"]] == ["inside/a.py"]
 
 
+def test_python_stub_files_are_analyzed_with_tree_sitter_provenance(tmp_path):
+    """Typed Python stubs are part of the deterministic Python baseline."""
+    root = repo(tmp_path)
+    write(root, "api.pyi", "def load(value: str) -> int: ...\n")
+    commit(root)
+    write(root, "api.pyi", "def load(value: str, retries: int = 0) -> int: ...\n")
+
+    artifact = analyze_local_diff(str(root))
+
+    assert_valid(artifact)
+    assert artifact["files"][0]["language"] == "python"
+    assert artifact["metadata"]["files_analyzed"] == 1
+    assert artifact["metadata"]["warnings"] == []
+    symbol = artifact["symbols"][0]
+    assert (symbol["id"], symbol["name"], symbol["change_kind"]) == (
+        "sym::api.pyi::load", "load", "modified"
+    )
+    assert "parser=tree-sitter-language-pack@" in symbol["evidence"][0]["detail"]
+
+
 def test_unsupported_language_is_explicit_and_not_overclaimed(tmp_path):
     """Unsupported snapshots keep their explicit capability boundary and blobs."""
     root = repo(tmp_path)
@@ -194,7 +214,7 @@ def test_unsupported_language_is_explicit_and_not_overclaimed(tmp_path):
     assert artifact["metadata"]["files_skipped"] == 1
     assert artifact["metadata"]["warnings"][0]["code"] == "UNSUPPORTED_LANGUAGE"
     assert artifact["metadata"]["warnings"][0]["detail"] == (
-        "Deterministic extraction currently supports Python (.py) only; "
+        "Deterministic extraction currently supports Python (.py and .pyi) only; "
         "pre-change blob {}; post-change blob {}."
     ).format(old_oid, new_oid)
 
@@ -218,7 +238,7 @@ def test_unsupported_language_one_sided_blob_is_absent(tmp_path, change_kind):
     artifact = analyze_local_diff(str(root))
     assert_valid(artifact)
     assert artifact["metadata"]["warnings"][0]["detail"] == (
-        "Deterministic extraction currently supports Python (.py) only; "
+        "Deterministic extraction currently supports Python (.py and .pyi) only; "
         "pre-change blob {}; post-change blob {}."
     ).format(old_oid, new_oid)
 
