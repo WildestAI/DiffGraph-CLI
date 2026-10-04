@@ -1,8 +1,8 @@
 """Deterministic, local DiffGraph v2 extraction from exact Git snapshots.
 
-This first baseline intentionally supports Python only. Other languages remain in
-``files`` and produce scoped ``UNSUPPORTED_LANGUAGE`` warnings; no capability is
-inferred from a filename beyond that explicit boundary.
+This first baseline intentionally supports Python source and stub files only.
+Other languages remain in ``files`` and produce scoped ``UNSUPPORTED_LANGUAGE``
+warnings; no capability is inferred from a filename beyond that explicit boundary.
 """
 from __future__ import annotations
 
@@ -34,6 +34,7 @@ from diffgraph.git_snapshot import (
 
 ANALYZER = "diffgraph-python-tree-sitter"
 QUERY_VERSION = "python-structure-v2"
+PYTHON_SUFFIXES = frozenset({".py", ".pyi"})
 _PARSER_STATE = threading.local()
 
 # Resolver failures are part of the public artifact contract. Keep their
@@ -744,7 +745,7 @@ def _unsupported_language_warning(entry: SnapshotEntry, path: str) -> Dict[str, 
     return _warning(
         "UNSUPPORTED_LANGUAGE",
         path,
-        "Deterministic extraction currently supports Python (.py) only; "
+        "Deterministic extraction currently supports Python (.py and .pyi) only; "
         "pre-change blob {}; post-change blob {}.".format(
             entry.old_oid or "absent", entry.new_oid or "absent",
         ),
@@ -947,7 +948,7 @@ def analyze_local_diff(
                 "python"
                 if not binary_sides
                 and not non_regular_modes
-                and Path(path).suffix.lower() == ".py"
+                and Path(path).suffix.lower() in PYTHON_SUFFIXES
                 else None
             ),
             "change_kind": _change_kind(entry.status, entry.old_oid, entry.new_oid),
