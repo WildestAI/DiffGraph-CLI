@@ -816,3 +816,41 @@ def test_regular_file_to_symlink_transition_preserves_exact_provenance(tmp_path)
 
     assert ranged.warnings == ()
     assert ranged.entries == staged.entries
+
+
+def test_commit_range_binary_blobs_preserve_exact_endpoint_provenance(tmp_path):
+    """Binary additions, edits, and deletions retain immutable blob IDs."""
+    repo = make_repo(tmp_path)
+    original = b"\x00\xffbefore\x00payload\n"
+    removed = b"\x89PNG\r\n\x1a\nold-image"
+    write(repo, "assets/data.bin", original)
+    write(repo, "assets/removed.bin", removed)
+    commit_all(repo, "binary baseline")
+    git(repo, "branch", "before-binary-change")
+
+    updated = b"\x00\xffafter\x00payload\x01\n"
+    added = b"\x1f\x8b\x08\x00new-archive"
+    write(repo, "assets/data.bin", updated)
+    os.unlink(repo / "assets/removed.bin")
+    write(repo, "assets/added.bin", added)
+    commit_all(repo, "binary changes")
+
+    result = resolve_commit_range(str(repo), "before-binary-change", "HEAD")
+    entries = {entry.new_path or entry.old_path: entry for entry in result.entries}
+
+    assert result.warnings == ()
+    assert set(entries) == {
+        "assets/added.bin", "assets/data.bin", "assets/removed.bin",
+    }
+    assert (entries["assets/data.bin"].old_oid, entries["assets/data.bin"].new_oid) == (
+        git(
+            repo, "rev-parse", "before-binary-change:assets/data.bin"
+        ).decode("ascii").strip(),
+        oid(repo, "HEAD:assets/data.bin"),
+    )
+    assert (entries["assets/added.bin"].old_oid, entries["assets/added.bin"].new_oid) == (
+        None, oid(repo, "HEAD:assets/added.bin"),
+    )
+    assert (entries["assets/removed.bin"].old_oid, entries["assets/removed.bin"].new_oid) == (
+        oid(repo, "before-binary-change:assets/removed.bin"), None,
+    )
