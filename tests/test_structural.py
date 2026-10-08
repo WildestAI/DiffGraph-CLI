@@ -132,6 +132,28 @@ def test_unstaged_uses_index_to_worktree_exact_identity_and_is_stable(tmp_path):
     assert first["symbols"][0]["change_kind"] == "modified"
 
 
+def test_sha256_repository_preserves_structural_blob_provenance(tmp_path):
+    """Canonical artifacts must retain full SHA-256 Git blob identities."""
+    root = tmp_path / "sha256-repo"
+    root.mkdir()
+    git(root, "init", "--object-format=sha256")
+    git(root, "config", "user.name", "Structural Tests")
+    git(root, "config", "user.email", "structural@example.test")
+    write(root, "app.py", "def value():\n    return 1\n")
+    commit(root)
+
+    old_oid = git(root, "rev-parse", "HEAD:app.py")
+    write(root, "app.py", "def value():\n    return 2\n")
+    artifact = analyze_local_diff(str(root))
+
+    assert_valid(artifact)
+    provenance = json.loads(artifact["files"][0]["evidence"][0]["detail"])
+    assert provenance["old_oid"] == old_oid
+    assert provenance["new_oid"] == git(root, "hash-object", "app.py")
+    assert len(provenance["old_oid"]) == len(provenance["new_oid"]) == 64
+    assert artifact["symbols"][0]["change_kind"] == "modified"
+
+
 @pytest.mark.parametrize("staged", [False, True])
 def test_worktree_diffs_do_not_record_commit_range_mode(tmp_path, staged):
     root = repo(tmp_path)
