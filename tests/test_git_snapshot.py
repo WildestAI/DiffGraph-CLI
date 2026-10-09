@@ -221,6 +221,8 @@ def test_sha256_staged_snapshot_preserves_full_blob_identities(tmp_path):
     os.unlink(repo / "deleted.txt")
     write(repo, "added.bin", b"\x1f\x8bnew archive")
     git(repo, "add", "-A")
+    staged_modified = index_oid(repo, "modified.bin")
+    write(repo, "modified.bin", b"\x00worktree-only\xff\n")
 
     result = resolve_staged(str(repo))
     entries = {entry.new_path or entry.old_path: entry for entry in result.entries}
@@ -228,7 +230,7 @@ def test_sha256_staged_snapshot_preserves_full_blob_identities(tmp_path):
     assert result.warnings == ()
     assert set(entries) == {"added.bin", "deleted.txt", "modified.bin"}
     assert (entries["modified.bin"].old_oid, entries["modified.bin"].new_oid) == (
-        old_modified, index_oid(repo, "modified.bin"),
+        old_modified, staged_modified,
     )
     assert (entries["deleted.txt"].old_oid, entries["deleted.txt"].new_oid) == (
         old_deleted, None,
