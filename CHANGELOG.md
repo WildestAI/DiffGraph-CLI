@@ -5,6 +5,27 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.2.0] - 2026-10-09
+
+### Added
+- Deterministic, offline DiffGraph v2 reports for Python changes, with JSON,
+  terminal, and self-contained HTML output.
+- Structural evidence for Python symbols, imports, calls, bindings, constants,
+  type aliases, decorators, and Python stub files.
+- Exact Git provenance for requested ranges and snapshots, including SHA-256
+  repositories, unsupported files, parser failures, and binary changes.
+- Canonical HTML topology links and an offline content-security policy.
+
+### Changed
+- Improved structural handling for local-import rebinding, comprehensions,
+  match patterns, `with`/`except` bindings, and named expressions.
+- Strengthened Git diff validation for ambiguous merge bases, incomplete object
+  IDs, and paths outside the repository.
+
+### Fixed
+- Preserve explicit warnings and provenance where structural analysis falls
+  back or encounters malformed Python.
+
 ## [1.1.1] - 2026-09-13
 
 ### Fixed
