@@ -2440,3 +2440,41 @@ def test_caller_search_is_capped_with_a_warning(tmp_path, monkeypatch):
         item["code"] == "PARTIAL_ANALYSIS" and "first 1 of" in item["detail"]
         for item in artifact["metadata"]["warnings"]
     )
+
+
+def test_inherits_edges_resolve_local_imported_and_outside_the_diff(tmp_path):
+    root = repo(tmp_path)
+    write(root, "pkg/__init__.py", "")
+    write(root, "pkg/base.py", "class Base:\n    pass\n")
+    write(root, "pkg/sub.py", "class Plain:\n    pass\n")
+    write(root, "pkg/user.py", "from pkg.base import Base\n\nclass Outside(Base):\n    pass\n")
+    git(root, "add", ".")
+    git(root, "commit", "-m", "base")
+    write(root, "pkg/base.py", "class Base:\n    x = 1\n")
+    write(
+        root, "pkg/sub.py",
+        "import abc\nfrom pkg.base import Base\n\n"
+        "def helper():\n    pass\n\n"
+        "class Local:\n    pass\n\n"
+        "class Child(Base, Local, abc.ABC, helper, metaclass=abc.ABCMeta):\n    pass\n",
+    )
+
+    artifact = analyze_local_diff(str(root))
+
+    assert_valid(artifact)
+    inherits = {
+        (item["source_id"], item["target_id"]): item
+        for item in artifact["relationships"] if item["kind"] == "inherits"
+    }
+    # Imported base in another changed file, a local base, and a base in the
+    # diff subclassed by an untouched file. Attribute bases (abc.ABC), a
+    # function used as a base, and metaclass keywords are not inheritance edges.
+    assert set(inherits) == {
+        ("sym::pkg/sub.py::Child", "sym::pkg/base.py::Base"),
+        ("sym::pkg/sub.py::Child", "sym::pkg/sub.py::Local"),
+        ("sym::pkg/user.py::Outside", "sym::pkg/base.py::Base"),
+    }
+    evidence = inherits[("sym::pkg/sub.py::Child", "sym::pkg/base.py::Base")]["evidence"][0]
+    assert evidence["line_start"] == 10 and evidence["snippet"].startswith("class Child(Base")
+    outside = {item["path"]: item for item in artifact["files"]}
+    assert outside["pkg/user.py"]["change_kind"] == "unchanged"

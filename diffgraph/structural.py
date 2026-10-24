@@ -109,6 +109,11 @@ class _Call:
     position: int
     snippet: str
     comprehension_bindings: Tuple[str, ...] = ()
+    # "inherits": a base class in ``class subject(name)``. Bases are evaluated
+    # in the class's enclosing scope, so ``caller`` is that scope and the
+    # resolved edge starts at ``subject`` (the class).
+    kind: str = "call"
+    subject: Optional[str] = None
 
 
 def _blob(repository: str, oid: Optional[str]) -> Optional[bytes]:
@@ -528,6 +533,20 @@ def _parse_python(
                     )
                 )
                 next_parents = (*parents, (qname, kind))
+                superclasses = (
+                    node.child_by_field_name("superclasses")
+                    if node.type == "class_definition" else None
+                )
+                if superclasses is not None:
+                    header = content[node.start_byte:superclasses.end_byte].decode("utf-8")
+                    for base in superclasses.named_children:
+                        # Bare names only: ``pkg.Base`` is attribute dispatch,
+                        # and ``metaclass=...`` is a keyword argument.
+                        if base.type == "identifier":
+                            calls.append(_Call(
+                                parent, _node_text(content, base), node.start_point[0] + 1,
+                                node.start_byte, header, (), "inherits", qname,
+                            ))
                 # A declaration overwrites an imported binding in its enclosing
                 # scope, but only after its declaration header is evaluated.
                 body = node.child_by_field_name("body")
@@ -1250,14 +1269,16 @@ def _context_callers(
             target = _resolve_call_target(call, symbol_map, bindings, imported)
             if target not in target_ids:
                 continue
-            source = _symbol_id(path, call.caller) if call.caller is not None else "file::" + path
-            if call.caller is not None:
-                callers.add(call.caller)
+            subject = call.subject if call.kind == "inherits" else call.caller
+            source = _symbol_id(path, subject) if subject is not None else "file::" + path
+            if subject is not None:
+                callers.add(subject)
             occurrence = occurrences.get((source, target), 0)
             occurrences[(source, target)] = occurrence + 1
             edges.append({
                 "id": "rel::{}->{}{}".format(source, target, "" if occurrence == 0 else "#{}".format(occurrence)),
-                "kind": "calls", "source_id": source, "target_id": target,
+                "kind": "inherits" if call.kind == "inherits" else "calls",
+                "source_id": source, "target_id": target,
                 "analysis_source": "structural", "resolution_method": "resolved", "confidence": None,
                 "evidence": [{
                     "kind": "call_site", "file": path, "line_start": call.line, "line_end": call.line,
@@ -1694,11 +1715,16 @@ def analyze_local_diff(
             target_qname = _resolve_call_target(
                 call, new_map, new_bindings, imported_call_targets
             )
-            if target_qname is None:
+            if target_qname is None or (
+                call.kind == "inherits"
+                and target_qname in new_map
+                and new_map[target_qname].kind != "class"
+            ):
                 continue
+            subject = call.subject if call.kind == "inherits" else call.caller
             source = (
-                _symbol_id(output_path, call.caller)
-                if call.caller is not None
+                _symbol_id(output_path, subject)
+                if subject is not None
                 else "file::" + output_path
             )
             target = (
@@ -1713,7 +1739,7 @@ def analyze_local_diff(
             relationships.append(
                 {
                     "id": "rel::{}->{}{}".format(source, target, suffix),
-                    "kind": "calls",
+                    "kind": "inherits" if call.kind == "inherits" else "calls",
                     "source_id": source,
                     "target_id": target,
                     "analysis_source": "structural",

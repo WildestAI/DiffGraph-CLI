@@ -444,6 +444,8 @@ _INTERACTIVE_SCRIPT = textwrap.dedent(
           parts.push(summaryBlock(symbol));
           parts.push(symbol.source ? symbolDiff(symbol) : htmlEl('p', 'details-meta', 'Unchanged in this snapshot.'));
           if (symbol.parent_id) parts.push(section('Defined in', [symbol.parent_id]));
+          parts.push(section('Inherits from', outgoing(symbol.id, 'inherits')));
+          parts.push(section('Subclassed by', incoming(symbol.id, 'inherits')));
           parts.push(section('Calls', outgoing(symbol.id, 'calls')));
           parts.push(section('Called by', incoming(symbol.id, 'calls')));
           parts.push(section('Imported by', incoming(symbol.id, 'imports').filter((id) => id !== symbol.file_id)));
@@ -819,7 +821,7 @@ class HtmlFormatter:
         <div class="legend">
           <span class="badge ck-added">added</span><span class="badge ck-modified">modified</span><span class="badge ck-deleted">deleted</span><span class="badge ck-renamed">renamed</span><span class="badge ck-unchanged">unchanged</span>
         </div>
-        <p class="details-meta">Solid arcs are calls, dashed arcs imports; a number counts merged edges. Hover a box to highlight its connections.</p>
+        <p class="details-meta">Solid arcs are calls, dashed arcs imports, dotted arcs inheritance; a number counts merged edges. Hover a box to highlight its connections.</p>
       </div>
       <div class="details-body" hidden></div>
     </aside>

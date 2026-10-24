@@ -8,6 +8,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- `inherits` edges for bare-name base classes (local, imported from a changed
+  file, or a changed base subclassed outside the diff).
 - Callers outside the diff: unchanged files that call or import changed or
   deleted declarations are found at the analyzed snapshot and included as
   context files with their call sites (terminal "called outside the diff",
