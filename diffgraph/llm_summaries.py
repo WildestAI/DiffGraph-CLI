@@ -20,6 +20,7 @@ from typing import Callable, Dict, List, Optional, Protocol, Sequence, Tuple
 
 from diffgraph.contract import ValidatedArtifact
 from diffgraph.git_snapshot import GitSnapshotError, read_worktree_blob, run_git
+from diffgraph.structural import split_lines
 from diffgraph.relay import MissingProviderKey, RelayAccountError, RelayError, RelayTimeout
 
 PROMPT_REF = "wild-node-summaries-v1"
@@ -98,8 +99,8 @@ def _side_text(root: str, identity: dict, side: str, worktree: bool) -> Optional
 def _unified_diff(path: str, old: Optional[str], new: Optional[str]) -> str:
     diff = "".join(
         difflib.unified_diff(
-            (old or "").splitlines(keepends=True),
-            (new or "").splitlines(keepends=True),
+            split_lines(old or ""),
+            split_lines(new or ""),
             fromfile=f"a/{path}" if old is not None else "/dev/null",
             tofile=f"b/{path}" if new is not None else "/dev/null",
             n=3,
@@ -193,6 +194,8 @@ def parse_summaries(text: str, requested: Sequence[str]) -> Dict[str, str]:
     result: Dict[str, str] = {}
     for node_id, summary in data.items():
         if node_id in allowed and isinstance(summary, str) and summary.strip():
+            # Untrusted model text: drop control characters (e.g. ANSI escapes).
+            summary = "".join(ch if ch.isprintable() else " " for ch in summary)
             summary = " ".join(summary.split())
             if len(summary) > MAX_SUMMARY_CHARS:
                 summary = summary[: MAX_SUMMARY_CHARS - 1].rstrip() + "…"

@@ -229,10 +229,13 @@ _INTERACTIVE_SCRIPT = textwrap.dedent(
       const parseUnified = (text) => {
         const ops = [];
         let a = 0, b = 0;
+        let inHunk = false;
         splitLines(text).forEach((line) => {
-          if (line.startsWith('--- ') || line.startsWith('+++ ')) return;
+          // File headers precede the first hunk; inside a hunk, '--- x' is a
+          // removed line that starts with '--' (e.g. a SQL comment).
+          if (!inHunk && (line.startsWith('--- ') || line.startsWith('+++ '))) return;
           const hunk = /^@@ -(\\d+)(?:,\\d+)? \\+(\\d+)(?:,\\d+)? @@/.exec(line);
-          if (hunk) { a = Number(hunk[1]); b = Number(hunk[2]); ops.push({ op: '@', text: line }); return; }
+          if (hunk) { inHunk = true; a = Number(hunk[1]); b = Number(hunk[2]); ops.push({ op: '@', text: line }); return; }
           const sign = line[0];
           const body = line.slice(1);
           if (sign === '-') { ops.push({ op: '-', a, text: body }); a += 1; }
@@ -442,7 +445,8 @@ _INTERACTIVE_SCRIPT = textwrap.dedent(
           const location = symbol.location ? `${symbol.location.file}:${symbol.location.line_start}-${symbol.location.line_end}` : nameOf(symbol.file_id);
           parts.push(htmlEl('p', 'details-meta', location));
           parts.push(summaryBlock(symbol));
-          parts.push(symbol.source ? symbolDiff(symbol) : htmlEl('p', 'details-meta', 'Unchanged in this snapshot.'));
+          if (symbol.source) parts.push(symbolDiff(symbol));
+          else if (!changedSymbolIds.has(symbol.id)) parts.push(htmlEl('p', 'details-meta', 'Unchanged in this snapshot.'));
           if (symbol.parent_id) parts.push(section('Defined in', [symbol.parent_id]));
           parts.push(section('Calls', outgoing(symbol.id, 'calls')));
           parts.push(section('Called by', incoming(symbol.id, 'calls')));

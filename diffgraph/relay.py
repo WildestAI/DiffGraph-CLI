@@ -117,6 +117,22 @@ def resolve_model(value: str) -> Tuple[str, str]:
     return provider_for_model(value), value
 
 
+def trusted_env(name: str) -> Optional[str]:
+    """A variable from the process environment, never from a loaded .env.
+
+    ``wild`` auto-loads ``.env`` from the current directory, which may be an
+    untrusted cloned repository. Letting it choose the relay endpoint, the
+    relay token, or a provider key would let a repository redirect the user's
+    credentials and code, so only the pre-existing environment counts.
+    """
+    from diffgraph.env_loader import DOTENV_INJECTED
+
+    if name in DOTENV_INJECTED:
+        return None
+    value = (os.environ.get(name) or "").strip()
+    return value or None
+
+
 @dataclass(frozen=True)
 class KeyCandidate:
     """A provider key found in the environment, with where it came from."""
@@ -130,29 +146,20 @@ class KeyCandidate:
         return f"{self.variable} from {self.source} (ends …{self.key[-4:]})"
 
 
-def provider_key_candidates(
-    provider: str, dotenv_values: Optional[Mapping[str, Optional[str]]] = None
-) -> List[KeyCandidate]:
-    """Return every distinct key for ``provider`` in the process env and .env.
+def provider_key_candidates(provider: str) -> List[KeyCandidate]:
+    """Return every distinct key for ``provider`` in the trusted environment.
 
-    ``.env`` loading never overrides variables already set in the shell, so a
-    shell value and a different ``.env`` value can coexist; both are returned
-    so the caller never silently picks one to send to the relay.
+    Keys from a ``.env`` file are ignored (see :func:`trusted_env`); several
+    variables (e.g. ``GEMINI_API_KEY`` and ``GOOGLE_API_KEY``) may hold
+    different keys, and all are returned so the caller never silently picks one.
     """
-    file_values = dotenv_values or {}
     candidates: List[KeyCandidate] = []
     seen = set()
     for variable in PROVIDER_KEY_ENVS.get(provider, ()):
-        process_value = (os.environ.get(variable) or "").strip()
-        file_value = (file_values.get(variable) or "").strip()
-        if process_value and process_value == file_value:
-            found = [(process_value, ".env")]
-        else:
-            found = [(process_value, "the shell environment"), (file_value, ".env")]
-        for key, source in found:
-            if key and key not in seen:
-                seen.add(key)
-                candidates.append(KeyCandidate(variable, key, source))
+        key = trusted_env(variable)
+        if key and key not in seen:
+            seen.add(key)
+            candidates.append(KeyCandidate(variable, key, "the shell environment"))
     return candidates
 
 
@@ -310,19 +317,31 @@ def config_path() -> Path:
     return Path(base) / "wild" / "byok-relay.json"
 
 
-def relay_url() -> str:
-    return (os.environ.get(RELAY_URL_ENV) or DEFAULT_RELAY_URL).rstrip("/")
-
-
-def load_token(base_url: str) -> Optional[str]:
-    """Return the relay token from the environment or the per-URL store."""
-    token = os.environ.get(RELAY_TOKEN_ENV)
-    if token:
-        return token
+def _user_config() -> dict:
     try:
         data = json.loads(config_path().read_text(encoding="utf-8"))
     except (OSError, ValueError):
-        return None
+        return {}
+    return data if isinstance(data, dict) else {}
+
+
+def relay_url() -> str:
+    """The relay endpoint: trusted environment, then user config, else the default.
+
+    A self-hosted relay is accepted only from these trusted channels, never
+    from a repository's ``.env``.
+    """
+    configured = _user_config().get("relay_url")
+    url = trusted_env(RELAY_URL_ENV) or (configured if isinstance(configured, str) else None)
+    return (url or DEFAULT_RELAY_URL).rstrip("/")
+
+
+def load_token(base_url: str) -> Optional[str]:
+    """Return the relay token from the trusted environment or the per-URL store."""
+    token = trusted_env(RELAY_TOKEN_ENV)
+    if token:
+        return token
+    data = _user_config()
     entry = data.get("relays", {}).get(base_url.rstrip("/")) if isinstance(data, dict) else None
     token = entry.get("token") if isinstance(entry, dict) else None
     return token if isinstance(token, str) and token else None
