@@ -412,3 +412,19 @@ def test_context_files_are_marked_and_counted_separately():
     changed = sum(1 for item in value["files"] if item["change_kind"] != "unchanged")
     assert f"{changed} file" in report and "1 caller file outside the diff" in report
     assert "'outside diff'" in report and "file-box.context" in report
+
+
+def test_graph_reads_top_to_bottom_with_collapsible_modules_and_unchanged_toggle():
+    from diffgraph.formatters.html import _INTERACTIVE_SCRIPT as script
+
+    # Callers above the code they call (Kahn order), tests and context last.
+    assert "const topoOrder = (ids, pairs, compare)" in script
+    assert "isTestPath(file.path) ? 2 : file.change_kind === 'unchanged' ? 1 : 0" in script
+    assert "'◆ start here'" in script
+    # Modules collapse (by default from five, keeping the first open) and
+    # edges into a collapsed module attach to its header.
+    assert "if (moduleList.length >= 5) moduleList.slice(1)" in script
+    assert "MODULE_RIGHT" in script and "moduleIdOf.get(fileId)" in script
+    # One toggle shows or hides every unchanged symbol.
+    assert "state.showUnchanged = !state.showUnchanged" in script
+    assert "'Show unchanged'" in script
