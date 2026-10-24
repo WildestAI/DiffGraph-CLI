@@ -401,6 +401,19 @@ def test_warning_badge_counts_the_lines_it_shows():
     assert "Not analyzed (Python only, 3 files)" in report
 
 
+def test_context_files_are_marked_and_counted_separately():
+    value = golden_artifact()
+    value["files"].append({
+        "id": "file::src/cli.py", "path": "src/cli.py", "old_path": None, "language": "python",
+        "change_kind": "unchanged", "lines_added": 0, "lines_removed": 0, "analysis_source": "structural",
+    })
+    report = HtmlFormatter(ValidatedArtifact.from_value(value)).render()
+
+    changed = sum(1 for item in value["files"] if item["change_kind"] != "unchanged")
+    assert f"{changed} file" in report and "1 caller file outside the diff" in report
+    assert "'outside diff'" in report and "file-box.context" in report
+
+
 def test_unified_diff_parser_keeps_dash_dash_lines_inside_hunks():
     from diffgraph.formatters.html import _INTERACTIVE_SCRIPT as script
 

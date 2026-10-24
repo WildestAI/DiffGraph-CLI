@@ -124,6 +124,7 @@ class _RankedSymbol:
     """Enriched symbol entry ready for rendering."""
     symbol: dict
     importer_paths: list[str] = field(default_factory=list)
+    outside_callers: list[str] = field(default_factory=list)
     lines_changed: int = 0
     score: int = 0
 
@@ -210,10 +211,15 @@ class TerminalFormatter:
             f["id"]: f.get("path", f["id"]) for f in files
         }
 
-        # Changed file ids (for filtering importers to only those in the diff)
-        changed_file_ids = {
-            f["id"] for f in files if f.get("change_kind", "unchanged") != "unchanged"
+        # Context files sit outside the diff; they are present only because
+        # they call or import changed declarations.
+        context_file_ids = {
+            f["id"] for f in files if f.get("change_kind", "unchanged") == "unchanged"
         }
+
+        def importer_label(file_id: str) -> str:
+            path = file_id_to_path.get(file_id, file_id)
+            return f"{path} (outside diff)" if file_id in context_file_ids else path
 
         # Build import relationship index: target symbol id → importing file ids.
         # Only symbol-targeted edges count: a file-level import says the module
@@ -228,11 +234,31 @@ class TerminalFormatter:
             if (
                 rel.get("kind") == "imports"
                 and rel.get("analysis_source") in ("structural", "derived")
-                and rel.get("source_id") in changed_file_ids
+                and rel.get("source_id") in file_id_to_path
                 and target_symbol is not None
                 and target_symbol.get("file_id") != rel.get("source_id")
             ):
                 import_index.setdefault(target, set()).add(rel["source_id"])
+
+        # Call sites outside the diff: the places a changed signature can
+        # break without appearing in the diff at all.
+        outside_calls: dict[str, list[str]] = {}
+        for rel in relationships:
+            source = rel.get("source_id", "")
+            source_symbol = symbols_by_id.get(source)
+            source_file = source_symbol.get("file_id") if source_symbol else source
+            if rel.get("kind") != "calls" or source_file not in context_file_ids:
+                continue
+            line = next(
+                (e.get("line_start") for e in rel.get("evidence") or [] if e.get("kind") == "call_site"),
+                None,
+            )
+            where = file_id_to_path.get(source_file, source_file)
+            if source_symbol:
+                where += f":{source_symbol.get('qualified_name') or source_symbol.get('name')}"
+            if line:
+                where += f" (L{line})"
+            outside_calls.setdefault(rel.get("target_id", ""), []).append(where)
 
         ranked = RankedSymbols()
 
@@ -240,7 +266,8 @@ class TerminalFormatter:
             change_kind = sym.get("change_kind", "unchanged")
 
             if change_kind == "unchanged":
-                ranked.context.append(_RankedSymbol(symbol=sym))
+                if sym.get("file_id") not in context_file_ids:
+                    ranked.context.append(_RankedSymbol(symbol=sym))
                 continue
 
             # Files in the diff that import this symbol, or the top-level
@@ -252,26 +279,25 @@ class TerminalFormatter:
                 seen.add(current.get("id"))
                 importer_file_ids |= import_index.get(current.get("id"), set())
                 current = symbols_by_id.get(current.get("parent_id"))
-            importer_paths = [
-                file_id_to_path.get(fid, fid)
-                for fid in sorted(importer_file_ids)
-            ]
+            importer_paths = [importer_label(fid) for fid in sorted(importer_file_ids)]
+            outside_callers = sorted(set(outside_calls.get(sym.get("id"), [])))
 
             # DiffGraph v2 currently exposes declaration spans, not per-symbol
             # changed-line evidence. Do not present or rank a declaration's size
             # as though every line changed; importer count is the honest signal
             # available to this pure artifact consumer.
             lines_changed = 0
-            score = len(importer_paths) * 3
+            score = (len(importer_paths) + len(outside_callers)) * 3
 
             rs = _RankedSymbol(
                 symbol=sym,
                 importer_paths=importer_paths,
+                outside_callers=outside_callers,
                 lines_changed=lines_changed,
                 score=score,
             )
 
-            if importer_paths:
+            if importer_paths or outside_callers:
                 ranked.review_first.append(rs)
             else:
                 ranked.review_next.append(rs)
@@ -428,6 +454,13 @@ class TerminalFormatter:
             arrow = "↳" if not _is_dumb_terminal() else "+->"
             out.write(
                 "    " + dim(f"{arrow} imported by: {importer_str}", color) + "\n"
+            )
+        if rs.outside_callers and section_title == "REVIEW FIRST":
+            arrow = "↳" if not _is_dumb_terminal() else "+->"
+            out.write(
+                "    "
+                + dim(f"{arrow} called outside the diff: {_collapsed(rs.outside_callers)}", color)
+                + "\n"
             )
 
     def _write_footer(self, out, color: bool) -> None:

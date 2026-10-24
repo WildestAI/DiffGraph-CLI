@@ -2365,6 +2365,83 @@ def test_changed_symbols_carry_exact_before_and_after_source(tmp_path):
     assert "-    return 1\n+    return 10\n" in files["mod.py"]["diff"]["unified"]
 
 
+def _callers_repo(tmp_path):
+    root = repo(tmp_path)
+    write(root, "pkg/__init__.py", "")
+    write(root, "pkg/lib.py", "def f(a):\n    return a\n\ndef g():\n    return 0\n\ndef stable():\n    return 1\n")
+    write(root, "pkg/caller.py", "from pkg.lib import f as run\n\ndef use():\n    return run(1)\n")
+    write(root, "pkg/broken.py", "from .lib import g\n\nclass Box:\n    def open(self):\n        return g()\n")
+    write(root, "pkg/mention.py", "# f is mentioned here but never imported\ndef f2():\n    return 'f'\n")
+    write(root, "pkg/other.py", "from pkg.lib import stable\n\ndef keep():\n    return stable()\n")
+    git(root, "add", ".")
+    git(root, "commit", "-m", "base")
+    # Change f's signature and delete g; callers stay untouched.
+    write(root, "pkg/lib.py", "def f(a, b):\n    return a + b\n\ndef stable():\n    return 1\n")
+    return root
+
+
+def _context(artifact):
+    files = {item["path"]: item for item in artifact["files"] if item["change_kind"] == "unchanged"}
+    edges = {
+        (item["kind"], item["source_id"], item["target_id"])
+        for item in artifact["relationships"]
+        if any(item["source_id"] in (fid, ) or item["source_id"].startswith("sym::" + path + "::")
+               for path, fid in ((p, f["id"]) for p, f in files.items()))
+    }
+    return files, edges
+
+
+def test_callers_outside_the_diff_are_found_including_callers_of_deleted_functions(tmp_path):
+    root = _callers_repo(tmp_path)
+
+    artifact = analyze_local_diff(str(root))
+
+    assert_valid(artifact)
+    files, edges = _context(artifact)
+    # Only files that really call or import changed declarations; a textual
+    # mention (mention.py) and a caller of an unchanged function (other.py) are not context.
+    assert set(files) == {"pkg/caller.py", "pkg/broken.py"}
+    assert ("calls", "sym::pkg/caller.py::use", "sym::pkg/lib.py::f") in edges
+    assert ("imports", "file::pkg/caller.py", "sym::pkg/lib.py::f") in edges
+    # The call site of a deleted function is exactly what breaks.
+    assert ("calls", "sym::pkg/broken.py::Box.open", "sym::pkg/lib.py::g") in edges
+    symbols = {item["id"]: item for item in artifact["symbols"]}
+    assert symbols["sym::pkg/lib.py::g"]["change_kind"] == "deleted"
+    # Callers keep their enclosing declarations so parent ids resolve.
+    assert symbols["sym::pkg/broken.py::Box.open"]["parent_id"] == "sym::pkg/broken.py::Box"
+    assert symbols["sym::pkg/broken.py::Box"]["change_kind"] == "unchanged"
+    call = next(item for item in artifact["relationships"] if item["source_id"] == "sym::pkg/caller.py::use")
+    assert call["evidence"][0]["line_start"] == 4 and call["evidence"][0]["snippet"] == "run(1)"
+    assert files["pkg/caller.py"]["lines_added"] == 0
+
+
+def test_callers_outside_the_diff_use_the_head_commit_of_a_range(tmp_path):
+    root = _callers_repo(tmp_path)
+    git(root, "commit", "-am", "change")
+    # A later working-tree edit must not leak into a commit-range analysis.
+    write(root, "pkg/caller.py", "def use():\n    return 0\n")
+
+    artifact = analyze_local_diff(str(root), base_ref="HEAD~1", head_ref="HEAD")
+
+    files, edges = _context(artifact)
+    assert ("calls", "sym::pkg/caller.py::use", "sym::pkg/lib.py::f") in edges
+
+
+def test_caller_search_is_capped_with_a_warning(tmp_path, monkeypatch):
+    import diffgraph.structural as structural
+
+    root = _callers_repo(tmp_path)
+    monkeypatch.setattr(structural, "MAX_CONTEXT_FILES", 1)
+
+    artifact = analyze_local_diff(str(root))
+
+    assert_valid(artifact)
+    assert any(
+        item["code"] == "PARTIAL_ANALYSIS" and "first 1 of" in item["detail"]
+        for item in artifact["metadata"]["warnings"]
+    )
+
+
 def test_symbol_source_and_file_diff_split_lines_like_git(tmp_path):
     """Form feeds must not shift spans; a missing final newline gets Git's marker."""
     root = repo(tmp_path)

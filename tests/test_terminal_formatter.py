@@ -561,6 +561,35 @@ def test_import_stub_edges_from_own_file_are_not_importers():
     assert [item.symbol["name"] for item in ranked.review_next] == ["json"]
 
 
+def test_callers_outside_the_diff_rank_and_render():
+    files = [
+        _make_file("f_lib", "lib.py", change_kind="modified"),
+        _make_file("f_cli", "cli.py", change_kind="unchanged"),
+    ]
+    target = _make_symbol("s_f", "f", "f_lib", "modified")
+    caller = _make_symbol("s_main", "main", "f_cli", "unchanged")
+    relationships = [
+        _make_import_rel("r1", "f_cli", "s_f"),
+        {
+            "id": "rel::main->f", "kind": "calls", "analysis_source": "structural",
+            "source_id": caller["id"], "target_id": target["id"],
+            "evidence": [{"kind": "call_site", "file": "cli.py", "line_start": 7}],
+        },
+    ]
+    dg = _make_diffgraph(files=files, symbols=[target, caller], relationships=relationships)
+    fmt = TerminalFormatter(dg, color=False)
+    ranked = fmt._rank_symbols()
+
+    assert [item.symbol["name"] for item in ranked.review_first] == ["f"]
+    assert ranked.review_first[0].importer_paths == ["cli.py (outside diff)"]
+    assert ranked.review_first[0].outside_callers == ["cli.py:main (L7)"]
+    assert ranked.context == []  # context-file callers are not "unchanged symbols in the diff"
+    out = io.StringIO()
+    fmt.render(out)
+    assert "1 file changed" in out.getvalue()
+    assert "called outside the diff: cli.py:main (L7)" in out.getvalue()
+
+
 def test_ai_summary_control_characters_never_reach_the_terminal():
     files = [_make_file("f1", "app.py", change_kind="modified")]
     symbol = _make_symbol("s1", "fn", "f1", "modified")

@@ -189,7 +189,8 @@
         },
         "change_kind": {
           "type": "string",
-          "enum": ["added", "modified", "deleted", "renamed", "renamed_modified"]
+          "enum": ["added", "modified", "deleted", "renamed", "renamed_modified", "unchanged"],
+          "description": "unchanged = a context file outside the diff, included only for its callers or importers of changed declarations."
         },
         "lines_added": {
           "type": ["integer", "null"],
