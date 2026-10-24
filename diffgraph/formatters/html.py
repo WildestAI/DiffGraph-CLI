@@ -145,7 +145,7 @@ _INTERACTIVE_SCRIPT = textwrap.dedent(
         if (file) return file.path || id;
         const symbol = symbolIndex.get(id);
         if (symbol) return symbol.qualified_name || symbol.name || id;
-        if (String(id).startsWith('module::')) return `module ${id.slice(8)}`;
+        if (String(id).startsWith('module::')) { const module = moduleList.find((entry) => entry.id === id); return `module ${module ? module.name : id}`; }
         return id;
       };
 
@@ -349,6 +349,7 @@ _INTERACTIVE_SCRIPT = textwrap.dedent(
         const symbol = symbolIndex.get(id);
         const fileId = symbol ? symbol.file_id : id;
         state.collapsed.delete(fileId);
+        state.collapsedModules.delete(moduleIdOf.get(fileId));
         if (symbol && !relevantSymbolIds.has(id)) state.expanded.add(fileId);
       };
       const linkTo = (id) => {
@@ -533,11 +534,21 @@ _INTERACTIVE_SCRIPT = textwrap.dedent(
       const moduleNameOf = (file) => { const bits = String(file.path || file.id).split('/'); return bits.length > 1 ? bits.slice(0, -1).join('/') : '(root)'; };
       const moduleList = [];
       const moduleIdOf = new Map();
+      // A module is a directory within one reading group (changed source,
+      // outside the diff, tests), so grouping never pulls a later group above
+      // an earlier one, and every module id is unique.
+      const GROUP_SUFFIX = ['', ' · outside the diff', ' · tests'];
       fileOrder.forEach((id) => {
         const file = fileIndex.get(id);
-        const name = moduleNameOf(file);
-        let module = moduleList.find((entry) => entry.name === name);
-        if (!module) { module = { name, id: `module::${name}`, files: [] }; moduleList.push(module); }
+        const directory = moduleNameOf(file);
+        const group = category(file);
+        let module = moduleList.find((entry) => entry.directory === directory && entry.group === group);
+        if (!module) {
+          const testsDirectory = directory.split('/').some((part) => part === 'tests' || part === 'test');
+          const suffix = group === 2 && testsDirectory ? '' : GROUP_SUFFIX[group];
+          module = { directory, group, name: `${directory}${suffix}`, id: `module::${group}::${directory}`, files: [] };
+          moduleList.push(module);
+        }
         module.files.push(file);
         moduleIdOf.set(file.id, module.id);
       });

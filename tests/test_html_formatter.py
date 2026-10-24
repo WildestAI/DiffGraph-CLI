@@ -451,3 +451,21 @@ def test_graph_has_no_native_svg_title_tooltip():
     # the node tooltips (including AI summaries); aria-label names it instead.
     assert "createElementNS(NS, 'title')" not in script
     assert "svg.setAttribute('aria-label', 'Interactive DiffGraph visualization')" in script
+
+
+def test_modules_split_by_reading_group_with_unique_ids():
+    from diffgraph.formatters.html import _INTERACTIVE_SCRIPT as script
+
+    # A directory holding changed files and callers outside the diff becomes
+    # two modules, so a later reading group never jumps above an earlier one
+    # and module ids stay unique.
+    assert "entry.directory === directory && entry.group === group" in script
+    assert "id: `module::${group}::${directory}`" in script
+    assert "' · outside the diff'" in script
+
+
+def test_details_link_reveals_symbol_inside_a_collapsed_module():
+    from diffgraph.formatters.html import _INTERACTIVE_SCRIPT as script
+
+    reveal = script.split("const reveal = (id) => {", 1)[1].split("};", 1)[0]
+    assert "state.collapsedModules.delete(moduleIdOf.get(fileId));" in reveal
