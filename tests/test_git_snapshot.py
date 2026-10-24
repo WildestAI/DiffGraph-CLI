@@ -208,6 +208,42 @@ def test_sha256_repository_preserves_full_immutable_blob_identities(tmp_path):
     ]
 
 
+def test_sha256_staged_snapshot_preserves_full_blob_identities(tmp_path):
+    """Staged SHA-256 changes retain complete immutable endpoint identities."""
+    repo = make_sha256_repo(tmp_path)
+    write(repo, "modified.bin", b"\x00before\xff\n")
+    write(repo, "deleted.txt", b"remove me\n")
+    commit_all(repo, "base")
+
+    old_modified = oid(repo, "HEAD:modified.bin")
+    old_deleted = oid(repo, "HEAD:deleted.txt")
+    write(repo, "modified.bin", b"\x00after\xff\n")
+    os.unlink(repo / "deleted.txt")
+    write(repo, "added.bin", b"\x1f\x8bnew archive")
+    git(repo, "add", "-A")
+    staged_modified = index_oid(repo, "modified.bin")
+    write(repo, "modified.bin", b"\x00worktree-only\xff\n")
+
+    result = resolve_staged(str(repo))
+    entries = {entry.new_path or entry.old_path: entry for entry in result.entries}
+
+    assert result.warnings == ()
+    assert set(entries) == {"added.bin", "deleted.txt", "modified.bin"}
+    assert (entries["modified.bin"].old_oid, entries["modified.bin"].new_oid) == (
+        old_modified, staged_modified,
+    )
+    assert (entries["deleted.txt"].old_oid, entries["deleted.txt"].new_oid) == (
+        old_deleted, None,
+    )
+    assert (entries["added.bin"].old_oid, entries["added.bin"].new_oid) == (
+        None, index_oid(repo, "added.bin"),
+    )
+    for entry in entries.values():
+        for object_id in (entry.old_oid, entry.new_oid):
+            if object_id is not None:
+                assert len(object_id) == 64
+
+
 def test_unstaged_hash_matches_git_add_clean_filter_semantics(tmp_path):
     repo = make_repo(tmp_path)
     write(repo, ".gitattributes", b"filtered.txt text eol=lf\n")
