@@ -280,7 +280,7 @@ def test_binary_python_snapshot_preserves_identity_without_parsing(tmp_path, sta
     artifact = analyze_local_diff(str(root), staged=staged)
 
     assert_valid(artifact)
-    assert artifact["schema_version"] == "2.0"
+    assert artifact["schema_version"] == "2.1"
     assert artifact["symbols"] == []
     assert artifact["relationships"] == []
     assert artifact["metadata"]["files_analyzed"] == 0
@@ -289,6 +289,7 @@ def test_binary_python_snapshot_preserves_identity_without_parsing(tmp_path, sta
     assert file_entry["language"] is None
     assert file_entry["lines_added"] is None
     assert file_entry["lines_removed"] is None
+    assert "diff" not in file_entry  # binary content is never rendered as text
     provenance = json.loads(file_entry["evidence"][0]["detail"])
     assert provenance["old_oid"] == git(root, "rev-parse", "HEAD:payload.py")
     assert provenance["new_oid"] == git(root, "hash-object", "--path=payload.py", "payload.py")
@@ -1671,6 +1672,49 @@ def test_changeset_python_imports_resolve_across_files_conservatively(tmp_path):
     )
 
 
+def test_resolved_import_bindings_link_files_to_imported_declarations(tmp_path):
+    """Named imports record which changed declaration they bind, and only that."""
+    root = repo(tmp_path)
+    write(
+        root,
+        "package/worker.py",
+        "LIMIT = 3\n\n"
+        "def run():\n"
+        "    return LIMIT\n\n"
+        "def unused():\n"
+        "    return 0\n\n"
+        "class Engine:\n"
+        "    def start(self):\n"
+        "        return run()\n",
+    )
+    write(
+        root,
+        "package/client.py",
+        "from .worker import run as go, LIMIT, Engine, missing\n"
+        "from .worker import run\n"
+        "import package.worker\n",
+    )
+    git(root, "add", "package")
+
+    artifact = analyze_local_diff(str(root), staged=True)
+
+    assert_valid(artifact)
+    bindings = {
+        (item["source_id"], item["target_id"]): item["label"]
+        for item in artifact["relationships"]
+        if item["kind"] == "imports" and item["label"].startswith("resolved binding")
+    }
+    # One edge per imported declaration, even when imported twice; undeclared
+    # names, methods, and whole-module imports bind no declaration.
+    assert bindings == {
+        ("file::package/client.py", "sym::package/worker.py::run"): "resolved binding: go",
+        ("file::package/client.py", "sym::package/worker.py::LIMIT"): "resolved binding: LIMIT",
+        ("file::package/client.py", "sym::package/worker.py::Engine"): "resolved binding: Engine",
+    }
+    relationship_ids = [item["id"] for item in artifact["relationships"]]
+    assert len(relationship_ids) == len(set(relationship_ids))
+
+
 def test_namespace_package_child_imports_resolve_without_init_files(tmp_path):
     """Absolute and relative child imports resolve across namespace packages."""
     root = repo(tmp_path)
@@ -2290,3 +2334,50 @@ def test_decorator_change_is_part_of_python_declaration_evidence(tmp_path):
         "line_end": 3,
         "detail": symbol["evidence"][0]["detail"],
     }]
+
+
+def test_changed_symbols_carry_exact_before_and_after_source(tmp_path):
+    root = repo(tmp_path)
+    write(root, "mod.py", "def keep():\n    return 0\n\ndef edit():\n    return 1\n\ndef gone():\n    return 2\n")
+    write(root, "notes.md", "one\n")
+    git(root, "add", ".")
+    git(root, "commit", "-m", "base")
+    write(root, "mod.py", "def keep():\n    return 0\n\ndef edit():\n    return 10\n\ndef new():\n    return 3\n")
+    write(root, "notes.md", "one\ntwo\n")
+
+    artifact = analyze_local_diff(str(root))
+
+    assert_valid(artifact)
+    symbols = {item["name"]: item for item in artifact["symbols"]}
+    assert "source" not in symbols["keep"]
+    assert symbols["edit"]["source"] == {
+        "before": {"line_start": 4, "text": "def edit():\n    return 1\n", "truncated": False},
+        "after": {"line_start": 4, "text": "def edit():\n    return 10\n", "truncated": False},
+    }
+    assert symbols["gone"]["source"]["after"] is None
+    assert symbols["gone"]["source"]["before"]["text"] == "def gone():\n    return 2\n"
+    assert symbols["new"]["source"]["before"] is None
+
+    files = {item["path"]: item for item in artifact["files"]}
+    assert files["notes.md"]["diff"]["truncated"] is False
+    assert "+two\n" in files["notes.md"]["diff"]["unified"]
+    assert files["notes.md"]["diff"]["unified"].startswith("--- a/notes.md\n+++ b/notes.md\n")
+    assert "-    return 1\n+    return 10\n" in files["mod.py"]["diff"]["unified"]
+
+
+def test_symbol_source_and_file_diff_split_lines_like_git(tmp_path):
+    """Form feeds must not shift spans; a missing final newline gets Git's marker."""
+    root = repo(tmp_path)
+    write(root, "mod.py", "\x0c\ndef page():\n    return 1\n\ndef last():\n    return 2")
+    git(root, "add", ".")
+    git(root, "commit", "-m", "base")
+    write(root, "mod.py", "\x0c\ndef page():\n    return 1\n\ndef last():\n    return 3")
+
+    artifact = analyze_local_diff(str(root))
+
+    symbols = {item["name"]: item for item in artifact["symbols"]}
+    assert symbols["last"]["source"]["after"] == {
+        "line_start": 5, "text": "def last():\n    return 3", "truncated": False,
+    }
+    unified = next(item for item in artifact["files"] if item["path"] == "mod.py")["diff"]["unified"]
+    assert "-    return 2\n\\ No newline at end of file\n+    return 3\n\\ No newline at end of file\n" in unified

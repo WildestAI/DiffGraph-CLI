@@ -5,6 +5,43 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+- Schema 2.1: changed symbols carry their exact before/after source, and
+  text files carry a capped unified diff.
+- `wild diff --llm MODEL`: opt-in AI summaries for each changed file and
+  symbol through BYOK Relay (Claude, GPT, and Gemini models), rendered in
+  JSON, HTML, and terminal output. Schema 2.1 adds optional per-node
+  `summary` fields.
+- Resolved `from module import name` bindings are recorded as file →
+  declaration `imports` edges.
+
+### Changed
+- The HTML report is graph-first: a full-window graph, a details panel for the
+  selected node, and a top bar. The textual file/symbol/topology/metadata
+  dumps are gone (use `--format json`), roughly halving report size.
+- Graph files show changed symbols by default; unchanged symbols and import
+  statements expand per file.
+- Graph edges are drawn on top as arcs beside the boxes: symbol-to-symbol
+  when both are visible, otherwise lifted to file headers and merged with a
+  count; hovering or selecting a node highlights its connections.
+- Selecting a symbol shows its exact before/after diff (folded context,
+  unified or side by side); selecting a file shows its unified diff.
+
+### Security
+- `--llm` never takes the relay URL, relay token, or provider keys from a
+  `.env` file, which may come from an untrusted repository; a self-hosted relay
+  is accepted only from the shell environment or `~/.config/wild/byok-relay.json`.
+- AI summary text is stripped of control characters before terminal output.
+
+### Fixed
+- Terminal "imported by" is credited per symbol instead of to every changed
+  symbol in an imported file; import statements are no longer ranked as
+  imported.
+- The HTML graph is readable in dark mode.
+- Terminal warnings render as readable lines.
+
 ## [1.2.0] - 2026-10-09
 
 ### Added

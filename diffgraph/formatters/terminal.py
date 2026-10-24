@@ -23,6 +23,8 @@ from dataclasses import dataclass, field
 from typing import Optional
 
 from diffgraph.contract import ValidatedArtifact
+from diffgraph.formatters.common import collapsed as _collapsed
+from diffgraph.formatters.common import warning_lines as _warning_lines
 
 
 # ---------------------------------------------------------------------------
@@ -97,52 +99,20 @@ def _change_label(change_kind: str, color: bool) -> str:
     return colorize(label, color)
 
 
-def _collapsed(items: list[str], max_inline: int = 3) -> str:
-    """Join items, collapsing any beyond max_inline into '(+N more)'."""
-    text = ", ".join(items[:max_inline])
-    extra = len(items) - max_inline
-    if extra > 0:
-        text += f"  (+{extra} more)"
-    return text
+def _summary_text(node: dict) -> Optional[str]:
+    """Return a node's AI summary text, if the artifact carries one."""
+    summary = node.get("summary")
+    if isinstance(summary, dict) and isinstance(summary.get("text"), str):
+        # Model text is untrusted: an escape sequence must not reach the terminal.
+        cleaned = "".join(ch if ch.isprintable() else " " for ch in summary["text"])
+        return " ".join(cleaned.split()) or None
+    return None
 
 
-def _warning_lines(warnings: list[dict]) -> list[str]:
-    """Return one readable line per warning.
-
-    File-scoped UNSUPPORTED_LANGUAGE warnings collapse into a single line:
-    their detail is a fixed message plus blob ids, which the JSON artifact
-    already carries. Other warnings keep their detail, since it is specific
-    (e.g. the location of a syntax error).
-    """
-    lines: list[str] = []
-    unsupported: list[str] = []
-    unsupported_index = 0
-    for w in warnings:
-        code = w.get("code", "UNKNOWN")
-        path = w.get("file")
-        if code == "UNSUPPORTED_LANGUAGE" and path:
-            if not unsupported:
-                # Placeholder keeps the summary at the first occurrence's position.
-                unsupported_index = len(lines)
-                lines.append("")
-            unsupported.append(path)
-            continue
-        detail = w.get("detail", "")
-        # Git resolution details already start with their own code.
-        if detail.startswith(f"{code}: "):
-            detail = detail[len(code) + 2:]
-        line = code
-        if path:
-            line += f"  {path}"
-        if detail:
-            line += f": {detail}" if path else f"  {detail}"
-        lines.append(line)
-    if unsupported:
-        lines[unsupported_index] = (
-            f"Not analyzed (Python only, {len(unsupported)} "
-            f"file{'s' if len(unsupported) != 1 else ''}): {_collapsed(unsupported)}"
-        )
-    return lines
+def _write_summary(out, node: dict, color: bool) -> None:
+    text = _summary_text(node)
+    if text:
+        out.write("    " + dim(f"AI: {text}", color) + "\n")
 
 
 # ---------------------------------------------------------------------------
@@ -245,18 +215,24 @@ class TerminalFormatter:
             f["id"] for f in files if f.get("change_kind", "unchanged") != "unchanged"
         }
 
-        # Build import relationship index: target_file_id → set of source_file_ids
-        # (only structural/derived relationships, source must be in the diff)
+        # Build import relationship index: target symbol id → importing file ids.
+        # Only symbol-targeted edges count: a file-level import says the module
+        # is used, not which of its symbols, so it must not be credited to every
+        # changed symbol in that file. Edges from a file to its own import stubs
+        # are excluded because they describe the import, not a dependent.
+        symbols_by_id = {sym.get("id"): sym for sym in symbols}
         import_index: dict[str, set[str]] = {}
         for rel in relationships:
+            target = rel.get("target_id", "")
+            target_symbol = symbols_by_id.get(target)
             if (
                 rel.get("kind") == "imports"
                 and rel.get("analysis_source") in ("structural", "derived")
                 and rel.get("source_id") in changed_file_ids
+                and target_symbol is not None
+                and target_symbol.get("file_id") != rel.get("source_id")
             ):
-                target = rel.get("target_id", "")
-                if target:
-                    import_index.setdefault(target, set()).add(rel["source_id"])
+                import_index.setdefault(target, set()).add(rel["source_id"])
 
         ranked = RankedSymbols()
 
@@ -267,9 +243,15 @@ class TerminalFormatter:
                 ranked.context.append(_RankedSymbol(symbol=sym))
                 continue
 
-            # Compute importer paths (files in the diff that import this symbol's file)
-            sym_file_id = sym.get("file_id", "")
-            importer_file_ids = import_index.get(sym_file_id, set())
+            # Files in the diff that import this symbol, or the top-level
+            # declaration containing it (importing a class exposes its methods).
+            importer_file_ids: set[str] = set()
+            current = sym
+            seen: set = set()
+            while current is not None and current.get("id") not in seen:
+                seen.add(current.get("id"))
+                importer_file_ids |= import_index.get(current.get("id"), set())
+                current = symbols_by_id.get(current.get("parent_id"))
             importer_paths = [
                 file_id_to_path.get(fid, fid)
                 for fid in sorted(importer_file_ids)
@@ -364,7 +346,19 @@ class TerminalFormatter:
                     additions = f.get("lines_added") or 0
                     deletions = f.get("lines_removed") or 0
                     out.write(f"  {path}  +{additions} / -{deletions}\n")
+                    _write_summary(out, f, color)
                 out.write("\n")
+        elif any(_summary_text(f) for f in files):
+            # Symbol sections cover code; this keeps per-file summaries,
+            # including non-Python files, visible too.
+            out.write(bold("▶ FILES", color) + "\n")
+            for f in files:
+                if _summary_text(f):
+                    path = f.get("path", f.get("id", "?"))
+                    label = _change_label(f.get("change_kind", "unknown"), color)
+                    out.write(f"  {path} {label}\n")
+                    _write_summary(out, f, color)
+            out.write("\n")
 
     def _write_section(
         self,
@@ -426,6 +420,7 @@ class TerminalFormatter:
             if loc_lines:
                 line += f"  · {loc_lines} lines"
         out.write(line + "\n")
+        _write_summary(out, sym, color)
 
         # Importer line (REVIEW FIRST only)
         if rs.importer_paths and section_title == "REVIEW FIRST":
@@ -478,5 +473,17 @@ class TerminalFormatter:
         # Optional LLM upgrade hint (shown only for local-structural analysis)
         privacy_tier = metadata.get("privacy_tier", "local")
         if privacy_tier == "local":
-            hint = "Optional: wild diff --llm openai  (adds LLM summary · diff sent to OpenAI)"
+            hint = (
+                "Optional: wild diff --llm claude|gpt|gemini  "
+                "(adds AI summaries · code sent to the model provider via BYOK Relay)"
+            )
             out.write(dim(hint, color) + "\n")
+        elif metadata.get("llm_model"):
+            calls = metadata.get("llm_calls") or 0
+            providers = ", ".join(metadata.get("cloud_providers_used") or [])
+            note = (
+                f"AI summaries: {metadata['llm_model']} via BYOK Relay"
+                f"{f' ({providers})' if providers else ''}"
+                f" · {calls} call{'s' if calls != 1 else ''}"
+            )
+            out.write(dim(note, color) + "\n")

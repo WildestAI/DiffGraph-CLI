@@ -68,6 +68,11 @@ wild diff -o diffgraph.html
   output is always stdout and never writes a file.
 - `--no-open`: Don't automatically open the HTML report in browser
 - `--structural-json`: Write a local Python structural DiffGraph v2 artifact to the given path (`-` for stdout). Applies to `wild diff` only.
+- `--llm MODEL`: Opt in to AI summaries for each changed file and symbol via
+  [BYOK Relay](https://byokrelay.com). `MODEL` is a provider (`claude`, `gpt`,
+  or `gemini`, which selects that provider's latest flagship) or an exact model
+  id such as `gemini-3.8-flash`. Sends the changed code to the model provider.
+  See [AI summaries](#ai-summaries-opt-in).
 - `--version`: Show version information
 
 Example:
@@ -148,11 +153,44 @@ and caller-relative pathspecs are preserved.
   cancellation failures return `1`; option/command usage errors return `2`.
   Ctrl-C prints Click's `Aborted!` diagnostic and does not dispatch an artifact
   or print a success message.
-- Canonical HTML, JSON, and terminal modes are local/offline. They import or
+- Without `--llm`, canonical HTML, JSON, and terminal modes are local/offline. They import or
   invoke no AI or network module, make no network calls, report
   `privacy_tier: local` and `llm_calls: 0`, and use only local
   Git/object/worktree data plus packaged parser/schema resources. Canonical HTML
   is self-contained and has no external asset dependency.
+
+#### AI summaries (opt-in)
+
+`wild diff --llm MODEL` adds a one-sentence AI summary to every changed file
+and non-import symbol, in all three formats (JSON `summary` fields, HTML graph
+boxes and lists, terminal `AI:` lines). Requests go through
+[BYOK Relay](https://byokrelay.com)'s OpenAI-format endpoint, which routes
+`claude-*`, `gpt-*`, and `gemini-*` models (or an explicit
+`anthropic/`, `openai/`, `google/` prefix) to that provider.
+
+- **Models:** `--llm claude`, `--llm gpt`, and `--llm gemini` use
+  `claude-opus-5-5`, `gpt-6-astra`, and `gemini-4-argon`; pass any model id
+  (e.g. `--llm gemini-3.8-flash`) to choose another.
+- **Keys:** on first use, `wild` registers with the relay and sends the
+  provider key once; the relay stores it encrypted. The key comes from
+  `ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, or `GEMINI_API_KEY`/`GOOGLE_API_KEY`
+  in your shell environment when set, otherwise from a hidden prompt in an
+  interactive terminal. `wild` saves only the relay token, in
+  `~/.config/wild/byok-relay.json` (mode 0600), or reads it from
+  `BYOK_RELAY_TOKEN`. A self-hosted relay is selected by `BYOK_RELAY_URL` in
+  the shell environment or `"relay_url"` in that config file.
+- **Trust boundary:** `wild` auto-loads a `.env` from the current directory,
+  which may belong to an untrusted repository. Values from any `.env` are
+  never used for the relay URL, the relay token, or provider keys, so a
+  cloned repository cannot redirect your credentials or code.
+- **What is sent:** the unified diff of each changed text file at the exact
+  analyzed snapshot (working-tree content is re-verified against its recorded
+  blob id; binary files are skipped), plus node ids and names.
+- **Contract:** the model only writes prose for existing nodes. Unknown ids
+  are discarded, topology is never changed, and the artifact reports
+  `schema_version: "2.1"`, `privacy_tier: cloud_llm`, the provider, model, and
+  call count. Failed requests become scoped `LLM_ERROR`/`LLM_TIMEOUT`
+  warnings rather than failing the run.
 
 #### Deprecated AI HTML compatibility
 
@@ -182,12 +220,15 @@ than treating binary bytes as source code.
 
 ## 📊 Example Output
 
-The canonical HTML report includes:
-- Exact artifact metadata and optional canonical summary
-- Files, symbols, warnings, and relationship evidence
-- Deterministically ordered relationship topology
-- Dark mode support
-- Responsive, self-contained styling
+The canonical HTML report is the interactive graph:
+- A full-window graph of changed files and symbols (unchanged symbols one
+  click away per file), with optional AI summaries in each box
+- A details panel for the selected file, symbol, or edge: summary, location,
+  calls, callers, importers, and evidence
+- A top bar with the snapshot, change counts, privacy/AI status, and warnings
+- Light and dark themes; self-contained and offline
+
+The raw artifact is not shown in the page; use `wild diff --format json`.
 
 The deprecated `legacy-html` report retains its Mermaid.js diagram,
 syntax-highlighted code blocks, and AI-generated summary during the one-release

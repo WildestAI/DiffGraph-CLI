@@ -11,10 +11,10 @@ import re
 from copy import deepcopy
 from dataclasses import dataclass
 from importlib import resources
-from typing import Any, Mapping, Tuple
+from typing import Any, Mapping, Sequence, Tuple
 
 SUPPORTED_SCHEMA_MAJOR = 2
-CURRENT_SCHEMA_VERSION = "2.0"
+CURRENT_SCHEMA_VERSION = "2.1"
 _SCHEMA_RESOURCE = "schema/diffgraph-v2.schema.json"
 _VERSION_PATTERN = re.compile(r"^(0|[1-9]\d*)\.(0|[1-9]\d*)$")
 
@@ -111,6 +111,87 @@ def enrich_with_prose(
     metadata["llm_calls"] = (metadata.get("llm_calls") or 0) + 1
     metadata["llm_model"] = model
     metadata["tiers_used"] = sorted(set(metadata.get("tiers_used", [])) | {"inferred"})
+    return ValidatedArtifact.from_value(enriched)
+
+
+NODE_SUMMARY_SCHEMA_VERSION = "2.1"
+
+
+def enrich_with_node_summaries(
+    artifact: ValidatedArtifact,
+    summaries: Mapping[str, str],
+    *,
+    provider: str,
+    model: str,
+    llm_calls: int,
+    prompt_ref: str | None = None,
+    warnings: Sequence[Mapping[str, str]] = (),
+) -> ValidatedArtifact:
+    """Return a separately validated artifact with per-node AI summaries only.
+
+    ``summaries`` maps existing file or symbol IDs to prose. Unknown IDs are
+    rejected rather than creating nodes, and each summary's structural basis
+    names exactly the node it describes, so a provider cannot add, remove, or
+    edit graph topology. Only ``LLM_ERROR``/``LLM_TIMEOUT`` warnings may be
+    appended. Like :func:`enrich_with_prose`, this helper performs no
+    provider call.
+    """
+    if not isinstance(artifact, ValidatedArtifact):
+        raise TypeError("enrich_with_node_summaries requires a ValidatedArtifact")
+    if not isinstance(provider, str) or not provider.strip():
+        raise ValueError("provider must be a non-empty string")
+    if not isinstance(model, str) or not model.strip():
+        raise ValueError("model must be a non-empty string")
+    if isinstance(llm_calls, bool) or not isinstance(llm_calls, int) or llm_calls < 0:
+        raise ValueError("llm_calls must be a non-negative integer")
+
+    enriched = artifact.value
+    files = {item["id"]: item for item in enriched["files"]}
+    symbols = {item["id"]: item for item in enriched["symbols"]}
+    unknown = sorted(set(summaries) - set(files) - set(symbols))
+    if unknown:
+        raise ValueError(f"summaries reference unknown node ids: {unknown}")
+
+    llm_evidence = {"kind": "llm_inference", "model": model}
+    if prompt_ref is not None:
+        llm_evidence["prompt_ref"] = prompt_ref
+    for node_id, text in summaries.items():
+        if not isinstance(text, str) or not text.strip():
+            raise ValueError(f"summary for {node_id} must be a non-empty string")
+        node = files.get(node_id) or symbols[node_id]
+        basis_key = "file_ids" if node_id in files else "symbol_ids"
+        node["summary"] = {
+            "text": text.strip(),
+            "analysis_source": "inferred",
+            "confidence": None,
+            "evidence": [
+                dict(llm_evidence),
+                {"kind": "structural_basis", basis_key: [node_id]},
+            ],
+        }
+
+    # Calls are counted even when every response was unusable: the diff
+    # still left the machine, so the privacy metadata must say so.
+    if llm_calls:
+        metadata = enriched["metadata"]
+        if metadata.get("privacy_tier") != "cloud_backend":
+            metadata["privacy_tier"] = "cloud_llm"
+        metadata["cloud_providers_used"] = sorted(
+            set(metadata.get("cloud_providers_used", [])) | {provider}
+        )
+        metadata["llm_calls"] = (metadata.get("llm_calls") or 0) + llm_calls
+        metadata["llm_model"] = model
+    llm_warnings = [dict(item) for item in warnings]
+    if any(item.get("code") not in ("LLM_ERROR", "LLM_TIMEOUT") for item in llm_warnings):
+        raise ValueError("only LLM_ERROR and LLM_TIMEOUT warnings may be added")
+    if llm_warnings:
+        enriched["metadata"].setdefault("warnings", []).extend(llm_warnings)
+    if summaries:
+        metadata = enriched["metadata"]
+        metadata["tiers_used"] = sorted(
+            set(metadata.get("tiers_used", [])) | {"inferred"}
+        )
+        enriched["schema_version"] = NODE_SUMMARY_SCHEMA_VERSION
     return ValidatedArtifact.from_value(enriched)
 
 

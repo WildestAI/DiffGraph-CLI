@@ -10,7 +10,7 @@ import hashlib
 import json
 import threading
 import time
-from difflib import SequenceMatcher
+from difflib import SequenceMatcher, unified_diff
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from functools import lru_cache
@@ -145,6 +145,74 @@ def _line_counts(
         if tag in ("replace", "insert"):
             added += new_end - new_start
     return added, removed
+
+
+MAX_SOURCE_LINES = 2000
+MAX_FILE_DIFF_CHARS = 200_000
+
+
+def split_lines(text: str) -> List[str]:
+    """Split on newline only, keeping the newline, as Git and tree-sitter do.
+
+    ``str.splitlines`` also breaks on form feeds, lone ``\\r``, ``\\x85``, and
+    other separators, which would misalign declaration spans and hunks.
+    """
+    parts = text.split("\n")
+    lines = [part + "\n" for part in parts[:-1]]
+    if parts[-1]:
+        lines.append(parts[-1])
+    return lines
+
+
+def _decoded_lines(data: Optional[bytes]) -> Optional[List[str]]:
+    """Exact UTF-8 lines, or None when a side is absent or not valid UTF-8."""
+    if data is None:
+        return None
+    try:
+        return split_lines(data.decode("utf-8"))
+    except UnicodeDecodeError:
+        return None
+
+
+def _file_diff(
+    old_path: Optional[str], new_path: Optional[str],
+    old: Optional[bytes], new: Optional[bytes],
+) -> Optional[Dict]:
+    """A capped unified diff of one text file, so consumers can show the
+    micro-level change without reading the repository."""
+    old_lines, new_lines = _decoded_lines(old), _decoded_lines(new)
+    if (old is not None and old_lines is None) or (new is not None and new_lines is None):
+        return None
+    text = "".join(
+        # A last line without a newline gets Git's marker instead of being
+        # glued to the next diff line.
+        line if line.endswith("\n") else line + "\n\\ No newline at end of file\n"
+        for line in unified_diff(
+            old_lines or [], new_lines or [],
+            fromfile="a/" + old_path if old is not None and old_path else "/dev/null",
+            tofile="b/" + new_path if new is not None and new_path else "/dev/null",
+            n=3,
+        )
+    )
+    if not text:
+        return None
+    truncated = len(text) > MAX_FILE_DIFF_CHARS
+    if truncated:
+        text = text[: text.rfind("\n", 0, MAX_FILE_DIFF_CHARS) + 1]
+    return {"unified": text, "truncated": truncated}
+
+
+def _symbol_source(data: Optional[bytes], symbol: Optional[_Symbol]) -> Optional[Dict]:
+    """The exact declaration text of one side of a changed symbol."""
+    lines = _decoded_lines(data)
+    if lines is None or symbol is None:
+        return None
+    span = lines[symbol.start_line - 1:symbol.end_line]
+    return {
+        "line_start": symbol.start_line,
+        "text": "".join(span[:MAX_SOURCE_LINES]),
+        "truncated": len(span) > MAX_SOURCE_LINES,
+    }
 
 
 def _binary_sides(old: Optional[bytes], new: Optional[bytes]) -> Tuple[str, ...]:
@@ -864,12 +932,14 @@ def _resolved_import_paths(
 
 def _resolved_import_targets(
     parsed_files: Sequence[_ParsedFile],
+    kinds: Tuple[str, ...] = ("function", "class"),
 ) -> Dict[Tuple[str, Tuple[str, int]], Dict[str, str]]:
     """Resolve in-changeset ``from`` bindings without guessing package state.
 
     The map deliberately contains only a unique changed module and a unique
-    top-level declaration (when one is named).  The caller can otherwise retain
-    its local import stub, preserving the existing external-import behavior.
+    top-level declaration of one of ``kinds`` (when one is named).  The caller
+    can otherwise retain its local import stub, preserving the existing
+    external-import behavior.
     """
     modules = _module_map(parsed_files)
     import_paths = _resolved_import_paths(parsed_files)
@@ -895,7 +965,7 @@ def _resolved_import_targets(
                 if (
                     declaration is not None
                     and not has_duplicate
-                    and declaration.kind in ("function", "class")
+                    and declaration.kind in kinds
                 ):
                     bindings[binding] = _symbol_id(module_path, imported_name)
                     continue
@@ -1080,6 +1150,11 @@ def analyze_local_diff(
         )
     cross_import_paths = _resolved_import_paths(cross_file_parses)
     cross_import_targets = _resolved_import_targets(cross_file_parses)
+    # Import attribution is broader than call resolution: any unique top-level
+    # declaration can be imported by name, but only callables are call targets.
+    cross_import_declarations = _resolved_import_targets(
+        cross_file_parses, kinds=("function", "class", "constant", "type_alias")
+    )
 
     for entry in resolution.entries:
         path = entry.new_path or entry.old_path
@@ -1131,6 +1206,10 @@ def analyze_local_diff(
             "analysis_source": "structural",
             "evidence": [{"kind": "git_diff_name_status", "detail": _provenance(entry, old, new)}],
         }
+        if not (snapshot_missing or binary_sides or non_regular_modes):
+            diff = _file_diff(entry.old_path or path, path, old, new)
+            if diff is not None:
+                file_entry["diff"] = diff
         files.append(file_entry)
         if binary_sides:
             skipped += 1
@@ -1205,14 +1284,20 @@ def analyze_local_diff(
             location = None if after is None else {
                 "file": output_path, "line_start": current.start_line, "line_end": current.end_line,
             }
-            symbols.append({
+            symbol_entry = {
                 "id": _symbol_id(output_path, qname), "name": current.name,
                 "qualified_name": qname, "file_id": "file::" + output_path,
                 "kind": current.kind,
                 "parent_id": _symbol_id(output_path, current.parent) if current.parent else None,
                 "change_kind": kind, "analysis_source": "structural",
                 "location": location, "evidence": _evidence(output_path, current, oid),
-            })
+            }
+            if kind != "unchanged":
+                symbol_entry["source"] = {
+                    "before": _symbol_source(old, before),
+                    "after": _symbol_source(new, after),
+                }
+            symbols.append(symbol_entry)
 
         for qname, item in sorted(new_map.items()):
             source = _symbol_id(output_path, qname)
@@ -1242,6 +1327,7 @@ def analyze_local_diff(
             },
         )
         resolved_import_occurrences: Dict[Tuple[str, str], int] = {}
+        resolved_binding_edges: set = set()
         for import_key in sorted(set(old_import_map) | set(new_import_map)):
             before = old_import_map.get(import_key)
             after = new_import_map.get(import_key)
@@ -1321,6 +1407,25 @@ def analyze_local_diff(
                         "label": "resolved module: " + module,
                     }
                 )
+                declarations = cross_import_declarations.get(
+                    (output_path, import_key), {}
+                )
+                for binding, declaration_id in sorted(declarations.items()):
+                    edge_id = "rel::file::{}->{}".format(output_path, declaration_id)
+                    if edge_id in resolved_binding_edges:
+                        continue
+                    resolved_binding_edges.add(edge_id)
+                    relationships.append(
+                        {
+                            "id": edge_id,
+                            "kind": "imports",
+                            "source_id": "file::" + output_path,
+                            "target_id": declaration_id,
+                            "analysis_source": "structural",
+                            "evidence": evidence,
+                            "label": "resolved binding: " + binding,
+                        }
+                    )
             elif after is not None:
                 relationships.append(
                     {

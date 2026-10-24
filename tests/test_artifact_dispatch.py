@@ -188,7 +188,7 @@ def test_format_json_explicit_output_is_atomic_and_reports_on_stderr(tmp_path, m
     assert result.exit_code == 0, result.output
     assert result.stdout == ""
     assert "Canonical DiffGraph written" in result.stderr
-    assert json.loads(destination.read_text(encoding="utf-8"))["schema_version"] == "2.0"
+    assert json.loads(destination.read_text(encoding="utf-8"))["schema_version"] == "2.1"
     assert not list(root.glob(".artifact.json.*.tmp"))
 
 
@@ -241,14 +241,16 @@ def test_no_change_json_and_terminal_succeed(tmp_path, monkeypatch):
     assert terminal_result.stderr == ""
 
 
-@pytest.mark.parametrize("output_format", ["json", "terminal"])
+@pytest.mark.parametrize("output_format", ["json", "terminal", "html"])
 def test_canonical_paths_are_offline_and_do_not_import_ai_modules(
     output_format, tmp_path, monkeypatch
 ):
     root = changed_repo(tmp_path)
     monkeypatch.chdir(root)
-    sys.modules.pop("diffgraph.ai_analysis", None)
-    sys.modules.pop("agents", None)
+    # delitem restores the modules afterwards, so later tests keep patching
+    # the same module objects the CLI imports.
+    for module in ("diffgraph.ai_analysis", "agents", "diffgraph.relay", "diffgraph.llm_summaries"):
+        monkeypatch.delitem(sys.modules, module, raising=False)
 
     import socket
 
@@ -257,11 +259,15 @@ def test_canonical_paths_are_offline_and_do_not_import_ai_modules(
         "socket",
         lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("network access")),
     )
-    result = CliRunner().invoke(cli.main, ["diff", "--format", output_format])
+    result = CliRunner().invoke(
+        cli.main, ["diff", "--format", output_format, "--no-open"]
+    )
 
     assert result.exit_code == 0, result.output
     assert "diffgraph.ai_analysis" not in sys.modules
     assert "agents" not in sys.modules
+    assert "diffgraph.relay" not in sys.modules
+    assert "diffgraph.llm_summaries" not in sys.modules
 
 
 def test_ctrl_c_is_exit_one_on_stderr_and_does_not_create_output(tmp_path, monkeypatch):

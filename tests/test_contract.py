@@ -34,7 +34,7 @@ def test_packaged_schema_and_complete_golden_validate(golden_artifact):
     schema = load_schema()
 
     assert schema["$id"].endswith("/v2.0/schema.json")
-    assert CURRENT_SCHEMA_VERSION == "2.0"
+    assert CURRENT_SCHEMA_VERSION == "2.1"
     assert SUPPORTED_SCHEMA_MAJOR == 2
     validate_artifact(golden_artifact)
 

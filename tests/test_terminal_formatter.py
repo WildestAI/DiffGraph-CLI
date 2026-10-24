@@ -66,11 +66,12 @@ def _make_symbol(
     }
 
 
-def _make_import_rel(rel_id: str, source_id: str, target_id: str) -> dict:
+def _make_import_rel(rel_id: str, source_id: str, target_sym_id: str) -> dict:
+    """A resolved import binding: file ``source_id`` imports symbol ``target_sym_id``."""
     return {
         "id": f"rel::{rel_id}->fixture",
         "source_id": f"file::{source_id}",
-        "target_id": f"file::{target_id}",
+        "target_id": f"sym::fixture.py::{target_sym_id}",
         "kind": "imports",
         "analysis_source": "structural",
     }
@@ -173,7 +174,7 @@ def test_rank_symbols_with_importers():
         _make_symbol("s_route", "list_users", "f_routes", "modified", 5, 15),
     ]
     relationships = [
-        _make_import_rel("r1", "f_routes", "f_validator"),  # routes imports validator
+        _make_import_rel("r1", "f_routes", "s_validate"),  # routes imports validator
     ]
     dg = _make_diffgraph(files=files, symbols=symbols, relationships=relationships)
     fmt = TerminalFormatter(dg)
@@ -222,7 +223,7 @@ def test_rank_symbols_deleted_file():
         _make_symbol("s_route", "get_user", "f_routes", "modified", 5, 10),
     ]
     relationships = [
-        _make_import_rel("r1", "f_routes", "f_legacy"),  # routes imports legacy_auth
+        _make_import_rel("r1", "f_routes", "s_old"),  # routes imports legacy_auth
     ]
     dg = _make_diffgraph(files=files, symbols=symbols, relationships=relationships)
     fmt = TerminalFormatter(dg)
@@ -356,9 +357,9 @@ def test_rank_symbols_uses_importers_not_declaration_span():
         _make_symbol("s_b", "big_func", "f_b", "modified", 1, 200),
     ]
     relationships = [
-        _make_import_rel("r1", "f_importer1", "f_a"),
-        _make_import_rel("r2", "f_importer2", "f_a"),
-        _make_import_rel("r3", "f_importer1", "f_b"),
+        _make_import_rel("r1", "f_importer1", "s_a"),
+        _make_import_rel("r2", "f_importer2", "s_a"),
+        _make_import_rel("r3", "f_importer1", "s_b"),
     ]
     dg = _make_diffgraph(files=files, symbols=symbols, relationships=relationships)
     fmt = TerminalFormatter(dg, color=False)
@@ -432,7 +433,7 @@ def test_importer_display_collapse():
         for i in range(5)
     ]
     relationships = [
-        _make_import_rel(f"r{i}", f"f_consumer_{i}", "f_target")
+        _make_import_rel(f"r{i}", f"f_consumer_{i}", "s1")
         for i in range(5)
     ]
     dg = _make_diffgraph(files=files, symbols=symbols, relationships=relationships)
@@ -500,3 +501,82 @@ def test_unsupported_language_warnings_collapse_to_one_line():
         "⚠  PARSE_FAILURE  broken.py: bad",
     ]
     assert "blob ids" not in output
+
+
+# ---------------------------------------------------------------------------
+# 16. Importers are credited per symbol, not per file
+# ---------------------------------------------------------------------------
+
+def test_file_level_import_does_not_credit_every_symbol():
+    files = [
+        _make_file("f_lib", "lib.py", change_kind="modified"),
+        _make_file("f_app", "app.py", change_kind="modified"),
+    ]
+    symbols = [
+        _make_symbol("s_used", "used", "f_lib", "modified"),
+        _make_symbol("s_other", "other", "f_lib", "modified"),
+    ]
+    relationships = [
+        _make_import_rel("r1", "f_app", "s_used"),
+        {  # module-level edge alongside the binding: names no symbol
+            "id": "rel::file::app.py->file::lib.py",
+            "source_id": "file::f_app",
+            "target_id": "file::f_lib",
+            "kind": "imports",
+            "analysis_source": "structural",
+        },
+    ]
+    dg = _make_diffgraph(files=files, symbols=symbols, relationships=relationships)
+    ranked = TerminalFormatter(dg)._rank_symbols()
+
+    assert [item.symbol["name"] for item in ranked.review_first] == ["used"]
+    assert [item.symbol["name"] for item in ranked.review_next] == ["other"]
+
+
+def test_methods_inherit_importers_of_their_class():
+    files = [
+        _make_file("f_lib", "lib.py", change_kind="modified"),
+        _make_file("f_app", "app.py", change_kind="modified"),
+    ]
+    cls = _make_symbol("s_cls", "Engine", "f_lib", "unchanged")
+    method = _make_symbol("s_run", "run", "f_lib", "modified")
+    method["parent_id"] = cls["id"]
+    relationships = [_make_import_rel("r1", "f_app", "s_cls")]
+    dg = _make_diffgraph(files=files, symbols=[cls, method], relationships=relationships)
+    ranked = TerminalFormatter(dg)._rank_symbols()
+
+    assert [item.symbol["name"] for item in ranked.review_first] == ["run"]
+    assert ranked.review_first[0].importer_paths == ["app.py"]
+
+
+def test_import_stub_edges_from_own_file_are_not_importers():
+    files = [_make_file("f_app", "app.py", change_kind="modified")]
+    stub = _make_symbol("s_stub", "json", "f_app", "added")
+    stub["kind"] = "import"
+    relationships = [_make_import_rel("r1", "f_app", "s_stub")]
+    dg = _make_diffgraph(files=files, symbols=[stub], relationships=relationships)
+    ranked = TerminalFormatter(dg)._rank_symbols()
+
+    assert ranked.review_first == []
+    assert [item.symbol["name"] for item in ranked.review_next] == ["json"]
+
+
+def test_ai_summary_control_characters_never_reach_the_terminal():
+    files = [_make_file("f1", "app.py", change_kind="modified")]
+    symbol = _make_symbol("s1", "fn", "f1", "modified")
+    symbol["summary"] = {
+        "text": "Clears\x1b[2J the\x07 screen.",
+        "analysis_source": "inferred",
+        "confidence": None,
+        "evidence": [
+            {"kind": "llm_inference", "model": "m"},
+            {"kind": "structural_basis", "symbol_ids": [symbol["id"]]},
+        ],
+    }
+    dg = _make_diffgraph(files=files, symbols=[symbol])
+    dg["schema_version"] = "2.1"
+    out = io.StringIO()
+    TerminalFormatter(dg, color=False).render(out)
+
+    assert "\x1b" not in out.getvalue() and "\x07" not in out.getvalue()
+    assert "AI: Clears [2J the screen." in out.getvalue()
