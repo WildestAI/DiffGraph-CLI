@@ -32,6 +32,6 @@ MCP tools: `run_wild_diff`, `list_docs`, `get_docs`, `search_docs`
 
 ## Links
 
-- GitHub: https://github.com/WildestAI/DiffGraph-CLI
+- GitHub: https://github.com/WildestAI/wild
 - Website: https://wildest.ai
 - Full context: https://wildest.ai/llms-full.txt

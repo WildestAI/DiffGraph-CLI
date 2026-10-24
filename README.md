@@ -16,8 +16,8 @@ DiffGraph-CLI visualizes code changes from a validated canonical artifact. Its d
 
 1. Clone the repository:
 ```bash
-git clone https://github.com/yourusername/DiffGraph-CLI.git
-cd DiffGraph-CLI
+git clone https://github.com/WildestAI/wild.git
+cd wild
 ```
 
 2. Create a virtual environment and activate it:

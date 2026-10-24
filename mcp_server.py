@@ -291,7 +291,7 @@ def llms_txt() -> str:
         "evidence-linked software evolution.\n\n"
         "CLI: wild diff — analyses git diffs with AI, generates dependency graph HTML report.\n"
         "Website: https://wildest.ai\n"
-        "GitHub: https://github.com/WildestAI/DiffGraph-CLI\n"
+        "GitHub: https://github.com/WildestAI/wild\n"
     )
 
 

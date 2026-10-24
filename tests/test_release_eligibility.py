@@ -6,7 +6,7 @@ from pathlib import Path
 
 SCRIPT = Path(__file__).parents[1] / "scripts" / "release_eligibility.py"
 SHA = "a" * 40
-REPO = "WildestAI/DiffGraph-CLI"
+REPO = "WildestAI/wild"
 
 
 def run(pr, *, other_prs=(), **page_info):
