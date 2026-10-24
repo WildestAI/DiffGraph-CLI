@@ -463,3 +463,40 @@ def test_rank_symbols_all_flag():
     for i in range(15):
         assert f"func_{i}" in output
     assert "showing top" not in output
+
+
+# ---------------------------------------------------------------------------
+# 15. Warnings render as readable lines, not raw dicts
+# ---------------------------------------------------------------------------
+
+def _render_warnings(warnings: list) -> str:
+    files = [_make_file("f1", "app.py", change_kind="modified")]
+    symbols = [_make_symbol("s1", "fn", "f1", "modified", 1, 5)]
+    metadata = {"privacy_tier": "local", "warnings": warnings}
+    dg = _make_diffgraph(files=files, symbols=symbols, metadata=metadata)
+    out = io.StringIO()
+    TerminalFormatter(dg, color=False).render(out)
+    return out.getvalue()
+
+
+def test_warnings_render_without_dict_repr():
+    output = _render_warnings([
+        {"code": "PARSE_FAILURE", "file": "broken.py", "detail": "syntax error at line 3"},
+        {"code": "invalid_base_ref", "detail": "invalid_base_ref: fatal: Needed a single revision"},
+    ])
+    assert "{'code'" not in output
+    assert "⚠  PARSE_FAILURE  broken.py: syntax error at line 3\n" in output
+    assert "⚠  invalid_base_ref  fatal: Needed a single revision\n" in output
+
+
+def test_unsupported_language_warnings_collapse_to_one_line():
+    output = _render_warnings([
+        {"code": "UNSUPPORTED_LANGUAGE", "file": f"doc{i}.md", "detail": "blob ids"}
+        for i in range(5)
+    ] + [{"code": "PARSE_FAILURE", "file": "broken.py", "detail": "bad"}])
+    lines = [line for line in output.splitlines() if line.startswith("⚠")]
+    assert lines == [
+        "⚠  Not analyzed (Python only, 5 files): doc0.md, doc1.md, doc2.md  (+2 more)",
+        "⚠  PARSE_FAILURE  broken.py: bad",
+    ]
+    assert "blob ids" not in output

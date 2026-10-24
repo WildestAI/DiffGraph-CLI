@@ -1,5 +1,8 @@
+import errno
 import os
 import subprocess
+
+import pytest
 
 import diffgraph.git_snapshot as git_snapshot
 from diffgraph.git_snapshot import (
@@ -25,6 +28,17 @@ def write(repo, path, content):
     target = repo / path
     target.parent.mkdir(parents=True, exist_ok=True)
     target.write_bytes(content)
+
+
+def write_raw_path(raw_path, content):
+    """Write a non-UTF-8 path, skipping where the filesystem rejects it (APFS)."""
+    try:
+        with open(raw_path, "wb") as handle:
+            handle.write(content)
+    except OSError as error:
+        if error.errno == errno.EILSEQ:
+            pytest.skip("filesystem rejects non-UTF-8 file names")
+        raise
 
 
 def oid(repo, revision):
@@ -371,8 +385,7 @@ def test_undecodable_untracked_path_is_a_scoped_warning(tmp_path):
     repo = make_repo(tmp_path)
     write(repo, "good.py", b"value = 1\n")
     raw_path = os.fsencode(repo) + b"/bad-\xff.py"
-    with open(raw_path, "wb") as handle:
-        handle.write(b"value = 2\n")
+    write_raw_path(raw_path, b"value = 2\n")
 
     result = resolve_unstaged(str(repo))
 
@@ -387,13 +400,11 @@ def test_staged_undecodable_tracked_path_is_a_scoped_warning(tmp_path):
     repo = make_repo(tmp_path)
     write(repo, "good.py", b"before = 1\n")
     raw_path = os.fsencode(repo) + b"/bad-\xff.py"
-    with open(raw_path, "wb") as handle:
-        handle.write(b"before = 2\n")
+    write_raw_path(raw_path, b"before = 2\n")
     commit_all(repo)
 
     write(repo, "good.py", b"after = 1\n")
-    with open(raw_path, "wb") as handle:
-        handle.write(b"after = 2\n")
+    write_raw_path(raw_path, b"after = 2\n")
     git(repo, "add", "-A")
 
     result = resolve_staged(str(repo))
@@ -586,15 +597,15 @@ def test_two_dot_range_records_exact_endpoints_and_tree_identities(tmp_path):
 
     write(repo, "head-only.txt", b"head\n")
     commit_all(repo, "head change")
-    git(repo, "branch", "head")
-    head_oid = oid(repo, "head")
+    git(repo, "branch", "topic")
+    head_oid = oid(repo, "topic")
 
     git(repo, "switch", "base")
     write(repo, "base-only.txt", b"base\n")
     commit_all(repo, "base change")
     base_oid = oid(repo, "base")
 
-    result = resolve_commit_range(str(repo), "base", "head")
+    result = resolve_commit_range(str(repo), "base", "topic")
     entries = {entry.new_path or entry.old_path: entry for entry in result.entries}
 
     assert result.warnings == ()
@@ -607,7 +618,7 @@ def test_two_dot_range_records_exact_endpoints_and_tree_identities(tmp_path):
     assert entries["base-only.txt"].new_oid is None
     assert entries["head-only.txt"].status == "A"
     assert entries["head-only.txt"].old_oid is None
-    assert entries["head-only.txt"].new_oid == oid(repo, "head:head-only.txt")
+    assert entries["head-only.txt"].new_oid == oid(repo, "topic:head-only.txt")
 
 
 def test_commit_range_rename_preserves_both_paths_modes_and_blob_identities(tmp_path):
@@ -649,18 +660,18 @@ def test_three_dot_range_uses_merge_base_and_excludes_base_only_changes(tmp_path
 
     write(repo, "head-only.txt", b"head\n")
     commit_all(repo, "head change")
-    git(repo, "branch", "head")
+    git(repo, "branch", "topic")
 
     git(repo, "switch", "base")
     write(repo, "base-only.txt", b"base\n")
     commit_all(repo, "base change")
 
-    result = resolve_commit_range(str(repo), "base", "head", three_dot=True)
+    result = resolve_commit_range(str(repo), "base", "topic", three_dot=True)
 
     assert result.warnings == ()
     assert result.comparison_base_oid == common_oid
     assert result.base_oid == oid(repo, "base")
-    assert result.head_oid == oid(repo, "head")
+    assert result.head_oid == oid(repo, "topic")
     assert result.three_dot is True
     assert [entry.new_path or entry.old_path for entry in result.entries] == [
         "head-only.txt"
