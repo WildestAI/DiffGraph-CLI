@@ -259,7 +259,7 @@ def test_relay_failures_become_scoped_warnings_but_missing_key_propagates(repo):
     ).value
     # Code left the machine even though no summary came back.
     assert enriched["metadata"]["privacy_tier"] == "cloud_llm"
-    assert enriched["schema_version"] == "2.0"
+    assert enriched["schema_version"] == "2.1"
 
     with pytest.raises(MissingProviderKey):
         summarize_artifact(artifact, FakeClient(MissingProviderKey("openai")), "gpt-5-mini")

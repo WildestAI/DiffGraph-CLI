@@ -14,7 +14,7 @@ from importlib import resources
 from typing import Any, Mapping, Sequence, Tuple
 
 SUPPORTED_SCHEMA_MAJOR = 2
-CURRENT_SCHEMA_VERSION = "2.0"
+CURRENT_SCHEMA_VERSION = "2.1"
 _SCHEMA_RESOURCE = "schema/diffgraph-v2.schema.json"
 _VERSION_PATTERN = re.compile(r"^(0|[1-9]\d*)\.(0|[1-9]\d*)$")
 

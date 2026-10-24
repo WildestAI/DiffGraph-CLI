@@ -188,7 +188,7 @@ def test_format_json_explicit_output_is_atomic_and_reports_on_stderr(tmp_path, m
     assert result.exit_code == 0, result.output
     assert result.stdout == ""
     assert "Canonical DiffGraph written" in result.stderr
-    assert json.loads(destination.read_text(encoding="utf-8"))["schema_version"] == "2.0"
+    assert json.loads(destination.read_text(encoding="utf-8"))["schema_version"] == "2.1"
     assert not list(root.glob(".artifact.json.*.tmp"))
 
 

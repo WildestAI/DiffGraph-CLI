@@ -220,6 +220,16 @@
             { "type": "null" }
           ],
           "description": "Optional LLM summary of this file's change (schema 2.1+). Absent in local-only mode."
+        },
+        "diff": {
+          "type": "object",
+          "required": ["unified", "truncated"],
+          "additionalProperties": false,
+          "properties": {
+            "unified": { "type": "string", "description": "Unified diff (3 lines of context) of this text file at the exact snapshot." },
+            "truncated": { "type": "boolean", "description": "True when the diff was cut at the size limit." }
+          },
+          "description": "Optional micro-level diff of a text file (schema 2.1+). Absent for binary, non-UTF-8, or unreadable content."
         }
       }
     },
@@ -292,6 +302,16 @@
             { "type": "null" }
           ],
           "description": "Optional LLM summary of this symbol's change (schema 2.1+). Absent in local-only mode."
+        },
+        "source": {
+          "type": "object",
+          "required": ["before", "after"],
+          "additionalProperties": false,
+          "properties": {
+            "before": { "oneOf": [{ "$ref": "#/$defs/SourceSpan" }, { "type": "null" }] },
+            "after": { "oneOf": [{ "$ref": "#/$defs/SourceSpan" }, { "type": "null" }] }
+          },
+          "description": "Exact pre/post declaration text of a changed symbol (schema 2.1+); null on the side where it does not exist."
         }
       },
       "if": {
@@ -362,6 +382,17 @@
           "evidence": { "minItems": 1 },
           "confidence": { "type": "number" }
         }
+      }
+    },
+
+    "SourceSpan": {
+      "type": "object",
+      "required": ["line_start", "text", "truncated"],
+      "additionalProperties": false,
+      "properties": {
+        "line_start": { "type": "integer", "minimum": 1 },
+        "text": { "type": "string" },
+        "truncated": { "type": "boolean" }
       }
     },
 
