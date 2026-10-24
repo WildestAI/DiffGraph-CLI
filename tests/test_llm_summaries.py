@@ -19,11 +19,13 @@ from diffgraph.contract import ValidatedArtifact, enrich_with_node_summaries
 from diffgraph.llm_summaries import parse_summaries, summarize_artifact
 from diffgraph.relay import (
     MissingProviderKey,
+    RelayAccountError,
     RelayClient,
     RelayError,
     RelayTimeout,
     load_token,
     provider_for_model,
+    resolve_model,
     save_token,
 )
 
@@ -63,8 +65,11 @@ def repo(tmp_path, monkeypatch):
     (root / "NOTES.md").write_text("hello\n", encoding="utf-8")
     monkeypatch.chdir(root)
     monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path / "config"))
-    monkeypatch.delenv("BYOK_RELAY_TOKEN", raising=False)
-    monkeypatch.delenv("BYOK_RELAY_URL", raising=False)
+    for variable in (
+        "BYOK_RELAY_TOKEN", "BYOK_RELAY_URL", "ANTHROPIC_API_KEY",
+        "OPENAI_API_KEY", "GEMINI_API_KEY", "GOOGLE_API_KEY",
+    ):
+        monkeypatch.delenv(variable, raising=False)
     return root
 
 
@@ -110,6 +115,19 @@ class FakeClient:
 )
 def test_provider_for_model(model, provider):
     assert provider_for_model(model) == provider
+
+
+@pytest.mark.parametrize(
+    ("value", "expected"),
+    [
+        ("gemini", ("google", "gemini-4-argon")),
+        ("Claude", ("anthropic", "claude-opus-5-5")),
+        ("openai", ("openai", "gpt-6-astra")),
+        ("gemini-3.8-flash", ("google", "gemini-3.8-flash")),
+    ],
+)
+def test_resolve_model_accepts_provider_defaults_and_exact_ids(value, expected):
+    assert resolve_model(value) == expected
 
 
 def test_provider_for_unknown_model_is_rejected():
@@ -244,6 +262,32 @@ def test_relay_failures_become_scoped_warnings_but_missing_key_propagates(repo):
         summarize_artifact(artifact, FakeClient(MissingProviderKey("openai")), "gpt-5-mini")
 
 
+def test_account_errors_stop_after_the_first_request(repo, monkeypatch):
+    client = RelayClient("https://r", "t", transport=fake_transport(
+        [(402, {"error": "Your prepayment credits are depleted."}, {})], []
+    ))
+    with pytest.raises(RelayAccountError, match="HTTP 402: Your prepayment credits"):
+        client.chat("gemini-x", [])
+
+    monkeypatch.setenv("BYOK_RELAY_TOKEN", "tok")
+    attempts = []
+
+    def refused(self, model, messages, max_tokens=2048):
+        attempts.append(model)
+        raise RelayAccountError("relay returned HTTP 402: credits depleted", 402)
+
+    monkeypatch.setattr(RelayClient, "chat", refused)
+    destination = repo.parent / "out.json"
+    result = CliRunner().invoke(
+        cli.main, ["diff", "--format", "json", "--llm", "gemini", "-o", str(destination)]
+    )
+
+    assert result.exit_code == 1
+    assert "BYOK Relay: relay returned HTTP 402: credits depleted" in result.stderr
+    assert len(attempts) == 1
+    assert not destination.exists()
+
+
 def test_enrichment_rejects_unknown_ids_and_non_llm_warnings(repo):
     artifact = artifact_for(repo)
     with pytest.raises(ValueError, match="unknown node ids"):
@@ -323,6 +367,30 @@ def test_cli_llm_first_run_registers_and_prompts_for_key(repo, monkeypatch):
     assert calls == [("openai", "sk-test-key-123")]
     assert load_token("https://relay.byokrelay.com") == "new-tok"
     assert "sk-test-key-123" not in result.output
+
+
+def test_cli_llm_first_run_uses_provider_key_from_environment(repo, monkeypatch):
+    calls = []
+    monkeypatch.setenv("GEMINI_API_KEY", "gemini-env-key-123")
+    monkeypatch.setattr(RelayClient, "register", lambda self, app_id="wild-cli": setattr(self, "token", "env-tok") or "env-tok")
+    monkeypatch.setattr(RelayClient, "store_key", lambda self, provider, key: calls.append((provider, key)))
+    models = []
+
+    def chat(self, model, messages, max_tokens=2048):
+        models.append(model)
+        return FakeClient().chat(model, messages)
+
+    monkeypatch.setattr(RelayClient, "chat", chat)
+
+    # Not interactive: the environment key alone is enough for setup.
+    result = CliRunner().invoke(cli.main, ["diff", "--format", "json", "--llm", "gemini"])
+
+    assert result.exit_code == 0, result.output
+    assert calls == [("google", "gemini-env-key-123")]
+    assert models == ["gemini-4-argon"]
+    assert "Using GEMINI_API_KEY from the environment" in result.stderr
+    assert "gemini-env-key-123" not in result.output
+    assert json.loads(result.stdout)["metadata"]["llm_model"] == "gemini-4-argon"
 
 
 @pytest.mark.parametrize(

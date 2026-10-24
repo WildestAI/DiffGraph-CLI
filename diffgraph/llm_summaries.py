@@ -20,7 +20,7 @@ from typing import Callable, Dict, List, Optional, Protocol, Sequence, Tuple
 
 from diffgraph.contract import ValidatedArtifact
 from diffgraph.git_snapshot import GitSnapshotError, read_worktree_blob, run_git
-from diffgraph.relay import MissingProviderKey, RelayError, RelayTimeout
+from diffgraph.relay import MissingProviderKey, RelayAccountError, RelayError, RelayTimeout
 
 PROMPT_REF = "wild-node-summaries-v1"
 MAX_FILE_DIFF_CHARS = 12_000
@@ -207,8 +207,9 @@ def summarize_artifact(
 ) -> SummaryResult:
     """Request summaries for every changed file and non-import symbol.
 
-    Raises :class:`MissingProviderKey` before any summaries are kept so the
-    caller can register a key and retry. Other relay failures become scoped
+    Raises :class:`MissingProviderKey` or :class:`RelayAccountError` from the
+    first request, before any others are sent, so the caller can register a
+    key or report an account problem once. Other relay failures become scoped
     ``LLM_ERROR``/``LLM_TIMEOUT`` warnings for the files in that request.
     """
     jobs, warnings = _jobs(artifact.value)
@@ -227,13 +228,13 @@ def summarize_artifact(
             ],
         )
 
-    # The first request runs alone so a missing provider key surfaces once,
-    # before parallel requests multiply the failure.
+    # The first request runs alone so a missing key or refused account
+    # surfaces once, before parallel requests multiply the failure.
     done = 0
     outcomes: List[Tuple[List[_FileJob], object]] = []
     try:
         outcomes.append((batches[0], run(batches[0])))
-    except MissingProviderKey:
+    except (MissingProviderKey, RelayAccountError):
         raise
     except RelayError as error:
         outcomes.append((batches[0], error))

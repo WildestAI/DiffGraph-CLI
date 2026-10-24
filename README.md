@@ -69,9 +69,10 @@ wild diff -o diffgraph.html
 - `--no-open`: Don't automatically open the HTML report in browser
 - `--structural-json`: Write a local Python structural DiffGraph v2 artifact to the given path (`-` for stdout). Applies to `wild diff` only.
 - `--llm MODEL`: Opt in to AI summaries for each changed file and symbol via
-  [BYOK Relay](https://byokrelay.com) (e.g. `claude-haiku-5-5`, `gpt-5-mini`,
-  `gemini-2.5-flash`). Sends the changed code to the model provider. See
-  [AI summaries](#ai-summaries-opt-in).
+  [BYOK Relay](https://byokrelay.com). `MODEL` is a provider (`claude`, `gpt`,
+  or `gemini`, which selects that provider's latest flagship) or an exact model
+  id such as `gemini-3.8-flash`. Sends the changed code to the model provider.
+  See [AI summaries](#ai-summaries-opt-in).
 - `--version`: Show version information
 
 Example:
@@ -167,10 +168,15 @@ boxes and lists, terminal `AI:` lines). Requests go through
 `claude-*`, `gpt-*`, and `gemini-*` models (or an explicit
 `anthropic/`, `openai/`, `google/` prefix) to that provider.
 
-- **Keys:** on first use in an interactive terminal, `wild` registers with the
-  relay and prompts (hidden input) for the provider key, which is sent once to
-  the relay and stored there encrypted. `wild` saves only the relay token, in
-  `~/.config/wild/byok-relay.json` (mode 0600). Non-interactive runs need
+- **Models:** `--llm claude`, `--llm gpt`, and `--llm gemini` use
+  `claude-opus-5-5`, `gpt-6-astra`, and `gemini-4-argon`; pass any model id
+  (e.g. `--llm gemini-3.8-flash`) to choose another.
+- **Keys:** on first use, `wild` registers with the relay and sends the
+  provider key once; the relay stores it encrypted. The key comes from
+  `ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, or `GEMINI_API_KEY`/`GOOGLE_API_KEY`
+  (including `.env`) when set, otherwise from a hidden prompt in an
+  interactive terminal. `wild` saves only the relay token, in
+  `~/.config/wild/byok-relay.json` (mode 0600), or reads it from
   `BYOK_RELAY_TOKEN`; `BYOK_RELAY_URL` selects a self-hosted relay.
 - **What is sent:** the unified diff of each changed text file at the exact
   analyzed snapshot (working-tree content is re-verified against its recorded

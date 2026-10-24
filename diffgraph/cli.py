@@ -318,13 +318,14 @@ def _enrich_with_llm(artifact, model: str):
         RelayClient,
         RelayError,
         load_token,
-        provider_for_model,
+        provider_key_from_env,
         relay_url,
+        resolve_model,
         save_token,
     )
 
     try:
-        provider = provider_for_model(model)
+        provider, model = resolve_model(model)
     except ValueError as error:
         raise click.UsageError(str(error)) from error
     interactive = _stdin_is_interactive()
@@ -339,19 +340,25 @@ def _enrich_with_llm(artifact, model: str):
             )
 
     def store_provider_key() -> None:
-        require_interactive(f"no {provider} key is stored on BYOK Relay")
-        click.echo(
-            f"🔑 wild sends your {provider} key once to BYOK Relay ({base_url}), "
+        notice = (
+            f"wild sends your {provider} key once to BYOK Relay ({base_url}), "
             "which stores it encrypted and never returns it. wild keeps only "
-            "the relay token.",
-            err=True,
+            "the relay token."
         )
-        key = click.prompt(f"{provider} API key", hide_input=True, err=True)
+        from_env = provider_key_from_env(provider)
+        if from_env is not None:
+            variable, key = from_env
+            click.echo(f"🔑 Using {variable} from the environment. {notice}", err=True)
+        else:
+            require_interactive(f"no {provider} key is stored on BYOK Relay")
+            click.echo(f"🔑 {notice}", err=True)
+            key = click.prompt(f"{provider} API key", hide_input=True, err=True)
         client.store_key(provider, key)
 
     try:
         if not client.token:
-            require_interactive("no BYOK Relay token is configured")
+            if provider_key_from_env(provider) is None:
+                require_interactive("no BYOK Relay token is configured")
             client.register()
             path = save_token(base_url, client.token)
             click.echo(f"🔐 BYOK Relay token saved to {path}", err=True)
@@ -428,9 +435,10 @@ def _enrich_with_llm(artifact, model: str):
     metavar='MODEL',
     default=None,
     help=(
-        'Add AI summaries to each changed file and symbol using MODEL through '
-        'BYOK Relay (e.g. claude-haiku-5-5, gpt-5-mini, gemini-2.5-flash). '
-        'Sends the changed code to the model provider.'
+        'Add AI summaries to each changed file and symbol through BYOK Relay. '
+        'MODEL is a provider (claude, gpt, gemini: its latest flagship) or an '
+        'exact model id (e.g. gemini-3.8-flash). Sends the changed code to '
+        'the model provider.'
     ),
 )
 def main(

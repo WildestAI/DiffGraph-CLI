@@ -40,6 +40,26 @@ _PROVIDER_PATTERNS = (
     (re.compile(r"^gemini-", re.IGNORECASE), "google"),
 )
 SUPPORTED_PROVIDERS = ("anthropic", "openai", "google")
+
+# `--llm <provider>` uses that provider's latest coding/reasoning flagship.
+# Update these as providers release new flagships; an explicit model id
+# always takes precedence.
+PROVIDER_ALIASES = {
+    "anthropic": "anthropic", "claude": "anthropic",
+    "openai": "openai", "gpt": "openai",
+    "google": "google", "gemini": "google",
+}
+DEFAULT_MODELS = {
+    "anthropic": "claude-opus-5-5",
+    "openai": "gpt-6-astra",
+    "google": "gemini-4-argon",
+}
+# Environment variables that may hold a provider key for first-time setup.
+PROVIDER_KEY_ENVS = {
+    "anthropic": ("ANTHROPIC_API_KEY",),
+    "openai": ("OPENAI_API_KEY",),
+    "google": ("GEMINI_API_KEY", "GOOGLE_API_KEY"),
+}
 _MISSING_KEY = re.compile(r'No API key stored for provider "([^"]+)"')
 
 
@@ -53,6 +73,14 @@ class RelayError(RuntimeError):
 
 class RelayTimeout(RelayError):
     """The relay or provider did not answer in time."""
+
+
+class RelayAccountError(RelayError):
+    """The relay token or provider account was refused (401/402/403).
+
+    These apply to every request (expired token, invalid key, exhausted
+    billing), so callers should stop rather than retry per file.
+    """
 
 
 class MissingProviderKey(RelayError):
@@ -73,9 +101,28 @@ def provider_for_model(model: str) -> str:
         if pattern.search(model):
             return provider
     raise ValueError(
-        f"cannot tell which provider serves {model!r}; use a claude-*, gpt-*, "
-        "or gemini-* model, or prefix it as anthropic/, openai/, or google/"
+        f"cannot tell which provider serves {model!r}; use claude, gpt, or "
+        "gemini for the provider's default model, a claude-*, gpt-*, or gemini-* "
+        "model id, or prefix it as anthropic/, openai/, or google/"
     )
+
+
+def resolve_model(value: str) -> Tuple[str, str]:
+    """Return ``(provider, model)`` for a provider name or an exact model id."""
+    value = value.strip()
+    provider = PROVIDER_ALIASES.get(value.lower())
+    if provider is not None:
+        return provider, DEFAULT_MODELS[provider]
+    return provider_for_model(value), value
+
+
+def provider_key_from_env(provider: str) -> Optional[Tuple[str, str]]:
+    """Return ``(variable, key)`` for the first set provider-key variable."""
+    for variable in PROVIDER_KEY_ENVS.get(provider, ()):
+        key = os.environ.get(variable, "").strip()
+        if key:
+            return variable, key
+    return None
 
 
 def relay_model(model: str) -> str:
@@ -162,6 +209,8 @@ class RelayClient:
             raise MissingProviderKey(missing.group(1))
         if status in (408, 504):
             raise RelayTimeout(f"relay request timed out (HTTP {status}): {message}", status)
+        if status in (401, 402, 403):
+            raise RelayAccountError(f"relay returned HTTP {status}: {message.strip()}", status)
         raise RelayError(f"relay returned HTTP {status}: {message}", status)
 
     def register(self, app_id: str = APP_ID) -> str:

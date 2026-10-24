@@ -518,7 +518,7 @@ class TerminalFormatter:
         privacy_tier = metadata.get("privacy_tier", "local")
         if privacy_tier == "local":
             hint = (
-                "Optional: wild diff --llm claude-haiku-5-5  "
+                "Optional: wild diff --llm claude|gpt|gemini  "
                 "(adds AI summaries · code sent to the model provider via BYOK Relay)"
             )
             out.write(dim(hint, color) + "\n")
