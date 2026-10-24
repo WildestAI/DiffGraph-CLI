@@ -70,8 +70,11 @@ def repo(tmp_path, monkeypatch):
         "OPENAI_API_KEY", "GEMINI_API_KEY", "GOOGLE_API_KEY",
     ):
         monkeypatch.delenv(variable, raising=False)
-    # Never read the developer's real .env (env_loader also looks beside the package).
-    monkeypatch.setattr(cli, "_dotenv_values", lambda: {})
+    # Values the developer's real .env injected at import time must not
+    # affect these tests (they are untrusted for the LLM path anyway).
+    import diffgraph.env_loader as env_loader
+
+    monkeypatch.setattr(env_loader, "DOTENV_INJECTED", set())
     return root
 
 
@@ -208,6 +211,11 @@ def test_register_and_store_key_never_persist_the_provider_key(tmp_path, monkeyp
 # ---------------------------------------------------------------------------
 # Summaries and contract enrichment
 # ---------------------------------------------------------------------------
+
+def test_parse_summaries_strips_control_characters():
+    reply = json.dumps({"file::a.py": "Clears\x1b[2J the\x07 screen."})
+    assert parse_summaries(reply, ["file::a.py"]) == {"file::a.py": "Clears [2J the screen."}
+
 
 def test_parse_summaries_keeps_only_requested_ids():
     reply = 'Sure! {"file::a.py": "  Changed\\n a. ", "sym::x::y": "nope", "file::b.py": 3}'
@@ -409,38 +417,84 @@ def _fake_relay(monkeypatch, stored):
     monkeypatch.setattr(RelayClient, "chat", chat)
 
 
-def test_cli_llm_refuses_to_guess_between_shell_and_dotenv_keys(repo, monkeypatch):
+def test_cli_llm_refuses_to_guess_between_different_provider_keys(repo, monkeypatch):
     stored = []
     _fake_relay(monkeypatch, stored)
-    monkeypatch.setenv("ANTHROPIC_API_KEY", "shell-key-aaaa")
-    monkeypatch.setattr(cli, "_dotenv_values", lambda: {"ANTHROPIC_API_KEY": "dotenv-key-bbbb"})
+    monkeypatch.setenv("GEMINI_API_KEY", "gemini-key-aaaa")
+    monkeypatch.setenv("GOOGLE_API_KEY", "google-key-bbbb")
 
-    result = CliRunner().invoke(cli.main, ["diff", "--llm", "claude"])
+    result = CliRunner().invoke(cli.main, ["diff", "--llm", "gemini"])
 
     assert result.exit_code == 1
-    assert "found different anthropic keys" in result.stderr
-    assert "from the shell environment (ends …aaaa)" in result.stderr
-    assert "from .env (ends …bbbb)" in result.stderr
+    assert "found different google keys" in result.stderr
+    assert "GEMINI_API_KEY from the shell environment (ends …aaaa)" in result.stderr
+    assert "GOOGLE_API_KEY from the shell environment (ends …bbbb)" in result.stderr
     assert stored == []
 
     monkeypatch.setattr(cli, "_stdin_is_interactive", lambda: True)
-    result = CliRunner().invoke(cli.main, ["diff", "--llm", "claude"], input="2\n")
+    result = CliRunner().invoke(cli.main, ["diff", "--llm", "gemini"], input="2\n")
 
     assert result.exit_code == 0, result.output
-    assert stored == [("anthropic", "dotenv-key-bbbb")]
+    assert stored == [("google", "google-key-bbbb")]
 
 
-def test_cli_llm_same_key_in_shell_and_dotenv_is_one_candidate(repo, monkeypatch):
-    stored = []
-    _fake_relay(monkeypatch, stored)
-    monkeypatch.setenv("ANTHROPIC_API_KEY", "same-key-cccc")
-    monkeypatch.setattr(cli, "_dotenv_values", lambda: {"ANTHROPIC_API_KEY": "same-key-cccc"})
+def _write_hostile_dotenv(repo, monkeypatch):
+    """A cloned repository's .env, loaded the way the CLI loads it at import."""
+    import os
+    import diffgraph.env_loader as env_loader
 
-    result = CliRunner().invoke(cli.main, ["diff", "--llm", "claude"])
+    (repo / ".env").write_text(
+        "BYOK_RELAY_URL=https://attacker.example\n"
+        "BYOK_RELAY_TOKEN=attacker-token\n"
+        "OPENAI_API_KEY=sk-from-repo-dotenv\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(os, "environ", dict(os.environ))  # undo .env loading afterwards
+    monkeypatch.setattr(env_loader, "DOTENV_INJECTED", set())
+    env_loader.load_env_file()
+    assert os.environ["BYOK_RELAY_URL"] == "https://attacker.example"  # it was loaded...
 
+
+def test_repository_dotenv_cannot_redirect_the_relay_or_supply_credentials(repo, monkeypatch):
+    _write_hostile_dotenv(repo, monkeypatch)
+    clients, stored = [], []
+    original_init = RelayClient.__init__
+
+    def record_init(self, base_url="https://relay.byokrelay.com", token=None, **kwargs):
+        clients.append((base_url, token))
+        original_init(self, base_url, token, **kwargs)
+
+    monkeypatch.setattr(RelayClient, "__init__", record_init)
+    monkeypatch.setattr(RelayClient, "register", lambda self, app_id="wild-cli": setattr(self, "token", "user-tok") or "user-tok")
+    monkeypatch.setattr(RelayClient, "store_key", lambda self, provider, key: stored.append((self.base_url, provider, key)))
+    monkeypatch.setattr(RelayClient, "chat", lambda self, *a, **k: FakeClient().chat(*a, **k))
+
+    # Non-interactive: the .env offers a token and a key, but neither is trusted.
+    result = CliRunner().invoke(cli.main, ["diff", "--llm", "gpt"])
+    assert result.exit_code == 1
+    assert "no BYOK Relay token is configured" in result.stderr
+    assert clients == [("https://relay.byokrelay.com", None)]
+    assert stored == []
+
+    # Interactive: registration and key storage go to the default relay, and
+    # the key comes from the hidden prompt, never from the repository .env.
+    monkeypatch.setattr(cli, "_stdin_is_interactive", lambda: True)
+    result = CliRunner().invoke(cli.main, ["diff", "--llm", "gpt"], input="sk-typed-by-user\n")
     assert result.exit_code == 0, result.output
-    assert "Using ANTHROPIC_API_KEY from .env (ends …cccc)" in result.stderr
-    assert stored == [("anthropic", "same-key-cccc")]
+    assert all(url == "https://relay.byokrelay.com" for url, _ in clients)
+    assert stored == [("https://relay.byokrelay.com", "openai", "sk-typed-by-user")]
+    assert "attacker" not in result.output and "sk-from-repo-dotenv" not in result.output
+
+
+def test_self_hosted_relay_comes_from_trusted_channels_only(repo, monkeypatch, tmp_path):
+    from diffgraph.relay import config_path, relay_url
+
+    assert relay_url() == "https://relay.byokrelay.com"
+    config_path().parent.mkdir(parents=True, exist_ok=True)
+    config_path().write_text(json.dumps({"relay_url": "https://relay.mine.example/"}), encoding="utf-8")
+    assert relay_url() == "https://relay.mine.example"
+    monkeypatch.setenv("BYOK_RELAY_URL", "https://env.mine.example")
+    assert relay_url() == "https://env.mine.example"
 
 
 def test_first_request_client_error_is_fatal(repo, monkeypatch):

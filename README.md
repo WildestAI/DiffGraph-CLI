@@ -174,10 +174,15 @@ boxes and lists, terminal `AI:` lines). Requests go through
 - **Keys:** on first use, `wild` registers with the relay and sends the
   provider key once; the relay stores it encrypted. The key comes from
   `ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, or `GEMINI_API_KEY`/`GOOGLE_API_KEY`
-  (including `.env`) when set, otherwise from a hidden prompt in an
+  in your shell environment when set, otherwise from a hidden prompt in an
   interactive terminal. `wild` saves only the relay token, in
   `~/.config/wild/byok-relay.json` (mode 0600), or reads it from
-  `BYOK_RELAY_TOKEN`; `BYOK_RELAY_URL` selects a self-hosted relay.
+  `BYOK_RELAY_TOKEN`. A self-hosted relay is selected by `BYOK_RELAY_URL` in
+  the shell environment or `"relay_url"` in that config file.
+- **Trust boundary:** `wild` auto-loads a `.env` from the current directory,
+  which may belong to an untrusted repository. Values from any `.env` are
+  never used for the relay URL, the relay token, or provider keys, so a
+  cloned repository cannot redirect your credentials or code.
 - **What is sent:** the unified diff of each changed text file at the exact
   analyzed snapshot (working-tree content is re-verified against its recorded
   blob id; binary files are skipped), plus node ids and names.
