@@ -207,9 +207,9 @@ def summarize_artifact(
 ) -> SummaryResult:
     """Request summaries for every changed file and non-import symbol.
 
-    Raises :class:`MissingProviderKey` or :class:`RelayAccountError` from the
-    first request, before any others are sent, so the caller can register a
-    key or report an account problem once. Other relay failures become scoped
+    Raises :class:`MissingProviderKey`, :class:`RelayAccountError`, or any
+    other client (4xx) error from the first request, before any others are
+    sent, so the caller can register a key or report the problem once. Other relay failures become scoped
     ``LLM_ERROR``/``LLM_TIMEOUT`` warnings for the files in that request.
     """
     jobs, warnings = _jobs(artifact.value)
@@ -237,6 +237,10 @@ def summarize_artifact(
     except (MissingProviderKey, RelayAccountError):
         raise
     except RelayError as error:
+        # A client error on the first request (bad model id, unsupported
+        # parameter, billing) would repeat for every request.
+        if error.status is not None and 400 <= error.status < 500 and error.status not in (408, 429):
+            raise
         outcomes.append((batches[0], error))
     done += 1
     if progress:

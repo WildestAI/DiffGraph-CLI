@@ -70,6 +70,8 @@ def repo(tmp_path, monkeypatch):
         "OPENAI_API_KEY", "GEMINI_API_KEY", "GOOGLE_API_KEY",
     ):
         monkeypatch.delenv(variable, raising=False)
+    # Never read the developer's real .env (env_loader also looks beside the package).
+    monkeypatch.setattr(cli, "_dotenv_values", lambda: {})
     return root
 
 
@@ -164,6 +166,7 @@ def test_chat_uses_openai_format_endpoint_with_relay_token_and_retries_429():
     assert (method, url) == ("POST", "https://relay.example/relay/v1/chat/completions")
     assert headers["x-relay-token"] == "tok"
     assert body["model"] == "google/gemini-2.5-flash" and body["stream"] is False
+    assert "temperature" not in body  # rejected by newer models
     assert sleeps == [2.0]
 
 
@@ -388,9 +391,72 @@ def test_cli_llm_first_run_uses_provider_key_from_environment(repo, monkeypatch)
     assert result.exit_code == 0, result.output
     assert calls == [("google", "gemini-env-key-123")]
     assert models == ["gemini-4-argon"]
-    assert "Using GEMINI_API_KEY from the environment" in result.stderr
+    assert "Using GEMINI_API_KEY from the shell environment (ends …-123)" in result.stderr
     assert "gemini-env-key-123" not in result.output
     assert json.loads(result.stdout)["metadata"]["llm_model"] == "gemini-4-argon"
+
+
+def _fake_relay(monkeypatch, stored):
+    """Like the real relay: chat fails with MissingProviderKey until a key is stored."""
+    monkeypatch.setattr(RelayClient, "register", lambda self, app_id="wild-cli": setattr(self, "token", "tok") or "tok")
+    monkeypatch.setattr(RelayClient, "store_key", lambda self, provider, key: stored.append((provider, key)))
+
+    def chat(self, model, messages, max_tokens=2048):
+        if not stored:
+            raise MissingProviderKey(provider_for_model(model))
+        return FakeClient().chat(model, messages)
+
+    monkeypatch.setattr(RelayClient, "chat", chat)
+
+
+def test_cli_llm_refuses_to_guess_between_shell_and_dotenv_keys(repo, monkeypatch):
+    stored = []
+    _fake_relay(monkeypatch, stored)
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "shell-key-aaaa")
+    monkeypatch.setattr(cli, "_dotenv_values", lambda: {"ANTHROPIC_API_KEY": "dotenv-key-bbbb"})
+
+    result = CliRunner().invoke(cli.main, ["diff", "--llm", "claude"])
+
+    assert result.exit_code == 1
+    assert "found different anthropic keys" in result.stderr
+    assert "from the shell environment (ends …aaaa)" in result.stderr
+    assert "from .env (ends …bbbb)" in result.stderr
+    assert stored == []
+
+    monkeypatch.setattr(cli, "_stdin_is_interactive", lambda: True)
+    result = CliRunner().invoke(cli.main, ["diff", "--llm", "claude"], input="2\n")
+
+    assert result.exit_code == 0, result.output
+    assert stored == [("anthropic", "dotenv-key-bbbb")]
+
+
+def test_cli_llm_same_key_in_shell_and_dotenv_is_one_candidate(repo, monkeypatch):
+    stored = []
+    _fake_relay(monkeypatch, stored)
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "same-key-cccc")
+    monkeypatch.setattr(cli, "_dotenv_values", lambda: {"ANTHROPIC_API_KEY": "same-key-cccc"})
+
+    result = CliRunner().invoke(cli.main, ["diff", "--llm", "claude"])
+
+    assert result.exit_code == 0, result.output
+    assert "Using ANTHROPIC_API_KEY from .env (ends …cccc)" in result.stderr
+    assert stored == [("anthropic", "same-key-cccc")]
+
+
+def test_first_request_client_error_is_fatal(repo, monkeypatch):
+    monkeypatch.setenv("BYOK_RELAY_TOKEN", "tok")
+    attempts = []
+
+    def rejected(self, model, messages, max_tokens=2048):
+        attempts.append(model)
+        raise RelayError("relay returned HTTP 400: `temperature` is deprecated", 400)
+
+    monkeypatch.setattr(RelayClient, "chat", rejected)
+    result = CliRunner().invoke(cli.main, ["diff", "--llm", "claude"])
+
+    assert result.exit_code == 1
+    assert "HTTP 400: `temperature` is deprecated" in result.stderr
+    assert len(attempts) == 1
 
 
 @pytest.mark.parametrize(

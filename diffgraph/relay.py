@@ -18,6 +18,7 @@ import socket
 import time
 import urllib.error
 import urllib.request
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable, Dict, List, Mapping, Optional, Tuple
 
@@ -116,13 +117,43 @@ def resolve_model(value: str) -> Tuple[str, str]:
     return provider_for_model(value), value
 
 
-def provider_key_from_env(provider: str) -> Optional[Tuple[str, str]]:
-    """Return ``(variable, key)`` for the first set provider-key variable."""
+@dataclass(frozen=True)
+class KeyCandidate:
+    """A provider key found in the environment, with where it came from."""
+
+    variable: str
+    key: str
+    source: str
+
+    @property
+    def label(self) -> str:
+        return f"{self.variable} from {self.source} (ends …{self.key[-4:]})"
+
+
+def provider_key_candidates(
+    provider: str, dotenv_values: Optional[Mapping[str, Optional[str]]] = None
+) -> List[KeyCandidate]:
+    """Return every distinct key for ``provider`` in the process env and .env.
+
+    ``.env`` loading never overrides variables already set in the shell, so a
+    shell value and a different ``.env`` value can coexist; both are returned
+    so the caller never silently picks one to send to the relay.
+    """
+    file_values = dotenv_values or {}
+    candidates: List[KeyCandidate] = []
+    seen = set()
     for variable in PROVIDER_KEY_ENVS.get(provider, ()):
-        key = os.environ.get(variable, "").strip()
-        if key:
-            return variable, key
-    return None
+        process_value = (os.environ.get(variable) or "").strip()
+        file_value = (file_values.get(variable) or "").strip()
+        if process_value and process_value == file_value:
+            found = [(process_value, ".env")]
+        else:
+            found = [(process_value, "the shell environment"), (file_value, ".env")]
+        for key, source in found:
+            if key and key not in seen:
+                seen.add(key)
+                candidates.append(KeyCandidate(variable, key, source))
+    return candidates
 
 
 def relay_model(model: str) -> str:
@@ -235,7 +266,7 @@ class RelayClient:
                 "model": relay_model(model),
                 "messages": messages,
                 "max_tokens": max_tokens,
-                "temperature": 0,
+                # No temperature: newer models (e.g. claude-opus-5-5) reject it.
                 "stream": False,
             },
         )

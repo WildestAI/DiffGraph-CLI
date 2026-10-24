@@ -300,6 +300,17 @@ def load_file_contents(changed_files: List[Dict[str, str]], diff_args: List[str]
 
     return files_with_content
 
+def _dotenv_values() -> Dict[str, Optional[str]]:
+    """Values from the .env file load_env_file() would use, without applying them."""
+    from dotenv import dotenv_values
+    from diffgraph.env_loader import get_possible_env_paths
+
+    for path in get_possible_env_paths():
+        if os.path.exists(path):
+            return dict(dotenv_values(path))
+    return {}
+
+
 def _stdin_is_interactive() -> bool:
     return sys.stdin.isatty()
 
@@ -318,7 +329,7 @@ def _enrich_with_llm(artifact, model: str):
         RelayClient,
         RelayError,
         load_token,
-        provider_key_from_env,
+        provider_key_candidates,
         relay_url,
         resolve_model,
         save_token,
@@ -339,25 +350,46 @@ def _enrich_with_llm(artifact, model: str):
                 "terminal to set up BYOK Relay, or set BYOK_RELAY_TOKEN"
             )
 
+    candidates = provider_key_candidates(provider, _dotenv_values())
+
     def store_provider_key() -> None:
-        notice = (
-            f"wild sends your {provider} key once to BYOK Relay ({base_url}), "
+        click.echo(
+            f"🔑 wild sends your {provider} key once to BYOK Relay ({base_url}), "
             "which stores it encrypted and never returns it. wild keeps only "
-            "the relay token."
+            "the relay token.",
+            err=True,
         )
-        from_env = provider_key_from_env(provider)
-        if from_env is not None:
-            variable, key = from_env
-            click.echo(f"🔑 Using {variable} from the environment. {notice}", err=True)
-        else:
+        key = None
+        if len(candidates) > 1:
+            labels = "; ".join(candidate.label for candidate in candidates)
+            if not interactive:
+                raise click.ClickException(
+                    f"found different {provider} keys: {labels}. Unset one, or "
+                    "run interactively to choose"
+                )
+            for index, candidate in enumerate(candidates, 1):
+                click.echo(f"  {index}. {candidate.label}", err=True)
+            choice = click.prompt(
+                "Which key should be sent",
+                type=click.IntRange(1, len(candidates)),
+                err=True,
+            )
+            key = candidates[choice - 1].key
+        elif candidates:
+            candidate = candidates[0]
+            if not interactive or click.confirm(
+                f"Send {candidate.label}?", default=True, err=True
+            ):
+                click.echo(f"🔑 Using {candidate.label}.", err=True)
+                key = candidate.key
+        if key is None:
             require_interactive(f"no {provider} key is stored on BYOK Relay")
-            click.echo(f"🔑 {notice}", err=True)
             key = click.prompt(f"{provider} API key", hide_input=True, err=True)
         client.store_key(provider, key)
 
     try:
         if not client.token:
-            if provider_key_from_env(provider) is None:
+            if not candidates:
                 require_interactive("no BYOK Relay token is configured")
             client.register()
             path = save_token(base_url, client.token)
