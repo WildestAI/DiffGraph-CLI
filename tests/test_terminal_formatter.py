@@ -559,3 +559,24 @@ def test_import_stub_edges_from_own_file_are_not_importers():
 
     assert ranked.review_first == []
     assert [item.symbol["name"] for item in ranked.review_next] == ["json"]
+
+
+def test_ai_summary_control_characters_never_reach_the_terminal():
+    files = [_make_file("f1", "app.py", change_kind="modified")]
+    symbol = _make_symbol("s1", "fn", "f1", "modified")
+    symbol["summary"] = {
+        "text": "Clears\x1b[2J the\x07 screen.",
+        "analysis_source": "inferred",
+        "confidence": None,
+        "evidence": [
+            {"kind": "llm_inference", "model": "m"},
+            {"kind": "structural_basis", "symbol_ids": [symbol["id"]]},
+        ],
+    }
+    dg = _make_diffgraph(files=files, symbols=[symbol])
+    dg["schema_version"] = "2.1"
+    out = io.StringIO()
+    TerminalFormatter(dg, color=False).render(out)
+
+    assert "\x1b" not in out.getvalue() and "\x07" not in out.getvalue()
+    assert "AI: Clears [2J the screen." in out.getvalue()

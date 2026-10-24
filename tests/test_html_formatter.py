@@ -399,3 +399,17 @@ def test_warning_badge_counts_the_lines_it_shows():
 
     assert "⚠ 1 warning<" in report
     assert "Not analyzed (Python only, 3 files)" in report
+
+
+def test_unified_diff_parser_keeps_dash_dash_lines_inside_hunks():
+    from diffgraph.formatters.html import _INTERACTIVE_SCRIPT as script
+
+    # '--- x' inside a hunk is a removed line starting with '--' (e.g. SQL).
+    assert "if (!inHunk && (line.startsWith('--- ') || line.startsWith('+++ '))) return;" in script
+    assert "if (hunk) { inHunk = true;" in script
+
+
+def test_changed_symbol_without_source_is_not_called_unchanged():
+    from diffgraph.formatters.html import _INTERACTIVE_SCRIPT as script
+
+    assert "else if (!changedSymbolIds.has(symbol.id)) parts.push(htmlEl('p', 'details-meta', 'Unchanged in this snapshot.'));" in script

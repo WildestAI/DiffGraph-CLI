@@ -103,7 +103,9 @@ def _summary_text(node: dict) -> Optional[str]:
     """Return a node's AI summary text, if the artifact carries one."""
     summary = node.get("summary")
     if isinstance(summary, dict) and isinstance(summary.get("text"), str):
-        return " ".join(summary["text"].split()) or None
+        # Model text is untrusted: an escape sequence must not reach the terminal.
+        cleaned = "".join(ch if ch.isprintable() else " " for ch in summary["text"])
+        return " ".join(cleaned.split()) or None
     return None
 
 

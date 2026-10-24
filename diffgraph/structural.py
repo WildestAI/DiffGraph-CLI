@@ -151,12 +151,25 @@ MAX_SOURCE_LINES = 2000
 MAX_FILE_DIFF_CHARS = 200_000
 
 
+def split_lines(text: str) -> List[str]:
+    """Split on newline only, keeping the newline, as Git and tree-sitter do.
+
+    ``str.splitlines`` also breaks on form feeds, lone ``\\r``, ``\\x85``, and
+    other separators, which would misalign declaration spans and hunks.
+    """
+    parts = text.split("\n")
+    lines = [part + "\n" for part in parts[:-1]]
+    if parts[-1]:
+        lines.append(parts[-1])
+    return lines
+
+
 def _decoded_lines(data: Optional[bytes]) -> Optional[List[str]]:
     """Exact UTF-8 lines, or None when a side is absent or not valid UTF-8."""
     if data is None:
         return None
     try:
-        return data.decode("utf-8").splitlines(keepends=True)
+        return split_lines(data.decode("utf-8"))
     except UnicodeDecodeError:
         return None
 
@@ -170,12 +183,17 @@ def _file_diff(
     old_lines, new_lines = _decoded_lines(old), _decoded_lines(new)
     if (old is not None and old_lines is None) or (new is not None and new_lines is None):
         return None
-    text = "".join(unified_diff(
-        old_lines or [], new_lines or [],
-        fromfile="a/" + old_path if old is not None and old_path else "/dev/null",
-        tofile="b/" + new_path if new is not None and new_path else "/dev/null",
-        n=3,
-    ))
+    text = "".join(
+        # A last line without a newline gets Git's marker instead of being
+        # glued to the next diff line.
+        line if line.endswith("\n") else line + "\n\\ No newline at end of file\n"
+        for line in unified_diff(
+            old_lines or [], new_lines or [],
+            fromfile="a/" + old_path if old is not None and old_path else "/dev/null",
+            tofile="b/" + new_path if new is not None and new_path else "/dev/null",
+            n=3,
+        )
+    )
     if not text:
         return None
     truncated = len(text) > MAX_FILE_DIFF_CHARS
