@@ -8,6 +8,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- Schema 2.1: changed symbols carry their exact before/after source, and
+  text files carry a capped unified diff.
 - `wild diff --llm MODEL`: opt-in AI summaries for each changed file and
   symbol through BYOK Relay (Claude, GPT, and Gemini models), rendered in
   JSON, HTML, and terminal output. Schema 2.1 adds optional per-node
@@ -19,7 +21,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - The HTML report is graph-first: a full-window graph, a details panel for the
   selected node, and a top bar. The textual file/symbol/topology/metadata
   dumps are gone (use `--format json`), roughly halving report size.
-- Graph files show changed symbols by default; unchanged ones expand per file.
+- Graph files show changed symbols by default; unchanged symbols and import
+  statements expand per file.
+- Graph edges are drawn on top as arcs beside the boxes: symbol-to-symbol
+  when both are visible, otherwise lifted to file headers and merged with a
+  count; hovering or selecting a node highlights its connections.
+- Selecting a symbol shows its exact before/after diff (folded context,
+  unified or side by side); selecting a file shows its unified diff.
 
 ### Fixed
 - Terminal "imported by" is credited per symbol instead of to every changed

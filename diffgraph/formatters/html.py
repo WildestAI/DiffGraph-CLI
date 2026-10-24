@@ -87,7 +87,7 @@ _INTERACTIVE_SCRIPT = textwrap.dedent(
       if (!files.length) return;
 
       const svg = document.createElementNS(NS, 'svg');
-      svg.setAttribute('viewBox', '0 0 1200 720');
+      svg.setAttribute('viewBox', '0 0 1400 840');
       svg.setAttribute('preserveAspectRatio', 'xMinYMin meet');
       svg.setAttribute('role', 'img');
       svg.setAttribute('aria-label', 'Interactive DiffGraph visualization');
@@ -103,7 +103,11 @@ _INTERACTIVE_SCRIPT = textwrap.dedent(
       tooltip.className = 'graph-tooltip';
       tooltip.hidden = true;
       host.appendChild(tooltip);
-      const state = { scale: 1, x: 0, y: 0, dragging: false, collapsed: new Set(), expanded: new Set(), selected: null };
+      const state = { scale: 1, x: 0, y: 0, dragging: false, collapsed: new Set(), expanded: new Set(), selected: null, wide: false };
+      const DRAWN_KINDS = new Set(['calls', 'imports', 'inherits', 'implements']);
+      const SYMBOL_RIGHT = 700;
+      const FILE_RIGHT = 1128;
+      const edgeIndex = new Map();
       // Colors live in the stylesheet so both light and dark themes apply.
       const changeKinds = new Set(['added', 'deleted', 'modified', 'unchanged', 'untracked', 'renamed']);
       const changeClass = (kind) => `ck-${changeKinds.has(kind) ? kind : 'unchanged'}`;
@@ -149,8 +153,9 @@ _INTERACTIVE_SCRIPT = textwrap.dedent(
       // or be called by, dozens of unchanged symbols. They are counted in the
       // per-file toggle so the change's dependency graph stays one click away.
       const changedSymbolIds = new Set(symbols.filter((symbol) => symbol.change_kind && symbol.change_kind !== 'unchanged').map((symbol) => symbol.id));
-      const relevantSymbolIds = new Set(changedSymbolIds);
-      [...changedSymbolIds].forEach((id) => {
+      // Import statements are real changes but low-signal; they wait behind ▾.
+      const relevantSymbolIds = new Set([...changedSymbolIds].filter((id) => symbolIndex.get(id).kind !== 'import'));
+      [...relevantSymbolIds].forEach((id) => {
         let parent = symbolIndex.get(id).parent_id;
         while (parent && symbolIndex.has(parent) && !relevantSymbolIds.has(parent)) { relevantSymbolIds.add(parent); parent = symbolIndex.get(parent).parent_id; }
       });
@@ -171,10 +176,163 @@ _INTERACTIVE_SCRIPT = textwrap.dedent(
       };
       const hideTooltip = () => { tooltip.hidden = true; };
       const hoverText = (item) => {
-        if (item.source_id) return `${item.kind}: ${nameOf(item.source_id)} → ${nameOf(item.target_id)}`;
+        if (item.relationships) return edgeLabel(item);
         const summary = summaryOf(item);
         const head = `${item.path ? 'file' : item.kind || 'symbol'} · ${nameOf(item.id)} · ${item.change_kind || 'unknown'}`;
         return summary ? `${head}\\n${truncate(summary.text, 240)}` : head;
+      };
+
+      const callLine = (relationship) => {
+        const site = (relationship.evidence || []).find((entry) => entry && entry.kind === 'call_site' && entry.line_start);
+        return site ? site.line_start : null;
+      };
+      const edgeLabel = (edge) => {
+        const rels = edge.relationships;
+        const kinds = [...new Set(rels.map((r) => r.kind))].join('/');
+        const ends = rels.length === 1 ? `${nameOf(rels[0].source_id)} → ${nameOf(rels[0].target_id)}` : `${nameOf(edge.from.id)} → ${nameOf(edge.to.id)}`;
+        const lines = [...new Set(rels.map(callLine).filter(Boolean))].sort((a, b) => a - b);
+        return `${rels.length} ${kinds}: ${ends}${lines.length ? `\\nat line${lines.length > 1 ? 's' : ''} ${lines.slice(0, 8).join(', ')}${lines.length > 8 ? ', …' : ''}` : ''}`;
+      };
+
+      // ---- Micro diff: exact before/after source embedded by the producer ----
+      const splitLines = (text) => { const lines = String(text || '').split('\\n'); if (lines.length && lines[lines.length - 1] === '') lines.pop(); return lines; };
+      const diffOps = (beforeSpan, afterSpan) => {
+        const before = beforeSpan ? splitLines(beforeSpan.text) : [];
+        const after = afterSpan ? splitLines(afterSpan.text) : [];
+        const a0 = beforeSpan ? beforeSpan.line_start : 0;
+        const b0 = afterSpan ? afterSpan.line_start : 0;
+        const n = before.length, m = after.length;
+        const ops = [];
+        if (n * m > 4000000) {
+          before.forEach((text, i) => ops.push({ op: '-', a: a0 + i, text }));
+          after.forEach((text, j) => ops.push({ op: '+', b: b0 + j, text }));
+          return ops;
+        }
+        const w = m + 1;
+        const table = new Uint32Array((n + 1) * w);
+        for (let i = n - 1; i >= 0; i -= 1) for (let j = m - 1; j >= 0; j -= 1) {
+          table[i * w + j] = before[i] === after[j] ? table[(i + 1) * w + j + 1] + 1 : Math.max(table[(i + 1) * w + j], table[i * w + j + 1]);
+        }
+        let i = 0, j = 0;
+        while (i < n && j < m) {
+          if (before[i] === after[j]) { ops.push({ op: ' ', a: a0 + i, b: b0 + j, text: before[i] }); i += 1; j += 1; }
+          else if (table[(i + 1) * w + j] >= table[i * w + j + 1]) { ops.push({ op: '-', a: a0 + i, text: before[i] }); i += 1; }
+          else { ops.push({ op: '+', b: b0 + j, text: after[j] }); j += 1; }
+        }
+        for (; i < n; i += 1) ops.push({ op: '-', a: a0 + i, text: before[i] });
+        for (; j < m; j += 1) ops.push({ op: '+', b: b0 + j, text: after[j] });
+        return ops;
+      };
+      const parseUnified = (text) => {
+        const ops = [];
+        let a = 0, b = 0;
+        splitLines(text).forEach((line) => {
+          if (line.startsWith('--- ') || line.startsWith('+++ ')) return;
+          const hunk = /^@@ -(\\d+)(?:,\\d+)? \\+(\\d+)(?:,\\d+)? @@/.exec(line);
+          if (hunk) { a = Number(hunk[1]); b = Number(hunk[2]); ops.push({ op: '@', text: line }); return; }
+          const sign = line[0];
+          const body = line.slice(1);
+          if (sign === '-') { ops.push({ op: '-', a, text: body }); a += 1; }
+          else if (sign === '+') { ops.push({ op: '+', b, text: body }); b += 1; }
+          else if (sign === ' ') { ops.push({ op: ' ', a, b, text: body }); a += 1; b += 1; }
+        });
+        return ops;
+      };
+      const foldContext = (ops, context = 3) => {
+        const keep = ops.map(() => false);
+        ops.forEach((entry, index) => {
+          if (entry.op === ' ') return;
+          for (let k = Math.max(0, index - context); k <= Math.min(ops.length - 1, index + context); k += 1) keep[k] = true;
+        });
+        const rows = [];
+        let run = [];
+        const flush = () => { if (run.length) { rows.push(run.length > 1 ? { op: 'fold', ops: run } : run[0]); run = []; } };
+        ops.forEach((entry, index) => { if (keep[index] || entry.op !== ' ') { flush(); rows.push(entry); } else run.push(entry); });
+        flush();
+        return rows;
+      };
+      const cell = (cls, text) => htmlEl('span', cls, text == null ? '' : text);
+      const renderDiff = (ops, options = {}) => {
+        const container = htmlEl('div', `diff ${state.wide ? 'diff-split' : 'diff-unified'}`);
+        const paint = (rows) => {
+          const out = [];
+          const foldRow = (entry) => {
+            const button = htmlEl('button', 'diff-fold', `⋯ ${entry.ops.length} unchanged lines`);
+            button.type = 'button';
+            button.addEventListener('click', () => { const index = rows.indexOf(entry); rows.splice(index, 1, ...entry.ops); container.replaceChildren(...paint(rows)); });
+            return button;
+          };
+          if (!state.wide) {
+            rows.forEach((entry) => {
+              if (entry.op === 'fold') { out.push(foldRow(entry)); return; }
+              if (entry.op === '@') { out.push(htmlEl('div', 'diff-hunk', entry.text)); return; }
+              const row = htmlEl('div', `diff-row op-${entry.op === '+' ? 'add' : entry.op === '-' ? 'del' : 'eq'}`);
+              row.append(cell('ln', entry.a), cell('ln', entry.b), cell('sign', entry.op === ' ' ? '' : entry.op), cell('code', entry.text));
+              out.push(row);
+            });
+            return out;
+          }
+          for (let index = 0; index < rows.length;) {
+            const entry = rows[index];
+            if (entry.op === 'fold') { out.push(foldRow(entry)); index += 1; continue; }
+            if (entry.op === '@') { out.push(htmlEl('div', 'diff-hunk', entry.text)); index += 1; continue; }
+            if (entry.op === ' ') {
+              const row = htmlEl('div', 'diff-row op-eq');
+              row.append(cell('ln', entry.a), cell('code', entry.text), cell('ln', entry.b), cell('code', entry.text));
+              out.push(row); index += 1; continue;
+            }
+            const dels = [], adds = [];
+            while (index < rows.length && (rows[index].op === '-' || rows[index].op === '+')) { (rows[index].op === '-' ? dels : adds).push(rows[index]); index += 1; }
+            for (let k = 0; k < Math.max(dels.length, adds.length); k += 1) {
+              const left = dels[k], right = adds[k];
+              const row = htmlEl('div', 'diff-row');
+              row.append(
+                cell(`ln${left ? ' op-del' : ''}`, left && left.a), cell(`code${left ? ' op-del' : ' empty'}`, left && left.text),
+                cell(`ln${right ? ' op-add' : ''}`, right && right.b), cell(`code${right ? ' op-add' : ' empty'}`, right && right.text),
+              );
+              out.push(row);
+            }
+          }
+          return out;
+        };
+        const rows = options.fold ? foldContext(ops) : ops.slice();
+        const limit = options.limit || Infinity;
+        if (rows.length > limit) {
+          const visible = rows.slice(0, limit);
+          container.replaceChildren(...paint(visible));
+          const more = htmlEl('button', 'show-all', `Show all ${rows.length} diff lines`);
+          more.type = 'button';
+          more.addEventListener('click', () => { container.replaceChildren(...paint(rows)); });
+          const wrapper = htmlEl('div');
+          wrapper.append(container, more);
+          return wrapper;
+        }
+        container.replaceChildren(...paint(rows));
+        return container;
+      };
+      const diffSection = (heading, ops, options, note) => {
+        if (!ops.length) return null;
+        const wrapper = htmlEl('section', 'details-section');
+        const head = htmlEl('div', 'diff-head');
+        head.appendChild(htmlEl('h3', null, heading));
+        const wide = htmlEl('button', 'diff-wide', state.wide ? '⤡ Narrow' : '⤢ Side by side');
+        wide.type = 'button';
+        wide.addEventListener('click', () => { state.wide = !state.wide; layout.classList.toggle('details-wide', state.wide); renderDetails(); });
+        head.appendChild(wide);
+        wrapper.appendChild(head);
+        if (note) wrapper.appendChild(htmlEl('p', 'details-meta', note));
+        wrapper.appendChild(renderDiff(ops, options));
+        return wrapper;
+      };
+      const symbolDiff = (symbol) => {
+        const source = symbol.source;
+        if (!source || (!source.before && !source.after)) return null;
+        const truncated = (source.before && source.before.truncated) || (source.after && source.after.truncated);
+        return diffSection('Change', diffOps(source.before, source.after), { fold: true }, truncated ? 'Declaration truncated at the size limit.' : null);
+      };
+      const fileDiff = (file) => {
+        if (!file.diff || !file.diff.unified) return null;
+        return diffSection('Diff', parseUnified(file.diff.unified), { limit: 400 }, file.diff.truncated ? 'Diff truncated at the size limit.' : null);
       };
 
       // ---- Details panel ----
@@ -246,15 +404,19 @@ _INTERACTIVE_SCRIPT = textwrap.dedent(
         const selected = state.selected;
         if (!selected) { help.hidden = false; body.hidden = true; body.replaceChildren(); return; }
         const parts = [];
-        if (selected.type === 'relationship') {
-          const rel = selected.value;
-          parts.push(header('relationship', rel.kind, null));
-          const ends = htmlEl('p', 'details-edge');
-          ends.append(linkTo(rel.source_id), htmlEl('span', 'edge-arrow-text', ' → '), linkTo(rel.target_id));
-          parts.push(ends);
-          if (rel.label) parts.push(htmlEl('p', 'details-meta', rel.label));
-          if (rel.resolution_method) parts.push(htmlEl('p', 'details-meta', `resolution: ${rel.resolution_method}`));
-          parts.push(evidenceSection(rel.evidence));
+        if (selected.type === 'edge') {
+          const edge = selected.value;
+          parts.push(header(`${edge.relationships.length} relationship${edge.relationships.length === 1 ? '' : 's'}`, `${nameOf(edge.from.id)} → ${nameOf(edge.to.id)}`, null));
+          edge.relationships.forEach((rel) => {
+            const block = htmlEl('section', 'details-section');
+            const ends = htmlEl('p', 'details-edge');
+            ends.append(htmlEl('span', 'badge', rel.kind), document.createTextNode(' '), linkTo(rel.source_id), htmlEl('span', 'edge-arrow-text', ' → '), linkTo(rel.target_id));
+            block.appendChild(ends);
+            const meta = [rel.label, rel.resolution_method && `resolution: ${rel.resolution_method}`, callLine(rel) && `line ${callLine(rel)}`].filter(Boolean);
+            if (meta.length) block.appendChild(htmlEl('p', 'details-meta', meta.join(' · ')));
+            (rel.evidence || []).filter((entry) => entry && entry.snippet).forEach((entry) => block.appendChild(htmlEl('pre', 'evidence-snippet', entry.snippet)));
+            parts.push(block);
+          });
         } else if (fileIndex.has(selected.id)) {
           const file = fileIndex.get(selected.id);
           parts.push(header('file', file.path || file.id, file.change_kind));
@@ -263,18 +425,20 @@ _INTERACTIVE_SCRIPT = textwrap.dedent(
           if (file.language) stats.push(file.language);
           if (file.lines_added != null || file.lines_removed != null) stats.push(`+${file.lines_added || 0} / -${file.lines_removed || 0}`);
           const fileSymbols = symbols.filter((symbol) => symbol.file_id === file.id);
-          stats.push(`${fileSymbols.filter((symbol) => changedSymbolIds.has(symbol.id)).length} of ${fileSymbols.length} symbols changed`);
+          if (fileSymbols.length) stats.push(`${fileSymbols.filter((symbol) => changedSymbolIds.has(symbol.id)).length} of ${fileSymbols.length} symbols changed`);
           parts.push(htmlEl('p', 'details-meta', stats.join(' · ')));
           parts.push(summaryBlock(file));
           parts.push(section('Changed symbols', fileSymbols.filter((symbol) => changedSymbolIds.has(symbol.id)).map((symbol) => symbol.id)));
           parts.push(section('Imported by', incoming(file.id, 'imports').concat(...fileSymbols.map((symbol) => incoming(symbol.id, 'imports'))).filter((id) => id !== file.id)));
           parts.push(section('Imports', outgoing(file.id, 'imports').filter((id) => fileIndex.has(id) || (symbolIndex.has(id) && symbolIndex.get(id).file_id !== file.id))));
+          parts.push(fileDiff(file));
         } else {
           const symbol = symbolIndex.get(selected.id);
           parts.push(header(symbol.kind || 'symbol', symbol.qualified_name || symbol.name || symbol.id, symbol.change_kind));
           const location = symbol.location ? `${symbol.location.file}:${symbol.location.line_start}-${symbol.location.line_end}` : nameOf(symbol.file_id);
           parts.push(htmlEl('p', 'details-meta', location));
           parts.push(summaryBlock(symbol));
+          parts.push(symbol.source ? symbolDiff(symbol) : htmlEl('p', 'details-meta', 'Unchanged in this snapshot.'));
           if (symbol.parent_id) parts.push(section('Defined in', [symbol.parent_id]));
           parts.push(section('Calls', outgoing(symbol.id, 'calls')));
           parts.push(section('Called by', incoming(symbol.id, 'calls')));
@@ -292,8 +456,8 @@ _INTERACTIVE_SCRIPT = textwrap.dedent(
         renderDetails();
         draw();
       };
-      const selectRelationship = (relationship) => {
-        state.selected = { type: 'relationship', id: relationship.id, value: relationship };
+      const selectEdge = (edge) => {
+        state.selected = { type: 'edge', id: edge.key, value: edge };
         renderDetails();
         draw();
       };
@@ -302,10 +466,14 @@ _INTERACTIVE_SCRIPT = textwrap.dedent(
       if (closeButton) closeButton.addEventListener('click', () => { layout.classList.add('details-closed'); clearSelection(); });
       document.addEventListener('keydown', (event) => { if (event.key === 'Escape' && state.selected) clearSelection(); });
 
+      const highlight = (item, on) => {
+        if (item.relationships) return;
+        (edgeIndex.get(item.id) || new Set()).forEach((edge) => edge.classList.toggle('hover', on));
+      };
       const interactive = (node, item, onSelect) => {
-        node.addEventListener('pointerenter', (event) => showTooltip(hoverText(item), event));
+        node.addEventListener('pointerenter', (event) => { highlight(item, true); showTooltip(hoverText(item), event); });
         node.addEventListener('pointermove', (event) => showTooltip(hoverText(item), event));
-        node.addEventListener('pointerleave', hideTooltip);
+        node.addEventListener('pointerleave', () => { highlight(item, false); hideTooltip(); });
         node.addEventListener('click', (event) => { event.stopPropagation(); onSelect(); });
         node.addEventListener('keydown', (event) => { if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); onSelect(); } });
       };
@@ -375,7 +543,7 @@ _INTERACTIVE_SCRIPT = textwrap.dedent(
             if (!collapsed && hiddenCount) {
               const more = svgEl('g', { class: 'more-toggle', tabindex: '0', role: 'button', 'aria-expanded': String(expanded) });
               const related = relatedCount ? ` · ${relatedCount} call or called by changed code` : '';
-              const label = expanded ? `▴ Show fewer (hide ${hiddenCount} unchanged)` : `▾ ${hiddenCount} more unchanged symbol${hiddenCount === 1 ? '' : 's'}${related}`;
+              const label = expanded ? `▴ Show fewer (hide ${hiddenCount})` : `▾ ${hiddenCount} more symbol${hiddenCount === 1 ? '' : 's'} (unchanged or imports)${related}`;
               more.setAttribute('aria-label', label);
               more.appendChild(svgEl('rect', { x: 80, y: sy, width: 620, height: 24, rx: 7, class: 'more-box' }));
               addText(more, label, 94, sy + 16, 'more-label');
@@ -396,21 +564,62 @@ _INTERACTIVE_SCRIPT = textwrap.dedent(
           moduleGroup.insertBefore(outline, moduleGroup.firstChild);
           y += 18;
         });
-        const edges = svgEl('g', { class: 'relationship-edges' });
+        // Edges are drawn last (on top) as arcs in the empty space right of the
+        // symbol rows (symbol ↔ symbol) or right of the file boxes (anything
+        // touching a file header), so boxes never hide them. An endpoint hidden
+        // by a collapsed file or the ▾ toggle is lifted to its file header, and
+        // parallel edges between the same two anchors merge into one with a count.
+        const anchorOf = (id) => {
+          const pos = positions.get(id);
+          if (pos && pos.visible) return { id, y: pos.y, symbol: symbolIndex.has(id) };
+          const symbol = symbolIndex.get(id);
+          const filePos = symbol && positions.get(symbol.file_id);
+          return filePos ? { id: symbol.file_id, y: filePos.y, symbol: false } : null;
+        };
+        const fileOf = (id) => (symbolIndex.has(id) ? symbolIndex.get(id).file_id : id);
+        const merged = new Map();
         relationships.forEach((relationship) => {
-          const sourcePos = positions.get(relationship.source_id);
-          const targetPos = positions.get(relationship.target_id);
-          if (!sourcePos || !targetPos || !sourcePos.visible || !targetPos.visible) return;
-          const edge = svgEl('line', { x1: sourcePos.x, y1: sourcePos.y, x2: targetPos.x, y2: targetPos.y, class: `edge-line${isSelected(relationship.id) ? ' selected' : ''}`, 'marker-end': 'url(#arrow)' });
-          interactive(edge, relationship, () => selectRelationship(relationship));
-          edges.appendChild(edge);
+          if (!DRAWN_KINDS.has(relationship.kind)) return;
+          // A file's edge to its own import statement describes the import, not a dependency.
+          if (relationship.kind === 'imports' && fileOf(relationship.target_id) === relationship.source_id) return;
+          const from = anchorOf(relationship.source_id);
+          const to = anchorOf(relationship.target_id);
+          if (!from || !to || from.id === to.id) return;
+          const key = `${from.id} -> ${to.id}`;
+          if (!merged.has(key)) merged.set(key, { key, from, to, relationships: [] });
+          merged.get(key).relationships.push(relationship);
+        });
+        const touches = (edge, id) => [edge.from.id, edge.to.id].some((end) => end === id || fileOf(end) === id)
+          || edge.relationships.some((r) => r.source_id === id || r.target_id === id);
+        const edges = svgEl('g', { class: 'relationship-edges' });
+        edgeIndex.clear();
+        [...merged.values()].sort((a, b) => a.key.localeCompare(b.key)).forEach((edge) => {
+          const inner = edge.from.symbol && edge.to.symbol;
+          const x = inner ? SYMBOL_RIGHT : FILE_RIGHT;
+          const dy = Math.abs(edge.to.y - edge.from.y);
+          const bulge = inner ? Math.min(290, 28 + dy * 0.35) : Math.min(240, 28 + dy * 0.3);
+          const d = `M ${x} ${edge.from.y} C ${x + bulge} ${edge.from.y}, ${x + bulge} ${edge.to.y}, ${x} ${edge.to.y}`;
+          const kinds = new Set(edge.relationships.map((r) => r.kind));
+          const classes = ['edge', kinds.has('calls') ? 'kind-calls' : kinds.has('inherits') || kinds.has('implements') ? 'kind-inherits' : 'kind-imports'];
+          if (isSelected(edge.key)) classes.push('selected');
+          else if (state.selected && state.selected.type === 'node') classes.push(touches(edge, state.selected.id) ? 'active' : 'dim');
+          const group = svgEl('g', { class: classes.join(' '), tabindex: '0', role: 'button', 'aria-label': edgeLabel(edge) });
+          group.appendChild(svgEl('path', { d, class: 'edge-hit' }));
+          group.appendChild(svgEl('path', { d, class: 'edge-line', 'marker-end': 'url(#arrow)' }));
+          if (edge.relationships.length > 1) addText(group, String(edge.relationships.length), x + bulge * 0.75 + 3, (edge.from.y + edge.to.y) / 2 + 4, 'edge-count');
+          interactive(group, edge, () => selectEdge(edge));
+          edges.appendChild(group);
+          [edge.from.id, edge.to.id, fileOf(edge.from.id), fileOf(edge.to.id)].forEach((id) => {
+            if (!edgeIndex.has(id)) edgeIndex.set(id, new Set());
+            edgeIndex.get(id).add(group);
+          });
         });
         const defs = svgEl('defs');
         const marker = svgEl('marker', { id: 'arrow', markerWidth: 8, markerHeight: 8, refX: 7, refY: 3, orient: 'auto' });
         marker.appendChild(svgEl('path', { d: 'M0,0 L0,6 L8,3 z', class: 'edge-arrow' }));
         defs.appendChild(marker);
         edges.insertBefore(defs, edges.firstChild);
-        viewport.insertBefore(edges, viewport.firstChild);
+        viewport.appendChild(edges);
         setTransform();
       };
       svg.addEventListener('wheel', (event) => { event.preventDefault(); const factor = event.deltaY < 0 ? 1.12 : 0.89; state.scale = Math.max(0.35, Math.min(3, state.scale * factor)); setTransform(); }, { passive: false });
@@ -468,6 +677,7 @@ class HtmlFormatter:
       --tooltip-bg: #101828; --tooltip-text: #f9fafb; --tooltip-border: #667085;
       --ck-added: #18794e; --ck-deleted: #b42318; --ck-modified: #175cd3;
       --ck-unchanged: #667085; --ck-untracked: #7a5af8; --ck-renamed: #b54708;
+      --diff-add-bg: #e3f6e8; --diff-del-bg: #fde8e7; --diff-hunk-bg: #eef2f6;
     }}
     @media (prefers-color-scheme: dark) {{
       :root {{
@@ -477,6 +687,7 @@ class HtmlFormatter:
         --tooltip-bg: #1f242f; --tooltip-text: #f5f5f6; --tooltip-border: #61646c;
         --ck-added: #47cd89; --ck-deleted: #f97066; --ck-modified: #84adff;
         --ck-unchanged: #94969c; --ck-untracked: #bdb4fe; --ck-renamed: #fdb022;
+        --diff-add-bg: #113a22; --diff-del-bg: #431816; --diff-hunk-bg: #1b2433;
       }}
     }}
     html, body {{ height: 100%; margin: 0; }}
@@ -503,6 +714,7 @@ class HtmlFormatter:
     .popover-body dt {{ color: var(--text-muted); }} .popover-body dd {{ margin: 0; overflow-wrap: anywhere; }}
     .overall-summary {{ margin: 0; padding: .45rem 1rem; border-bottom: 1px solid var(--outline); font-size: .875rem; }}
     .layout {{ flex: 1; display: grid; grid-template-columns: minmax(0, 1fr) 22rem; min-height: 0; }}
+    .layout.details-wide {{ grid-template-columns: minmax(0, 1fr) min(64rem, 58%); }}
     .layout.details-closed {{ grid-template-columns: minmax(0, 1fr) 0; }}
     .layout.details-closed #diffgraph-details {{ display: none; }}
     #diffgraph-graph {{ position: relative; min-height: 0; overflow: hidden; background: var(--graph-bg); }}
@@ -549,9 +761,29 @@ class HtmlFormatter:
     .ck-untracked {{ stroke: var(--ck-untracked); }} .change-dot.ck-untracked {{ fill: var(--ck-untracked); }}
     .ck-renamed {{ stroke: var(--ck-renamed); }} .change-dot.ck-renamed {{ fill: var(--ck-renamed); }}
     .file-box.selected, .symbol-box.selected {{ stroke: var(--selected); stroke-width: 3; }}
-    .edge-line {{ stroke: var(--edge); stroke-width: 1.5; pointer-events: stroke; cursor: pointer; }}
-    .edge-line:hover, .edge-line.selected {{ stroke: var(--selected); stroke-width: 3; }}
+    .edge {{ cursor: pointer; outline: none; }}
+    .edge-hit {{ fill: none; stroke: transparent; stroke-width: 12; pointer-events: stroke; }}
+    .edge-line {{ fill: none; stroke: var(--edge); stroke-width: 1.6; opacity: .85; pointer-events: none; }}
+    .edge.kind-imports .edge-line {{ stroke-dasharray: 6 4; }}
+    .edge.kind-inherits .edge-line {{ stroke-dasharray: 2 3; }}
+    .edge.dim {{ opacity: .14; }}
+    .edge:hover .edge-line, .edge:focus .edge-line, .edge.hover .edge-line, .edge.active .edge-line, .edge.selected .edge-line {{ stroke: var(--selected); stroke-width: 2.8; opacity: 1; }}
+    .edge-count {{ font-size: 11px; font-weight: 700; fill: var(--text-muted); pointer-events: none; }}
     .edge-arrow {{ fill: var(--edge); }}
+    .diff-head {{ display: flex; align-items: baseline; justify-content: space-between; gap: .5rem; }}
+    .diff-wide {{ padding: .05rem .45rem; border: 1px solid var(--outline); border-radius: .3rem; background: none; color: var(--text-muted); font: inherit; font-size: .72rem; cursor: pointer; }}
+    .diff {{ overflow-x: auto; border: 1px solid var(--outline); border-radius: .35rem; font-family: ui-monospace, SFMono-Regular, Consolas, monospace; font-size: .74rem; line-height: 1.45; }}
+    .diff-row {{ display: grid; min-width: max-content; }}
+    .diff-unified .diff-row {{ grid-template-columns: 3.2em 3.2em 1.2em 1fr; }}
+    .diff-split .diff-row {{ min-width: 0; grid-template-columns: 3.2em minmax(0, 1fr) 3.2em minmax(0, 1fr); }}
+    .diff.diff-split .code {{ white-space: pre-wrap; overflow-wrap: anywhere; }}
+    .diff .ln {{ padding: 0 .4em; text-align: right; color: var(--text-muted); user-select: none; }}
+    .diff .sign {{ color: var(--text-muted); user-select: none; }}
+    .diff .code {{ padding-right: .8em; white-space: pre; }}
+    .diff-row.op-add, .diff .op-add {{ background: var(--diff-add-bg); }}
+    .diff-row.op-del, .diff .op-del {{ background: var(--diff-del-bg); }}
+    .diff-hunk {{ padding: .1rem .5rem; background: var(--diff-hunk-bg); color: var(--text-muted); white-space: pre; }}
+    .diff-fold {{ display: block; width: 100%; padding: .1rem .5rem; border: 0; background: var(--diff-hunk-bg); color: var(--text-muted); font: inherit; text-align: left; cursor: pointer; }}
     .file-container, .symbol-node {{ cursor: pointer; outline: none; }}
     .file-container:hover > rect, .symbol-node:hover > rect {{ stroke-width: 3; }}
     .file-container:focus > rect, .symbol-node:focus > rect {{ stroke: var(--focus); stroke-width: 3; }}
@@ -573,13 +805,14 @@ class HtmlFormatter:
       <div class="details-help">
         <h2>Explore the change</h2>
         <ul>
-          <li>Select a file, symbol, or edge to see its details here.</li>
+          <li>Select a file, symbol, or edge to see its details and exact diff here.</li>
           <li>Scroll to zoom; drag empty space to pan.</li>
           <li>▶/▼ collapses a file; ▾/▴ shows or hides its unchanged symbols.</li>
         </ul>
         <div class="legend">
           <span class="badge ck-added">added</span><span class="badge ck-modified">modified</span><span class="badge ck-deleted">deleted</span><span class="badge ck-renamed">renamed</span><span class="badge ck-unchanged">unchanged</span>
         </div>
+        <p class="details-meta">Solid arcs are calls, dashed arcs imports; a number counts merged edges. Hover a box to highlight its connections.</p>
       </div>
       <div class="details-body" hidden></div>
     </aside>
@@ -611,7 +844,7 @@ class HtmlFormatter:
         lines = warning_lines(raw_warnings)
         warnings = (
             '<details class="popover"><summary><span class="badge">⚠ '
-            f"{_text(_plural(len(raw_warnings), 'warning'))}</span></summary>"
+            f"{_text(_plural(len(lines), 'warning'))}</span></summary>"
             '<div class="popover-body"><ul>'
             + "".join(f"<li>{_text(line)}</li>" for line in lines)
             + "</ul></div></details>"

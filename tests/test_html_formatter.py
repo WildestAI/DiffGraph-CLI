@@ -365,3 +365,37 @@ def test_graph_defaults_to_changed_symbols_with_toggle_for_the_rest():
     assert "state.expanded" in _INTERACTIVE_SCRIPT
     assert "more-toggle" in _INTERACTIVE_SCRIPT
     assert "▾" in _INTERACTIVE_SCRIPT and "▴" in _INTERACTIVE_SCRIPT
+
+
+def test_graph_edges_are_drawn_on_top_merged_and_lifted_to_visible_anchors():
+    from diffgraph.formatters.html import _INTERACTIVE_SCRIPT as script
+
+    # Drawn after the boxes (on top), never inserted beneath them.
+    assert "viewport.appendChild(edges)" in script
+    assert "viewport.insertBefore(edges" not in script
+    # Dependency kinds only; containment is already shown by nesting.
+    assert "new Set(['calls', 'imports', 'inherits', 'implements'])" in script
+    # Hidden endpoints lift to their file header; parallel edges merge with a count.
+    assert "anchorOf" in script and "relationships.length > 1" in script
+    # Import statements wait behind the per-file toggle.
+    assert "symbolIndex.get(id).kind !== 'import'" in script
+
+
+def test_details_panel_shows_symbol_and_file_diffs_from_the_artifact():
+    from diffgraph.formatters.html import _INTERACTIVE_SCRIPT as script
+
+    assert "diffOps(source.before, source.after)" in script
+    assert "parseUnified(file.diff.unified)" in script
+    assert "diff-split" in script and "diff-unified" in script
+    assert "Unchanged in this snapshot." in script
+
+
+def test_warning_badge_counts_the_lines_it_shows():
+    value = golden_artifact()
+    value["metadata"]["warnings"] = [
+        {"code": "UNSUPPORTED_LANGUAGE", "file": f"doc{i}.md", "detail": "x"} for i in range(3)
+    ]
+    report = HtmlFormatter(ValidatedArtifact.from_value(value)).render()
+
+    assert "⚠ 1 warning<" in report
+    assert "Not analyzed (Python only, 3 files)" in report
