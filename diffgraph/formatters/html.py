@@ -92,9 +92,8 @@ _INTERACTIVE_SCRIPT = textwrap.dedent(
       svg.setAttribute('role', 'img');
       svg.setAttribute('aria-label', 'Interactive DiffGraph visualization');
       svg.setAttribute('tabindex', '0');
-      const title = document.createElementNS(NS, 'title');
-      title.textContent = 'Interactive DiffGraph visualization';
-      svg.appendChild(title);
+      // No SVG <title>: browsers show it as a native tooltip over every child,
+      // hiding the graph's own tooltip. aria-label already names the graph.
       const viewport = document.createElementNS(NS, 'g');
       svg.appendChild(viewport);
       host.appendChild(svg);

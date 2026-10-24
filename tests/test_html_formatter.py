@@ -442,3 +442,12 @@ def test_changed_symbol_without_source_is_not_called_unchanged():
     from diffgraph.formatters.html import _INTERACTIVE_SCRIPT as script
 
     assert "else if (!changedSymbolIds.has(symbol.id)) parts.push(htmlEl('p', 'details-meta', 'Unchanged in this snapshot.'));" in script
+
+
+def test_graph_has_no_native_svg_title_tooltip():
+    from diffgraph.formatters.html import _INTERACTIVE_SCRIPT as script
+
+    # An SVG <title> becomes a browser tooltip over the whole graph and hides
+    # the node tooltips (including AI summaries); aria-label names it instead.
+    assert "createElementNS(NS, 'title')" not in script
+    assert "svg.setAttribute('aria-label', 'Interactive DiffGraph visualization')" in script
