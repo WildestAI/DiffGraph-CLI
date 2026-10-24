@@ -304,7 +304,7 @@ def load_file_contents(changed_files: List[Dict[str, str]], diff_args: List[str]
     cls=_RawArgsCommand,
     context_settings={"ignore_unknown_options": True, "allow_extra_args": True},
 )
-@click.version_option(package_name='wild')
+@click.version_option(version=__version__, prog_name='wild')
 @click.argument('args', nargs=-1, type=click.UNPROCESSED)
 @click.option(
     '--api-key',
