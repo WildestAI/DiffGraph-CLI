@@ -1671,6 +1671,49 @@ def test_changeset_python_imports_resolve_across_files_conservatively(tmp_path):
     )
 
 
+def test_resolved_import_bindings_link_files_to_imported_declarations(tmp_path):
+    """Named imports record which changed declaration they bind, and only that."""
+    root = repo(tmp_path)
+    write(
+        root,
+        "package/worker.py",
+        "LIMIT = 3\n\n"
+        "def run():\n"
+        "    return LIMIT\n\n"
+        "def unused():\n"
+        "    return 0\n\n"
+        "class Engine:\n"
+        "    def start(self):\n"
+        "        return run()\n",
+    )
+    write(
+        root,
+        "package/client.py",
+        "from .worker import run as go, LIMIT, Engine, missing\n"
+        "from .worker import run\n"
+        "import package.worker\n",
+    )
+    git(root, "add", "package")
+
+    artifact = analyze_local_diff(str(root), staged=True)
+
+    assert_valid(artifact)
+    bindings = {
+        (item["source_id"], item["target_id"]): item["label"]
+        for item in artifact["relationships"]
+        if item["kind"] == "imports" and item["label"].startswith("resolved binding")
+    }
+    # One edge per imported declaration, even when imported twice; undeclared
+    # names, methods, and whole-module imports bind no declaration.
+    assert bindings == {
+        ("file::package/client.py", "sym::package/worker.py::run"): "resolved binding: go",
+        ("file::package/client.py", "sym::package/worker.py::LIMIT"): "resolved binding: LIMIT",
+        ("file::package/client.py", "sym::package/worker.py::Engine"): "resolved binding: Engine",
+    }
+    relationship_ids = [item["id"] for item in artifact["relationships"]]
+    assert len(relationship_ids) == len(set(relationship_ids))
+
+
 def test_namespace_package_child_imports_resolve_without_init_files(tmp_path):
     """Absolute and relative child imports resolve across namespace packages."""
     root = repo(tmp_path)

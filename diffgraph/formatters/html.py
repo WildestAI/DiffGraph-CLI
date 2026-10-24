@@ -74,7 +74,9 @@ _INTERACTIVE_SCRIPT = textwrap.dedent(
       tooltip.hidden = true;
       host.appendChild(tooltip);
       const state = { scale: 1, x: 0, y: 0, dragging: false, collapsed: new Set() };
-      const color = { added: '#18794e', deleted: '#b42318', modified: '#175cd3', unchanged: '#667085', untracked: '#7a5af8', renamed: '#b54708' };
+      // Colors live in the stylesheet so both light and dark themes apply.
+      const changeKinds = new Set(['added', 'deleted', 'modified', 'unchanged', 'untracked', 'renamed']);
+      const changeClass = (kind) => `ck-${changeKinds.has(kind) ? kind : 'unchanged'}`;
       const svgEl = (name, attrs = {}) => {
         const node = document.createElementNS(NS, name);
         Object.entries(attrs).forEach(([key, value]) => node.setAttribute(key, String(value)));
@@ -126,7 +128,7 @@ _INTERACTIVE_SCRIPT = textwrap.dedent(
             const collapsed = state.collapsed.has(file.id);
             const height = collapsed ? 56 : Math.max(72, 44 + fileSymbols.length * 38);
             const groupNode = svgEl('g', { class: 'file-container', tabindex: '0', role: 'button', 'aria-expanded': String(!collapsed), 'aria-label': `${collapsed ? 'Expand' : 'Collapse'} ${file.path || file.id}` });
-            const rect = svgEl('rect', { x: 48, y, width: 1080, height, rx: 10, fill: '#ffffff', stroke: color[file.change_kind] || color.unchanged, 'stroke-width': 3 });
+            const rect = svgEl('rect', { x: 48, y, width: 1080, height, rx: 10, class: `file-box ${changeClass(file.change_kind)}` });
             groupNode.appendChild(rect);
             addText(groupNode, collapsed ? '▶' : '▼', 64, y + 29, 'toggle');
             addText(groupNode, file.path || file.id, 88, y + 29, 'file-label');
@@ -140,9 +142,9 @@ _INTERACTIVE_SCRIPT = textwrap.dedent(
             if (!collapsed) fileSymbols.forEach((symbol, index) => {
               const sy = y + 48 + index * 38;
               const node = svgEl('g', { class: 'symbol-node', tabindex: '0', role: 'img', 'aria-label': `${symbol.kind || 'symbol'} ${symbol.qualified_name || symbol.name || symbol.id}` });
-              node.appendChild(svgEl('rect', { x: 80, y: sy, width: 620, height: 28, rx: 7, fill: '#f8fafc', stroke: color[symbol.change_kind] || color.unchanged }));
+              node.appendChild(svgEl('rect', { x: 80, y: sy, width: 620, height: 28, rx: 7, class: `symbol-box ${changeClass(symbol.change_kind)}` }));
               addText(node, `${symbol.kind || 'symbol'}: ${symbol.qualified_name || symbol.name || symbol.id}`, 94, sy + 19, 'symbol-label');
-              node.appendChild(svgEl('circle', { cx: 678, cy: sy + 14, r: 5, fill: color[symbol.change_kind] || color.unchanged }));
+              node.appendChild(svgEl('circle', { cx: 678, cy: sy + 14, r: 5, class: `change-dot ${changeClass(symbol.change_kind)}` }));
               attachDetails(node, symbol);
               viewport.appendChild(node);
               positions.set(symbol.id, { x: 390, y: sy + 14, visible: true });
@@ -151,7 +153,7 @@ _INTERACTIVE_SCRIPT = textwrap.dedent(
             y += height + 14;
           });
           const moduleHeight = y - moduleY - 14;
-          const outline = svgEl('rect', { x: 24, y: moduleY, width: 1128, height: moduleHeight, rx: 14, fill: 'none', stroke: '#98a2b3', 'stroke-dasharray': '6 5' });
+          const outline = svgEl('rect', { x: 24, y: moduleY, width: 1128, height: moduleHeight, rx: 14, class: 'module-outline' });
           moduleGroup.insertBefore(outline, moduleGroup.firstChild);
           y += 18;
         });
@@ -160,13 +162,13 @@ _INTERACTIVE_SCRIPT = textwrap.dedent(
           const source = positions.get(relationship.source_id);
           const target = positions.get(relationship.target_id);
           if (!source || !target || !source.visible || !target.visible) return;
-          const edge = svgEl('line', { x1: source.x, y1: source.y, x2: target.x, y2: target.y, stroke: '#475467', 'stroke-width': 1.5, 'marker-end': 'url(#arrow)' });
+          const edge = svgEl('line', { x1: source.x, y1: source.y, x2: target.x, y2: target.y, class: 'edge-line', 'marker-end': 'url(#arrow)' });
           attachDetails(edge, relationship);
           edges.appendChild(edge);
         });
         const defs = svgEl('defs');
         const marker = svgEl('marker', { id: 'arrow', markerWidth: 8, markerHeight: 8, refX: 7, refY: 3, orient: 'auto' });
-        marker.appendChild(svgEl('path', { d: 'M0,0 L0,6 L8,3 z', fill: '#475467' }));
+        marker.appendChild(svgEl('path', { d: 'M0,0 L0,6 L8,3 z', class: 'edge-arrow' }));
         defs.appendChild(marker);
         edges.insertBefore(defs, edges.firstChild);
         viewport.insertBefore(edges, viewport.firstChild);
@@ -231,19 +233,50 @@ class HtmlFormatter:
     .edge code {{ overflow-wrap: anywhere; }}
     .kind {{ border: 1px solid #8888; border-radius: 1rem; padding: .15rem .55rem; }}
     dt {{ font-weight: 700; }} dd {{ margin-bottom: .5rem; }}
-    #diffgraph-graph {{ position: relative; height: 46rem; min-height: 28rem; overflow: hidden; border: 1px solid #8886; border-radius: .6rem; background: #f8fafc; }}
+    :root {{
+      --graph-bg: #f8fafc; --node-bg: #ffffff; --symbol-bg: #f2f4f7;
+      --text-strong: #101828; --text: #344054; --text-muted: #475467;
+      --edge: #475467; --outline: #98a2b3; --focus: #101828;
+      --tooltip-bg: #101828; --tooltip-text: #f9fafb; --tooltip-border: #667085;
+      --ck-added: #18794e; --ck-deleted: #b42318; --ck-modified: #175cd3;
+      --ck-unchanged: #667085; --ck-untracked: #7a5af8; --ck-renamed: #b54708;
+    }}
+    @media (prefers-color-scheme: dark) {{
+      :root {{
+        --graph-bg: #0c111d; --node-bg: #161b26; --symbol-bg: #1f242f;
+        --text-strong: #f5f5f6; --text: #cecfd2; --text-muted: #94969c;
+        --edge: #94969c; --outline: #61646c; --focus: #f5f5f6;
+        --tooltip-bg: #1f242f; --tooltip-text: #f5f5f6; --tooltip-border: #61646c;
+        --ck-added: #47cd89; --ck-deleted: #f97066; --ck-modified: #84adff;
+        --ck-unchanged: #94969c; --ck-untracked: #bdb4fe; --ck-renamed: #fdb022;
+      }}
+    }}
+    #diffgraph-graph {{ position: relative; height: 46rem; min-height: 28rem; overflow: hidden; border: 1px solid #8886; border-radius: .6rem; background: var(--graph-bg); }}
     #diffgraph-graph svg {{ display: block; width: 100%; height: 100%; cursor: grab; }}
     #diffgraph-graph svg:active {{ cursor: grabbing; }}
-    .module-label {{ font-size: 16px; font-weight: 700; fill: #344054; }}
-    .file-label {{ font-size: 16px; font-weight: 700; fill: #101828; }}
-    .symbol-label {{ font-size: 14px; fill: #344054; }}
-    .change-label {{ font-size: 12px; fill: #475467; }}
-    .toggle {{ font-size: 15px; fill: #344054; }}
+    .module-label {{ font-size: 16px; font-weight: 700; fill: var(--text); }}
+    .file-label {{ font-size: 16px; font-weight: 700; fill: var(--text-strong); }}
+    .symbol-label {{ font-size: 14px; fill: var(--text); }}
+    .change-label {{ font-size: 12px; fill: var(--text-muted); }}
+    .toggle {{ font-size: 15px; fill: var(--text); }}
+    .module-outline {{ fill: none; stroke: var(--outline); stroke-dasharray: 6 5; }}
+    .file-box {{ fill: var(--node-bg); stroke: var(--ck-unchanged); stroke-width: 3; }}
+    .symbol-box {{ fill: var(--symbol-bg); stroke: var(--ck-unchanged); stroke-width: 1; }}
+    .change-dot {{ fill: var(--ck-unchanged); }}
+    .ck-added {{ stroke: var(--ck-added); }} .change-dot.ck-added {{ fill: var(--ck-added); }}
+    .ck-deleted {{ stroke: var(--ck-deleted); }} .change-dot.ck-deleted {{ fill: var(--ck-deleted); }}
+    .ck-modified {{ stroke: var(--ck-modified); }} .change-dot.ck-modified {{ fill: var(--ck-modified); }}
+    .ck-unchanged {{ stroke: var(--ck-unchanged); }} .change-dot.ck-unchanged {{ fill: var(--ck-unchanged); }}
+    .ck-untracked {{ stroke: var(--ck-untracked); }} .change-dot.ck-untracked {{ fill: var(--ck-untracked); }}
+    .ck-renamed {{ stroke: var(--ck-renamed); }} .change-dot.ck-renamed {{ fill: var(--ck-renamed); }}
+    .change-dot {{ stroke: none; }}
+    .edge-line {{ stroke: var(--edge); stroke-width: 1.5; pointer-events: stroke; }}
+    .edge-line:hover {{ stroke: var(--focus); stroke-width: 2.5; }}
+    .edge-arrow {{ fill: var(--edge); }}
     .file-container, .symbol-node {{ cursor: pointer; outline: none; }}
-    .file-container:focus rect, .symbol-node:focus rect {{ stroke: #101828; stroke-width: 3; }}
-    .relationship-edges line {{ pointer-events: stroke; }}
-    .graph-tooltip {{ position: absolute; z-index: 2; max-width: min(34rem, 80%); max-height: 18rem; margin: 0; padding: .65rem; overflow: auto; border: 1px solid #667085; border-radius: .4rem; background: #101828; color: #f9fafb; font-size: .75rem; pointer-events: none; }}
-    @media (prefers-color-scheme: dark) {{ #diffgraph-graph {{ background: #101828; }} .module-label, .file-label, .symbol-label, .change-label, .toggle {{ fill: #eaecf0; }} }}
+    .file-container:hover > rect, .symbol-node:hover > rect {{ stroke-width: 3; }}
+    .file-container:focus > rect, .symbol-node:focus > rect {{ stroke: var(--focus); stroke-width: 3; }}
+    .graph-tooltip {{ position: absolute; z-index: 2; max-width: min(34rem, 80%); max-height: 18rem; margin: 0; padding: .65rem; overflow: auto; border: 1px solid var(--tooltip-border); border-radius: .4rem; background: var(--tooltip-bg); color: var(--tooltip-text); font-size: .75rem; pointer-events: none; }}
   </style>
 </head>
 <body>

@@ -91,6 +91,30 @@ def test_html_formatter_is_self_contained_interactive_and_uses_safe_details_api(
     assert "unsafe-inline" not in report.split("script-src", 1)[1].split("style-src", 1)[0]
 
 
+def test_html_formatter_graph_colors_follow_light_and_dark_themes():
+    artifact = ValidatedArtifact.from_value(golden_artifact())
+    report = HtmlFormatter(artifact).render()
+
+    script = re.search(r'<script>(.*?)</script>', report, re.DOTALL).group(1)
+    style = re.search(r'<style>(.*?)</style>', report, re.DOTALL).group(1)
+
+    # The script must not pin colors; fixed fills/strokes ignore the theme.
+    assert re.search(r"#[0-9a-fA-F]{3,8}\b", script) is None
+    assert re.search(r"\b(fill|stroke):\s*'", script) is None
+
+    # Every themed variable is defined for light and overridden for dark.
+    light_vars = set(re.findall(r"(--[\w-]+):", style.split("@media (prefers-color-scheme: dark)")[0]))
+    dark_block = style.split("@media (prefers-color-scheme: dark)", 1)[1]
+    dark_vars = set(re.findall(r"(--[\w-]+):", dark_block))
+    assert {"--graph-bg", "--node-bg", "--symbol-bg", "--edge", "--text-strong"} <= light_vars
+    assert light_vars == dark_vars
+    for selector in (".file-box", ".symbol-box", ".edge-line", ".edge-arrow", ".module-outline", ".file-label"):
+        rule = re.search(re.escape(selector) + r"\s*\{([^}]*)\}", style)
+        assert rule is not None, selector
+        assert "var(--" in rule.group(1), selector
+        assert re.search(r"#[0-9a-fA-F]{3,8}\b", rule.group(1)) is None, selector
+
+
 def test_html_formatter_csp_hash_allows_only_the_static_interactive_script():
     artifact = ValidatedArtifact.from_value(golden_artifact())
     report = HtmlFormatter(artifact).render()

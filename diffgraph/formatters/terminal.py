@@ -245,18 +245,24 @@ class TerminalFormatter:
             f["id"] for f in files if f.get("change_kind", "unchanged") != "unchanged"
         }
 
-        # Build import relationship index: target_file_id → set of source_file_ids
-        # (only structural/derived relationships, source must be in the diff)
+        # Build import relationship index: target symbol id → importing file ids.
+        # Only symbol-targeted edges count: a file-level import says the module
+        # is used, not which of its symbols, so it must not be credited to every
+        # changed symbol in that file. Edges from a file to its own import stubs
+        # are excluded because they describe the import, not a dependent.
+        symbols_by_id = {sym.get("id"): sym for sym in symbols}
         import_index: dict[str, set[str]] = {}
         for rel in relationships:
+            target = rel.get("target_id", "")
+            target_symbol = symbols_by_id.get(target)
             if (
                 rel.get("kind") == "imports"
                 and rel.get("analysis_source") in ("structural", "derived")
                 and rel.get("source_id") in changed_file_ids
+                and target_symbol is not None
+                and target_symbol.get("file_id") != rel.get("source_id")
             ):
-                target = rel.get("target_id", "")
-                if target:
-                    import_index.setdefault(target, set()).add(rel["source_id"])
+                import_index.setdefault(target, set()).add(rel["source_id"])
 
         ranked = RankedSymbols()
 
@@ -267,9 +273,15 @@ class TerminalFormatter:
                 ranked.context.append(_RankedSymbol(symbol=sym))
                 continue
 
-            # Compute importer paths (files in the diff that import this symbol's file)
-            sym_file_id = sym.get("file_id", "")
-            importer_file_ids = import_index.get(sym_file_id, set())
+            # Files in the diff that import this symbol, or the top-level
+            # declaration containing it (importing a class exposes its methods).
+            importer_file_ids: set[str] = set()
+            current = sym
+            seen: set = set()
+            while current is not None and current.get("id") not in seen:
+                seen.add(current.get("id"))
+                importer_file_ids |= import_index.get(current.get("id"), set())
+                current = symbols_by_id.get(current.get("parent_id"))
             importer_paths = [
                 file_id_to_path.get(fid, fid)
                 for fid in sorted(importer_file_ids)

@@ -864,12 +864,14 @@ def _resolved_import_paths(
 
 def _resolved_import_targets(
     parsed_files: Sequence[_ParsedFile],
+    kinds: Tuple[str, ...] = ("function", "class"),
 ) -> Dict[Tuple[str, Tuple[str, int]], Dict[str, str]]:
     """Resolve in-changeset ``from`` bindings without guessing package state.
 
     The map deliberately contains only a unique changed module and a unique
-    top-level declaration (when one is named).  The caller can otherwise retain
-    its local import stub, preserving the existing external-import behavior.
+    top-level declaration of one of ``kinds`` (when one is named).  The caller
+    can otherwise retain its local import stub, preserving the existing
+    external-import behavior.
     """
     modules = _module_map(parsed_files)
     import_paths = _resolved_import_paths(parsed_files)
@@ -895,7 +897,7 @@ def _resolved_import_targets(
                 if (
                     declaration is not None
                     and not has_duplicate
-                    and declaration.kind in ("function", "class")
+                    and declaration.kind in kinds
                 ):
                     bindings[binding] = _symbol_id(module_path, imported_name)
                     continue
@@ -1080,6 +1082,11 @@ def analyze_local_diff(
         )
     cross_import_paths = _resolved_import_paths(cross_file_parses)
     cross_import_targets = _resolved_import_targets(cross_file_parses)
+    # Import attribution is broader than call resolution: any unique top-level
+    # declaration can be imported by name, but only callables are call targets.
+    cross_import_declarations = _resolved_import_targets(
+        cross_file_parses, kinds=("function", "class", "constant", "type_alias")
+    )
 
     for entry in resolution.entries:
         path = entry.new_path or entry.old_path
@@ -1242,6 +1249,7 @@ def analyze_local_diff(
             },
         )
         resolved_import_occurrences: Dict[Tuple[str, str], int] = {}
+        resolved_binding_edges: set = set()
         for import_key in sorted(set(old_import_map) | set(new_import_map)):
             before = old_import_map.get(import_key)
             after = new_import_map.get(import_key)
@@ -1321,6 +1329,25 @@ def analyze_local_diff(
                         "label": "resolved module: " + module,
                     }
                 )
+                declarations = cross_import_declarations.get(
+                    (output_path, import_key), {}
+                )
+                for binding, declaration_id in sorted(declarations.items()):
+                    edge_id = "rel::file::{}->{}".format(output_path, declaration_id)
+                    if edge_id in resolved_binding_edges:
+                        continue
+                    resolved_binding_edges.add(edge_id)
+                    relationships.append(
+                        {
+                            "id": edge_id,
+                            "kind": "imports",
+                            "source_id": "file::" + output_path,
+                            "target_id": declaration_id,
+                            "analysis_source": "structural",
+                            "evidence": evidence,
+                            "label": "resolved binding: " + binding,
+                        }
+                    )
             elif after is not None:
                 relationships.append(
                     {
