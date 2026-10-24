@@ -1,8 +1,12 @@
 from pathlib import Path
+import subprocess
+import sys
+
 
 import pytest
 
 import build
+from diffgraph import __version__
 
 
 def test_release_build_command_does_not_add_data_files(tmp_path):
@@ -51,3 +55,16 @@ def test_release_build_rejects_checkout_or_ancestor_output_dir_before_cleanup(
 
     with pytest.raises(SystemExit, match="repository root or an ancestor"):
         build.main(["--output-dir", str(output_dir)])
+
+
+def test_native_binary_reports_version(tmp_path: Path) -> None:
+    pytest.importorskip("PyInstaller")
+    output_dir = tmp_path / "release"
+    subprocess.run(
+        [sys.executable, "build.py", "--output-dir", str(output_dir), "--name", "wild"],
+        check=True,
+        cwd=build.ROOT,
+    )
+    binary = output_dir / ("wild.exe" if sys.platform == "win32" else "wild")
+    result = subprocess.run([str(binary), "--version"], check=True, capture_output=True, text=True)
+    assert result.stdout.strip() == f"wild, version {__version__}"
