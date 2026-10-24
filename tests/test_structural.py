@@ -2478,3 +2478,21 @@ def test_inherits_edges_resolve_local_imported_and_outside_the_diff(tmp_path):
     assert evidence["line_start"] == 10 and evidence["snippet"].startswith("class Child(Base")
     outside = {item["path"]: item for item in artifact["files"]}
     assert outside["pkg/user.py"]["change_kind"] == "unchanged"
+
+
+def test_symbol_source_and_file_diff_split_lines_like_git(tmp_path):
+    """Form feeds must not shift spans; a missing final newline gets Git's marker."""
+    root = repo(tmp_path)
+    write(root, "mod.py", "\x0c\ndef page():\n    return 1\n\ndef last():\n    return 2")
+    git(root, "add", ".")
+    git(root, "commit", "-m", "base")
+    write(root, "mod.py", "\x0c\ndef page():\n    return 1\n\ndef last():\n    return 3")
+
+    artifact = analyze_local_diff(str(root))
+
+    symbols = {item["name"]: item for item in artifact["symbols"]}
+    assert symbols["last"]["source"]["after"] == {
+        "line_start": 5, "text": "def last():\n    return 3", "truncated": False,
+    }
+    unified = next(item for item in artifact["files"] if item["path"] == "mod.py")["diff"]["unified"]
+    assert "-    return 2\n\\ No newline at end of file\n+    return 3\n\\ No newline at end of file\n" in unified

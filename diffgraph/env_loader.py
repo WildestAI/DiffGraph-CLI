@@ -5,7 +5,7 @@ Handles loading .env files in both development and bundled environments.
 
 import os
 import sys
-from typing import List, Optional
+from typing import List, Optional, Set
 from dotenv import load_dotenv
 
 
@@ -38,9 +38,16 @@ def get_possible_env_paths() -> List[str]:
     return possible_paths
 
 
+# Names whose values came from a .env file rather than the process environment.
+# A .env can be supplied by an untrusted repository (the current directory), so
+# security-sensitive settings must ignore these; see diffgraph.relay.
+DOTENV_INJECTED: Set[str] = set()
+
+
 def load_env_file():
     """Load environment variables from .env file, handling both development and bundled environments."""
     env_loaded = False
+    before = set(os.environ)
 
     # Try each possible path
     for env_path in get_possible_env_paths():
@@ -52,6 +59,9 @@ def load_env_file():
     if not env_loaded:
         # Fallback: try to load from current directory (original behavior)
         load_dotenv()
+    # load_dotenv never overrides existing variables, so new names are exactly
+    # the ones a .env supplied.
+    DOTENV_INJECTED.update(set(os.environ) - before)
 
 
 def get_environment_debug_info() -> dict:

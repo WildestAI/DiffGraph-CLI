@@ -41,6 +41,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Selecting a symbol shows its exact before/after diff (folded context,
   unified or side by side); selecting a file shows its unified diff.
 
+### Security
+- `--llm` never takes the relay URL, relay token, or provider keys from a
+  `.env` file, which may come from an untrusted repository; a self-hosted relay
+  is accepted only from the shell environment or `~/.config/wild/byok-relay.json`.
+- AI summary text is stripped of control characters before terminal output.
+
 ### Fixed
 - Terminal "imported by" is credited per symbol instead of to every changed
   symbol in an imported file; import statements are no longer ranked as

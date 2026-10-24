@@ -300,17 +300,6 @@ def load_file_contents(changed_files: List[Dict[str, str]], diff_args: List[str]
 
     return files_with_content
 
-def _dotenv_values() -> Dict[str, Optional[str]]:
-    """Values from the .env file load_env_file() would use, without applying them."""
-    from dotenv import dotenv_values
-    from diffgraph.env_loader import get_possible_env_paths
-
-    for path in get_possible_env_paths():
-        if os.path.exists(path):
-            return dict(dotenv_values(path))
-    return {}
-
-
 def _stdin_is_interactive() -> bool:
     return sys.stdin.isatty()
 
@@ -350,7 +339,7 @@ def _enrich_with_llm(artifact, model: str):
                 "terminal to set up BYOK Relay, or set BYOK_RELAY_TOKEN"
             )
 
-    candidates = provider_key_candidates(provider, _dotenv_values())
+    candidates = provider_key_candidates(provider)
 
     def store_provider_key() -> None:
         click.echo(
@@ -378,7 +367,7 @@ def _enrich_with_llm(artifact, model: str):
         elif candidates:
             candidate = candidates[0]
             if not interactive or click.confirm(
-                f"Send {candidate.label}?", default=True, err=True
+                f"Send {candidate.label} to {base_url}?", default=True, err=True
             ):
                 click.echo(f"🔑 Using {candidate.label}.", err=True)
                 key = candidate.key
