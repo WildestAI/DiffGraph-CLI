@@ -755,18 +755,18 @@ def test_cli_git_passthrough_preserves_all(monkeypatch):
     assert calls == [["git", "branch", "--all"]]
 
 
-def test_cli_default_format_uses_canonical_html(tmp_path, monkeypatch):
+def test_cli_default_format_uses_terminal_stdout_without_creating_html(tmp_path, monkeypatch):
     from click.testing import CliRunner
     import diffgraph.cli as cli
 
     root = repo(tmp_path)
     monkeypatch.chdir(root)
 
-    result = CliRunner().invoke(cli.main, ["diff", "--no-open"])
+    result = CliRunner().invoke(cli.main, ["diff"])
 
     assert result.exit_code == 0, result.output
-    assert "HTML report generated" in result.stdout
-    assert (root / "diffgraph.html").exists()
+    assert "No changes in the selected snapshot." in result.stdout
+    assert not (root / "diffgraph.html").exists()
 
 
 def test_cli_legacy_html_retains_no_change_compatibility(monkeypatch):

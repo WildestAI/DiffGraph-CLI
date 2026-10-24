@@ -321,10 +321,10 @@ def load_file_contents(changed_files: List[Dict[str, str]], diff_args: List[str]
     type=click.Choice(
         ['html', 'terminal', 'json', 'legacy-html'], case_sensitive=False
     ),
-    default='html',
+    default='terminal',
     show_default=True,
     help=(
-        'Render a canonical local HTML, terminal, or JSON artifact; '
+        'Render a canonical local terminal, HTML, or JSON artifact; '
         'legacy-html retains the deprecated AI report for one compatibility release'
     ),
 )
@@ -350,12 +350,17 @@ def main(
     format_was_explicit = (
         context.get_parameter_source("output_format") != ParameterSource.DEFAULT
     )
+    # A destination implies the self-contained HTML report unless the caller
+    # explicitly selected another format. This keeps `wild diff -o report.html`
+    # ergonomic while the flagless command remains terminal-only.
+    if output is not None and not format_was_explicit:
+        output_format = "html"
+    canonical_output_requested = (
+        format_was_explicit or output is not None or structural_json is not None
+    )
     if structural_json is not None and (not args or args[0] != "diff"):
         raise click.UsageError("--structural-json can only be used with 'diff'")
-    if (
-        output_format in ("terminal", "json", "legacy-html")
-        or (output_format == "html" and format_was_explicit)
-    ) and (not args or args[0] != "diff"):
+    if canonical_output_requested and (not args or args[0] != "diff"):
         raise click.UsageError(f"--format {output_format} can only be used with 'diff'")
     if structural_json is not None and format_was_explicit:
         raise click.UsageError("--structural-json cannot be combined with --format")
@@ -363,11 +368,7 @@ def main(
         raise click.UsageError("--structural-json cannot be combined with --output")
     if output_format == "terminal" and output is not None:
         raise click.UsageError("--format terminal writes to stdout and cannot use --output")
-    if debug_env and (
-        structural_json is not None
-        or output_format in ("terminal", "json")
-        or (output_format == "html" and format_was_explicit)
-    ):
+    if debug_env and canonical_output_requested:
         raise click.UsageError(
             "--debug-env cannot be combined with canonical artifact output"
         )

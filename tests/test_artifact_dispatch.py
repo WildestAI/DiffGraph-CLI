@@ -120,6 +120,29 @@ def test_json_terminal_and_html_receive_the_exact_once_built_artifact(
     assert all(candidate is artifact for candidate in received.values())
 
 
+def test_output_path_without_explicit_format_selects_html(golden_artifact, monkeypatch, tmp_path):
+    artifact = ValidatedArtifact.from_value(golden_artifact)
+    received = {}
+
+    monkeypatch.setattr(cli, "is_git_repo", lambda: True)
+    monkeypatch.setattr(cli, "build_validated_artifact", lambda *args, **kwargs: artifact)
+
+    class RecordingHtml:
+        def __init__(self, candidate):
+            received["artifact"] = candidate
+
+        def write(self, destination):
+            received["destination"] = Path(destination)
+            return Path(destination).absolute()
+
+    monkeypatch.setattr("diffgraph.formatters.html.HtmlFormatter", RecordingHtml)
+    destination = tmp_path / "report.html"
+    result = CliRunner().invoke(cli.main, ["diff", "-o", str(destination), "--no-open"])
+
+    assert result.exit_code == 0, result.output
+    assert received == {"artifact": artifact, "destination": destination}
+
+
 def test_terminal_consumer_does_not_revalidate_branded_artifact(golden_artifact, monkeypatch):
     artifact = ValidatedArtifact.from_value(golden_artifact)
 
