@@ -8,6 +8,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- Callers outside the diff: unchanged files that call or import changed or
+  deleted declarations are found at the analyzed snapshot and included as
+  context files with their call sites (terminal "called outside the diff",
+  dashed boxes in the HTML graph).
 - Schema 2.1: changed symbols carry their exact before/after source, and
   text files carry a capped unified diff.
 - `wild diff --llm MODEL`: opt-in AI summaries for each changed file and

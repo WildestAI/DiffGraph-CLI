@@ -121,6 +121,8 @@ def _jobs(dg: dict) -> Tuple[List[_FileJob], List[Dict[str, str]]]:
     jobs: List[_FileJob] = []
     warnings: List[Dict[str, str]] = []
     for file_entry in dg["files"]:
+        if file_entry["change_kind"] == "unchanged":
+            continue  # context file outside the diff: nothing changed to summarize
         path = file_entry["path"]
         identity = _file_identity(file_entry)
         if identity is None:

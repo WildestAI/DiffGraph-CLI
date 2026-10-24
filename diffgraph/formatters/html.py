@@ -154,7 +154,10 @@ _INTERACTIVE_SCRIPT = textwrap.dedent(
       // per-file toggle so the change's dependency graph stays one click away.
       const changedSymbolIds = new Set(symbols.filter((symbol) => symbol.change_kind && symbol.change_kind !== 'unchanged').map((symbol) => symbol.id));
       // Import statements are real changes but low-signal; they wait behind ▾.
+      // Context files (outside the diff) exist only for their callers, so those show too.
+      const contextFileIds = new Set(files.filter((file) => file.change_kind === 'unchanged').map((file) => file.id));
       const relevantSymbolIds = new Set([...changedSymbolIds].filter((id) => symbolIndex.get(id).kind !== 'import'));
+      symbols.forEach((symbol) => { if (contextFileIds.has(symbol.file_id)) relevantSymbolIds.add(symbol.id); });
       [...relevantSymbolIds].forEach((id) => {
         let parent = symbolIndex.get(id).parent_id;
         while (parent && symbolIndex.has(parent) && !relevantSymbolIds.has(parent)) { relevantSymbolIds.add(parent); parent = symbolIndex.get(parent).parent_id; }
@@ -419,7 +422,8 @@ _INTERACTIVE_SCRIPT = textwrap.dedent(
           });
         } else if (fileIndex.has(selected.id)) {
           const file = fileIndex.get(selected.id);
-          parts.push(header('file', file.path || file.id, file.change_kind));
+          parts.push(header(contextFileIds.has(file.id) ? 'file outside the diff' : 'file', file.path || file.id, contextFileIds.has(file.id) ? null : file.change_kind));
+          if (contextFileIds.has(file.id)) parts.push(htmlEl('p', 'details-meta', 'Unchanged. Shown because it calls or imports changed code.'));
           const stats = [];
           if (file.old_path && file.old_path !== file.path) stats.push(`renamed from ${file.old_path}`);
           if (file.language) stats.push(file.language);
@@ -511,9 +515,10 @@ _INTERACTIVE_SCRIPT = textwrap.dedent(
             const symbolsHeight = symbolRows.reduce((total, row) => total + (row.summary ? 54 : 38), 0) + moreHeight;
             const height = collapsed || !fileSymbols.length ? headerHeight + 12 : Math.max(headerHeight + 28, headerHeight + symbolsHeight);
             const groupNode = svgEl('g', { class: 'file-container', tabindex: '0', role: 'button', 'aria-label': `Details for ${file.path || file.id}` });
-            groupNode.appendChild(svgEl('rect', { x: 48, y, width: 1080, height, rx: 10, class: `file-box ${changeClass(file.change_kind)}${isSelected(file.id) ? ' selected' : ''}` }));
+            const context = contextFileIds.has(file.id);
+            groupNode.appendChild(svgEl('rect', { x: 48, y, width: 1080, height, rx: 10, class: `file-box ${changeClass(file.change_kind)}${context ? ' context' : ''}${isSelected(file.id) ? ' selected' : ''}` }));
             addText(groupNode, file.path || file.id, 88, y + 29, 'file-label');
-            addText(groupNode, file.change_kind || 'unknown', 1014, y + 29, 'change-label');
+            addText(groupNode, context ? 'outside diff' : file.change_kind || 'unknown', context ? 1000 : 1014, y + 29, 'change-label');
             if (fileSummary) addText(groupNode, summaryLine(fileSummary, 150), 88, y + 52, 'summary-label');
             interactive(groupNode, file, () => select(file.id));
             viewport.appendChild(groupNode);
@@ -760,6 +765,7 @@ class HtmlFormatter:
     .ck-unchanged {{ stroke: var(--ck-unchanged); }} .change-dot.ck-unchanged {{ fill: var(--ck-unchanged); }}
     .ck-untracked {{ stroke: var(--ck-untracked); }} .change-dot.ck-untracked {{ fill: var(--ck-untracked); }}
     .ck-renamed {{ stroke: var(--ck-renamed); }} .change-dot.ck-renamed {{ fill: var(--ck-renamed); }}
+    .file-box.context {{ stroke-width: 2; stroke-dasharray: 7 5; fill: var(--graph-bg); }}
     .file-box.selected, .symbol-box.selected {{ stroke: var(--selected); stroke-width: 3; }}
     .edge {{ cursor: pointer; outline: none; }}
     .edge-hit {{ fill: none; stroke: transparent; stroke-width: 12; pointer-events: stroke; }}
@@ -808,6 +814,7 @@ class HtmlFormatter:
           <li>Select a file, symbol, or edge to see its details and exact diff here.</li>
           <li>Scroll to zoom; drag empty space to pan.</li>
           <li>▶/▼ collapses a file; ▾/▴ shows or hides its unchanged symbols.</li>
+          <li>Dashed files are outside the diff: they call or import changed code.</li>
         </ul>
         <div class="legend">
           <span class="badge ck-added">added</span><span class="badge ck-modified">modified</span><span class="badge ck-deleted">deleted</span><span class="badge ck-renamed">renamed</span><span class="badge ck-unchanged">unchanged</span>
@@ -824,6 +831,11 @@ class HtmlFormatter:
 """
 
     def _topbar(self, files: list[dict], symbols: list[dict], metadata: dict) -> str:
+        changed_files = sum(1 for item in files if item.get("change_kind") != "unchanged")
+        context_files = len(files) - changed_files
+        context_note = (
+            f" · {_plural(context_files, 'caller file')} outside the diff" if context_files else ""
+        )
         counts = {"added": 0, "modified": 0, "deleted": 0}
         for symbol in symbols:
             if symbol.get("change_kind") in counts and symbol.get("kind") != "import":
@@ -865,7 +877,7 @@ class HtmlFormatter:
             '<header class="topbar">'
             '<span class="brand">wild diff</span>'
             f'<span class="range">{_text(_diff_label(self.dg["diff_ref"]))}</span>'
-            f"<span>{_text(_plural(len(files), 'file'))} · {_text(symbol_counts)}</span>"
+            f"<span>{_text(_plural(changed_files, 'file'))} · {_text(symbol_counts)}{context_note}</span>"
             '<span class="spacer"></span>'
             f"{privacy}{warnings}{about}"
             "</header>"

@@ -122,15 +122,27 @@ of a commit range are required; implicit-ref forms are rejected.
 Python (`.py`) is the only language with structural symbol/import extraction in
 this baseline. Other changed files remain in `files[]` and receive a scoped
 `UNSUPPORTED_LANGUAGE` warning. Syntax/decoding failures receive a scoped
-`PARSE_FAILURE` warning and do not produce invented symbol changes. Import
-targets are explicitly labeled unresolved/external; no project-wide resolution
-is claimed. Python call edges are emitted only for bare calls that resolve to an
-unambiguous function or class in the same file. Attribute dispatch, imported
-calls, and names shadowed by parameters or local assignments remain absent
+`PARSE_FAILURE` warning and do not produce invented symbol changes. Imports
+of other changed Python files resolve to that file (and, for named imports, to
+the imported declaration); other imports are labeled unresolved/external.
+Python call edges are emitted only for bare calls that resolve unambiguously
+to a function or class in the same file or through such a resolved import.
+Attribute dispatch (`obj.method()`, `module.func()`) and names shadowed by
+parameters or local assignments remain absent
 rather than being guessed. Every file records old/new paths, modes, Git object
 IDs, and content SHA-256 values in structural evidence, while
 symbol/relationship evidence names the parser package, query revision, source
 blob identity, and exact call site where applicable.
+
+**Callers outside the diff.** Unchanged Python files anywhere in the
+repository (not limited by pathspecs) that call or import a changed or deleted
+top-level declaration are found at the same snapshot: the head commit for
+ranges, the index for staged and unstaged diffs. They are resolved with the
+same rules and added as context files (`change_kind: "unchanged"`) carrying
+only their calling symbols and the `calls`/`imports` edges into the change.
+The terminal lists them as "called outside the diff"; the HTML graph shows
+them as dashed boxes. The search covers at most 300 candidate files, with a
+`PARTIAL_ANALYSIS` warning beyond that.
 
 Unstaged analysis includes non-ignored ordinary untracked files as exact
 one-sided working-tree snapshots without modifying the index. Git ignore rules

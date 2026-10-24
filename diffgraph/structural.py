@@ -8,6 +8,8 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
+import subprocess
 import threading
 import time
 from difflib import SequenceMatcher, unified_diff
@@ -1063,6 +1065,249 @@ def _imported_call_targets(
     return targets
 
 
+MAX_CONTEXT_FILES = 300
+CONTEXT_TARGET_KINDS = ("function", "class", "constant", "type_alias")
+
+
+def _grep_candidate_paths(
+    root: str, names: Sequence[str], revision: Optional[str]
+) -> Optional[List[str]]:
+    """Python paths in the analyzed snapshot that mention any of ``names``.
+
+    ``revision`` is the head commit for ranges, or None for the index (staged
+    and unstaged snapshots: an unchanged tracked file's index content is its
+    working-tree content). Returns None when Git cannot search.
+    """
+    args = ["git", "grep", "-l", "-z", "-I", "-w", "-F"]
+    for name in sorted(set(names)):
+        args += ["-e", name]
+    args += [revision] if revision else ["--cached"]
+    args += ["--", "*.py", "*.pyi"]
+    try:
+        completed = subprocess.run(args, cwd=root, stdout=subprocess.PIPE, stderr=subprocess.PIPE, check=False)
+    except (OSError, ValueError):
+        return None
+    if completed.returncode == 1:  # git grep: no match
+        return []
+    if completed.returncode != 0:
+        return None
+    paths = []
+    prefix = (revision + ":").encode("ascii") if revision else b""
+    for raw in completed.stdout.split(b"\0"):
+        if not raw:
+            continue
+        if prefix and raw.startswith(prefix):
+            raw = raw[len(prefix):]
+        try:
+            paths.append(raw.decode("utf-8"))
+        except UnicodeDecodeError:
+            continue
+    return sorted(set(paths))
+
+
+def _read_snapshot_blobs(
+    root: str, paths: Sequence[str], revision: Optional[str]
+) -> Dict[str, Tuple[str, bytes]]:
+    """Read ``{path: (blob oid, bytes)}`` at the snapshot with one Git process."""
+    if not paths:
+        return {}
+    spec = (revision or "") + ":"
+    request = "".join(spec + path + "\n" for path in paths).encode("utf-8")
+    try:
+        completed = subprocess.run(
+            ["git", "cat-file", "--batch"], cwd=root, input=request,
+            stdout=subprocess.PIPE, stderr=subprocess.PIPE, check=False,
+        )
+    except (OSError, ValueError):
+        return {}
+    if completed.returncode != 0:
+        return {}
+    data, offset, blobs = completed.stdout, 0, {}
+    for path in paths:
+        end = data.find(b"\n", offset)
+        if end < 0:
+            break
+        header = data[offset:end].split()
+        offset = end + 1
+        if len(header) != 3 or header[1] != b"blob":
+            continue  # "<spec> missing" or a non-blob entry
+        size = int(header[2])
+        blobs[path] = (header[0].decode("ascii"), data[offset:offset + size])
+        offset += size + 1
+    return blobs
+
+
+def _merge_bindings(
+    primary: Dict[Tuple[str, int], Dict[str, str]],
+    fallback: Dict[Tuple[str, int], Dict[str, str]],
+    allowed: set,
+) -> Dict[Tuple[str, int], Dict[str, str]]:
+    """Add fallback bindings (deleted declarations) not resolved by primary."""
+    merged = {key: dict(value) for key, value in primary.items()}
+    for key, bindings in fallback.items():
+        for binding, target in bindings.items():
+            if target in allowed and binding not in merged.get(key, {}):
+                merged.setdefault(key, {})[binding] = target
+    return merged
+
+
+def _context_callers(
+    root: str,
+    revision: Optional[str],
+    changed_paths: set,
+    post_parses: List[_ParsedFile],
+    pre_parses: List[_ParsedFile],
+    pre_id_paths: Dict[str, str],
+    symbols: List[Dict],
+    warnings: List[Dict],
+) -> Tuple[List[Dict], List[Dict], List[Dict]]:
+    """Find callers and importers of changed declarations in unchanged files.
+
+    A changed signature is usually broken by a call site the diff did not
+    touch. Unchanged Python files mentioning a changed (or deleted) top-level
+    name are parsed at the same snapshot and resolved with the same
+    conservative rules as changed files; only resolved calls and named imports
+    of changed declarations are kept. Matching files are returned as context
+    files (``change_kind: "unchanged"``) with just their calling symbols.
+    """
+    target_ids = {
+        item["id"] for item in symbols
+        if item["change_kind"] != "unchanged" and item["kind"] != "import"
+    }
+    deleted_ids = {item["id"] for item in symbols if item["change_kind"] == "deleted"}
+    names = sorted({
+        item["name"] for item in symbols
+        if item["id"] in target_ids and item["parent_id"] is None
+        and item["kind"] in CONTEXT_TARGET_KINDS
+    })
+    if not names:
+        return [], [], []
+    candidates = _grep_candidate_paths(root, names, revision)
+    if candidates is None:
+        warnings.append(_warning("PARTIAL_ANALYSIS", None, "Callers outside the diff were not searched: git grep failed."))
+        return [], [], []
+    candidates = [
+        path for path in candidates
+        if path not in changed_paths and Path(path).suffix.lower() in PYTHON_SUFFIXES
+    ]
+    if len(candidates) > MAX_CONTEXT_FILES:
+        warnings.append(_warning(
+            "PARTIAL_ANALYSIS", None,
+            "Callers outside the diff were searched in the first {} of {} candidate files.".format(
+                MAX_CONTEXT_FILES, len(candidates)
+            ),
+        ))
+        candidates = candidates[:MAX_CONTEXT_FILES]
+
+    def translate(bindings: Dict[Tuple[str, int], Dict[str, str]]) -> Dict[Tuple[str, int], Dict[str, str]]:
+        # Pre-image ids use the old path; artifact ids use the output path.
+        out = {}
+        for key, values in bindings.items():
+            out[key] = {}
+            for binding, target in values.items():
+                for old_prefix, new_prefix in pre_id_paths.items():
+                    if target.startswith(old_prefix):
+                        target = new_prefix + target[len(old_prefix):]
+                        break
+                out[key][binding] = target
+        return out
+
+    files: List[Dict] = []
+    context_symbols: List[Dict] = []
+    relationships: List[Dict] = []
+    blobs = _read_snapshot_blobs(root, candidates, revision)
+    for path in candidates:
+        if path not in blobs:
+            continue
+        oid, content = blobs[path]
+        try:
+            new_symbols, new_imports, calls, bindings, rebindings = _parse_python(content)
+        except (StructuralDependencyError, UnicodeDecodeError, ValueError, RuntimeError, TypeError):
+            continue  # an unparseable unchanged file says nothing about the diff
+        parsed = _ParsedFile(path, new_symbols, new_imports)
+
+        def own(resolved: Dict) -> Dict[Tuple[str, int], Dict[str, str]]:
+            return {key: value for (source, key), value in resolved.items() if source == path}
+
+        call_bindings = _merge_bindings(
+            own(_resolved_import_targets(post_parses + [parsed])),
+            translate(own(_resolved_import_targets(pre_parses + [parsed]))),
+            deleted_ids,
+        )
+        declaration_bindings = _merge_bindings(
+            own(_resolved_import_targets(post_parses + [parsed], kinds=CONTEXT_TARGET_KINDS)),
+            translate(own(_resolved_import_targets(pre_parses + [parsed], kinds=CONTEXT_TARGET_KINDS))),
+            deleted_ids,
+        )
+        import_map = _keyed_imports(new_imports)
+        imported = _imported_call_targets(import_map, rebindings, call_bindings)
+        symbol_map = {item.qualified_name: item for item in new_symbols}
+
+        edges: List[Dict] = []
+        callers: set = set()
+        occurrences: Dict[Tuple[str, str], int] = {}
+        for call in calls:
+            target = _resolve_call_target(call, symbol_map, bindings, imported)
+            if target not in target_ids:
+                continue
+            source = _symbol_id(path, call.caller) if call.caller is not None else "file::" + path
+            if call.caller is not None:
+                callers.add(call.caller)
+            occurrence = occurrences.get((source, target), 0)
+            occurrences[(source, target)] = occurrence + 1
+            edges.append({
+                "id": "rel::{}->{}{}".format(source, target, "" if occurrence == 0 else "#{}".format(occurrence)),
+                "kind": "calls", "source_id": source, "target_id": target,
+                "analysis_source": "structural", "resolution_method": "resolved", "confidence": None,
+                "evidence": [{
+                    "kind": "call_site", "file": path, "line_start": call.line, "line_end": call.line,
+                    "snippet": call.snippet, "detail": _parser_provenance(oid),
+                }],
+            })
+        seen_imports: set = set()
+        for key, item in sorted(import_map.items()):
+            for binding, target in sorted(declaration_bindings.get(key, {}).items()):
+                edge_id = "rel::file::{}->{}".format(path, target)
+                if target not in target_ids or edge_id in seen_imports:
+                    continue
+                seen_imports.add(edge_id)
+                edges.append({
+                    "id": edge_id, "kind": "imports", "source_id": "file::" + path, "target_id": target,
+                    "analysis_source": "structural", "label": "resolved binding: " + binding,
+                    "evidence": [{
+                        "kind": "import_statement", "file": path, "line_start": item.line,
+                        "line_end": item.line, "snippet": item.snippet, "detail": _parser_provenance(oid),
+                    }],
+                })
+        if not edges:
+            continue
+
+        # Keep each caller's enclosing declarations so parent ids resolve.
+        keep: set = set()
+        for qname in callers:
+            while qname is not None and qname not in keep and qname in symbol_map:
+                keep.add(qname)
+                qname = symbol_map[qname].parent
+        for qname in sorted(keep):
+            item = symbol_map[qname]
+            context_symbols.append({
+                "id": _symbol_id(path, qname), "name": item.name, "qualified_name": qname,
+                "file_id": "file::" + path, "kind": item.kind,
+                "parent_id": _symbol_id(path, item.parent) if item.parent else None,
+                "change_kind": "unchanged", "analysis_source": "structural",
+                "location": {"file": path, "line_start": item.start_line, "line_end": item.end_line},
+                "evidence": _evidence(path, item, oid),
+            })
+        files.append({
+            "id": "file::" + path, "path": path, "old_path": None, "language": "python",
+            "change_kind": "unchanged", "lines_added": 0, "lines_removed": 0,
+            "analysis_source": "structural",
+            "evidence": [{"kind": "ast_parse", "file": path, "detail": _parser_provenance(oid)}],
+        })
+        relationships.extend(edges)
+    return files, context_symbols, relationships
+
+
 def analyze_local_diff(
     repository: str = ".", *, staged: bool = False,
     pathspecs: Optional[Sequence[str]] = None,
@@ -1130,6 +1375,29 @@ def analyze_local_diff(
         cross_file_parses.append(
             _ParsedFile(candidate_path, new_symbols, new_imports)
         )
+    # Pre-image parses let callers outside the diff resolve to deleted
+    # declarations, the most direct way an untouched call site breaks.
+    pre_change_parses: List[_ParsedFile] = []
+    pre_change_id_paths: Dict[str, str] = {}
+    for candidate in resolution.entries:
+        old_path = candidate.old_path
+        if (
+            old_path is None or candidate.old_oid is None
+            or candidate.old_mode == "160000"
+            or Path(old_path).suffix.lower() not in PYTHON_SUFFIXES
+        ):
+            continue
+        try:
+            old_symbols, old_imports, _c, _b, _r = _parse_python(_blob(root, candidate.old_oid))
+        except (
+            OSError, GitSnapshotError, StructuralDependencyError,
+            UnicodeDecodeError, ValueError, RuntimeError, TypeError,
+        ):
+            continue
+        pre_change_parses.append(_ParsedFile(old_path, old_symbols, old_imports))
+        output = candidate.new_path or old_path
+        if output != old_path:
+            pre_change_id_paths["sym::{}::".format(old_path)] = "sym::{}::".format(output)
     cross_import_paths = _resolved_import_paths(cross_file_parses)
     cross_import_targets = _resolved_import_targets(cross_file_parses)
     # Import attribution is broader than call resolution: any unique top-level
@@ -1467,6 +1735,20 @@ def analyze_local_diff(
                     ],
                 }
             )
+
+    context_files, context_symbols, context_relationships = _context_callers(
+        root,
+        resolution.head_oid if is_commit_range else None,
+        {path for entry in resolution.entries for path in (entry.old_path, entry.new_path) if path},
+        cross_file_parses,
+        pre_change_parses,
+        pre_change_id_paths,
+        symbols,
+        warnings,
+    )
+    files.extend(context_files)
+    symbols.extend(context_symbols)
+    relationships.extend(context_relationships)
 
     files.sort(key=lambda item: item["path"])
     symbols.sort(key=lambda item: item["id"])
