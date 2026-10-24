@@ -826,6 +826,27 @@ def _relative_module_name(source_path: str, module: str) -> Optional[str]:
     return ".".join((*prefix, *suffix))
 
 
+def _import_module_path(
+    modules: Dict[str, Optional[str]], module: str, item: _Import
+) -> Optional[str]:
+    """Resolve an import's module, including one changed namespace child.
+
+    ``from package import child`` is a valid import of ``package.child`` even
+    when no ``package/__init__.py`` appears in the selected changeset.  A
+    single child path is safe to use for the statement-level import edge;
+    multiple children remain unresolved rather than being collapsed together.
+    """
+    direct_path = modules.get(module)
+    if direct_path is not None:
+        return direct_path
+    child_paths = {
+        modules.get("{}.{}".format(module, imported_name))
+        for imported_name in item.imported_names
+        if modules.get("{}.{}".format(module, imported_name)) is not None
+    }
+    return next(iter(child_paths)) if len(child_paths) == 1 else None
+
+
 def _resolved_import_paths(
     parsed_files: Sequence[_ParsedFile],
 ) -> Dict[Tuple[str, Tuple[str, int]], str]:
@@ -835,7 +856,7 @@ def _resolved_import_paths(
     for parsed in parsed_files:
         for key, item in _keyed_imports(parsed.new_imports).items():
             module = _relative_module_name(parsed.path, item.module)
-            target_path = modules.get(module) if module else None
+            target_path = _import_module_path(modules, module, item) if module else None
             if target_path is not None:
                 result[(parsed.path, key)] = target_path
     return result
@@ -853,7 +874,7 @@ def _resolved_import_targets(
     modules = _module_map(parsed_files)
     import_paths = _resolved_import_paths(parsed_files)
     symbols_by_path = {
-        parsed.path: {symbol.qualified_name for symbol in parsed.new_symbols}
+        parsed.path: {symbol.qualified_name: symbol for symbol in parsed.new_symbols}
         for parsed in parsed_files
     }
     resolved: Dict[Tuple[str, Tuple[str, int]], Dict[str, str]] = {}
@@ -871,14 +892,14 @@ def _resolved_import_targets(
                 if imported_name == item.module:
                     bindings[binding] = "file::" + module_path
                     continue
-                if imported_name in symbols_by_path[module_path]:
+                declaration = symbols_by_path[module_path].get(imported_name)
+                if declaration is not None and declaration.kind in ("function", "class"):
                     bindings[binding] = _symbol_id(module_path, imported_name)
                     continue
-                child_path = modules.get("{}.{}".format(module, imported_name))
-                if child_path is not None:
-                    bindings[binding] = "file::" + child_path
-                else:
-                    bindings[binding] = "file::" + module_path
+                # Only callable declarations can be targets of a ``calls``
+                # edge.  Non-declarations and child modules retain their local
+                # import stubs, which is more truthful than emitting a call to
+                # a file node.
             if bindings:
                 resolved[(parsed.path, key)] = bindings
     return resolved
@@ -1262,6 +1283,23 @@ def analyze_local_diff(
                 if after is not None
                 else None
             )
+            # Retain the local import evidence node even for an internal
+            # module edge: unresolved/non-callable bindings may still refer to
+            # it as a conservative call target.
+            symbols.append(
+                {
+                    "id": target,
+                    "name": module,
+                    "qualified_name": qualified_name,
+                    "file_id": "file::" + output_path,
+                    "kind": "import",
+                    "parent_id": None,
+                    "change_kind": import_kind,
+                    "analysis_source": "structural",
+                    "location": location,
+                    "evidence": evidence,
+                }
+            )
             if resolved_path is not None:
                 relationships.append(
                     {
@@ -1276,36 +1314,18 @@ def analyze_local_diff(
                         "label": "resolved module: " + module,
                     }
                 )
-            else:
-                # Keep a local evidence node for external, ambiguous, deleted,
-                # and otherwise unresolved imports.  Internal module edges are
-                # represented directly by their file target above.
-                symbols.append(
+            elif after is not None:
+                relationships.append(
                     {
-                        "id": target,
-                        "name": module,
-                        "qualified_name": qualified_name,
-                        "file_id": "file::" + output_path,
-                        "kind": "import",
-                        "parent_id": None,
-                        "change_kind": import_kind,
+                        "id": "rel::file::{}->{}".format(output_path, target),
+                        "kind": "imports",
+                        "source_id": "file::" + output_path,
+                        "target_id": target,
                         "analysis_source": "structural",
-                        "location": location,
                         "evidence": evidence,
+                        "label": "unresolved/external module: " + module,
                     }
                 )
-                if after is not None:
-                    relationships.append(
-                        {
-                            "id": "rel::file::{}->{}".format(output_path, target),
-                            "kind": "imports",
-                            "source_id": "file::" + output_path,
-                            "target_id": target,
-                            "analysis_source": "structural",
-                            "evidence": evidence,
-                            "label": "unresolved/external module: " + module,
-                        }
-                    )
 
         call_occurrences: Dict[Tuple[str, str], int] = {}
         for call in new_calls:

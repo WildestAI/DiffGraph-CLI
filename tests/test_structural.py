@@ -1648,18 +1648,52 @@ def test_changeset_python_imports_resolve_across_files_conservatively(tmp_path):
     assert (
         "imports", "file::fallback.py", "file::package/worker.py"
     ) in relationships
+    # A name that is not a callable declaration must retain the local import
+    # stub; a call edge must never point at a file node.
     assert (
-        "calls", "sym::fallback.py::caller", "file::package/worker.py"
+        "calls", "sym::fallback.py::caller",
+        "sym::fallback.py::import::package.worker",
     ) in relationships
-    # The explicit external import stays represented by its local stub, while
-    # the internal import resolves directly to the changed target module.
+    assert relationships[(
+        "calls", "sym::fallback.py::caller",
+        "sym::fallback.py::import::package.worker",
+    )]["resolution_method"] == "import_grounded"
+    # The explicit external import and non-callable import stay represented by
+    # local stubs, while callable internal imports resolve directly.
     symbol_ids = {item["id"] for item in artifact["symbols"]}
     assert "sym::package/client.py::import::remote.worker" in symbol_ids
-    assert "sym::package/client.py::import::.worker" not in symbol_ids
+    assert "sym::package/client.py::import::.worker" in symbol_ids
+    assert "sym::fallback.py::import::package.worker" in symbol_ids
     assert not any(
         item["kind"] == "calls"
         and item["source_id"] == "sym::package/client.py::shadowed"
         for item in artifact["relationships"]
+    )
+
+
+def test_namespace_package_child_imports_resolve_without_init_files(tmp_path):
+    """Absolute and relative child imports resolve across namespace packages."""
+    root = repo(tmp_path)
+    write(root, "package/worker.py", "def run():\n    return 1\n")
+    write(root, "absolute.py", "from package import worker\n")
+    write(root, "package/relative.py", "from . import worker\n")
+    git(root, "add", "package", "absolute.py")
+
+    artifact = analyze_local_diff(str(root), staged=True)
+
+    assert_valid(artifact)
+    imports = {
+        (item["source_id"], item["target_id"]): item
+        for item in artifact["relationships"]
+        if item["kind"] == "imports"
+    }
+    assert ("file::absolute.py", "file::package/worker.py") in imports
+    assert ("file::package/relative.py", "file::package/worker.py") in imports
+    assert imports[("file::absolute.py", "file::package/worker.py")]["label"] == (
+        "resolved module: package"
+    )
+    assert imports[("file::package/relative.py", "file::package/worker.py")]["label"] == (
+        "resolved module: ."
     )
 
 
