@@ -1,6 +1,8 @@
 """Golden and CLI contracts for canonical HTML artifact consumption."""
 from __future__ import annotations
 
+import base64
+import hashlib
 import json
 import re
 import subprocess
@@ -65,11 +67,40 @@ def test_html_formatter_renders_complete_golden_artifact_without_inference():
     assert "likely impact" not in report.lower()
     assert "AI analysis" not in report
     assert "https://" not in report
-    assert (
-        "Content-Security-Policy\" content=\"default-src 'none'; "
-        "style-src 'unsafe-inline'; img-src data:; base-uri 'none'; "
-        "form-action 'none'"
-    ) in report
+    assert "Content-Security-Policy\" content=\"default-src 'none';" in report
+    assert "script-src 'sha256-" in report
+    assert "style-src 'unsafe-inline'; img-src data:; base-uri 'none'; form-action 'none'" in report
+    assert "https://" not in report
+
+
+def test_html_formatter_is_self_contained_interactive_and_uses_safe_details_api():
+    artifact = ValidatedArtifact.from_value(golden_artifact())
+
+    report = HtmlFormatter(artifact).render()
+
+    assert 'id="diffgraph-graph"' in report
+    assert "Interactive graph" in report
+    assert "module-container" in report
+    assert "file-container" in report
+    assert "symbol-node" in report
+    assert "Scroll to zoom, drag blank space to pan" in report
+    assert "state.collapsed" in report
+    assert "textContent = JSON.stringify(value, null, 2)" in report
+    assert "innerHTML" not in report
+    assert "cdn" not in report.lower()
+    assert "unsafe-inline" not in report.split("script-src", 1)[1].split("style-src", 1)[0]
+
+
+def test_html_formatter_csp_hash_allows_only_the_static_interactive_script():
+    artifact = ValidatedArtifact.from_value(golden_artifact())
+    report = HtmlFormatter(artifact).render()
+
+    script_match = re.search(r'<script>(.*?)</script>', report, re.DOTALL)
+    csp_match = re.search(r"script-src 'sha256-([^']+)'", report)
+    assert script_match is not None
+    assert csp_match is not None
+    digest = base64.b64encode(hashlib.sha256(script_match.group(1).encode()).digest()).decode()
+    assert csp_match.group(1) == digest
 
 
 def test_html_formatter_sorts_topology_and_escapes_artifact_text():
