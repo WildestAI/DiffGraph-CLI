@@ -885,21 +885,23 @@ def _resolved_import_targets(
             if not module or module_path is None:
                 continue
             bindings: Dict[str, str] = {}
+            declarations = symbols_by_path[module_path]
             for binding, imported_name in zip(item.bindings, item.imported_names):
-                # ``import package`` binds a module object, not a named symbol.
-                # File-level resolution is still useful, but only an explicit
-                # ``from`` item may resolve to a declaration symbol.
-                if imported_name == item.module:
-                    bindings[binding] = "file::" + module_path
-                    continue
-                declaration = symbols_by_path[module_path].get(imported_name)
-                if declaration is not None and declaration.kind in ("function", "class"):
+                declaration = declarations.get(imported_name)
+                has_duplicate = any(
+                    qualified_name.startswith(imported_name + "#")
+                    for qualified_name in declarations
+                )
+                if (
+                    declaration is not None
+                    and not has_duplicate
+                    and declaration.kind in ("function", "class")
+                ):
                     bindings[binding] = _symbol_id(module_path, imported_name)
                     continue
-                # Only callable declarations can be targets of a ``calls``
-                # edge.  Non-declarations and child modules retain their local
-                # import stubs, which is more truthful than emitting a call to
-                # a file node.
+                # Only unique callable declarations can be targets of a
+                # ``calls`` edge. Non-declarations, module objects, and
+                # ambiguous declarations retain their local import stubs.
             if bindings:
                 resolved[(parsed.path, key)] = bindings
     return resolved
@@ -1239,6 +1241,7 @@ def analyze_local_diff(
                 if source_path == output_path
             },
         )
+        resolved_import_occurrences: Dict[Tuple[str, str], int] = {}
         for import_key in sorted(set(old_import_map) | set(new_import_map)):
             before = old_import_map.get(import_key)
             after = new_import_map.get(import_key)
@@ -1301,10 +1304,14 @@ def analyze_local_diff(
                 }
             )
             if resolved_path is not None:
+                edge_key = (output_path, resolved_path)
+                occurrence = resolved_import_occurrences.get(edge_key, 0)
+                resolved_import_occurrences[edge_key] = occurrence + 1
+                edge_suffix = "" if occurrence == 0 else "#{}".format(occurrence)
                 relationships.append(
                     {
-                        "id": "rel::file::{}->file::{}".format(
-                            output_path, resolved_path
+                        "id": "rel::file::{}->file::{}{}".format(
+                            output_path, resolved_path, edge_suffix
                         ),
                         "kind": "imports",
                         "source_id": "file::" + output_path,
