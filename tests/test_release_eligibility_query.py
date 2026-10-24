@@ -41,3 +41,13 @@ def test_release_eligibility_query_requests_every_fail_closed_page_boundary():
     # connection. Keep every corresponding pageInfo request in the query.
     assert query.count("pageInfo {") == 4
     assert query.count("hasNextPage") == 4
+
+
+def test_release_workflow_configures_identity_before_annotated_tag():
+    workflow = WORKFLOW.read_text()
+    tag_step = workflow.index('git tag -a "$TAG"')
+    assert workflow.index('git config user.name "github-actions[bot]"') < tag_step
+    assert (
+        'git config user.email "41898282+github-actions[bot]@users.noreply.github.com"'
+        in workflow
+    )
