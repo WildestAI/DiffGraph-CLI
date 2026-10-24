@@ -1596,6 +1596,73 @@ def test_relative_from_imports_preserve_package_evidence_and_call_bindings(tmp_p
     assert calls[0]["evidence"][0]["snippet"] == "run_local()"
 
 
+def test_changeset_python_imports_resolve_across_files_conservatively(tmp_path):
+    """Changed package modules provide deterministic import and call targets."""
+    root = repo(tmp_path)
+    write(
+        root,
+        "package/worker.py",
+        "def run():\n"
+        "    return 1\n",
+    )
+    write(
+        root,
+        "package/client.py",
+        "from .worker import run as run_worker\n"
+        "from remote.worker import execute as run_remote\n\n"
+        "def caller():\n"
+        "    run_worker()\n"
+        "    run_remote()\n\n"
+        "def shadowed():\n"
+        "    run_worker = lambda: None\n"
+        "    run_worker()\n",
+    )
+    write(
+        root,
+        "fallback.py",
+        "from package.worker import not_a_declaration\n\n"
+        "def caller():\n"
+        "    not_a_declaration()\n",
+    )
+    git(root, "add", "package", "fallback.py")
+
+    artifact = analyze_local_diff(str(root), staged=True)
+
+    assert_valid(artifact)
+    relationships = {
+        (item["kind"], item["source_id"], item["target_id"]): item
+        for item in artifact["relationships"]
+    }
+    assert (
+        "imports", "file::package/client.py", "file::package/worker.py"
+    ) in relationships
+    assert relationships[(
+        "imports", "file::package/client.py", "file::package/worker.py"
+    )]["label"] == "resolved module: .worker"
+    assert (
+        "calls", "sym::package/client.py::caller", "sym::package/worker.py::run"
+    ) in relationships
+    assert relationships[(
+        "calls", "sym::package/client.py::caller", "sym::package/worker.py::run"
+    )]["resolution_method"] == "resolved"
+    assert (
+        "imports", "file::fallback.py", "file::package/worker.py"
+    ) in relationships
+    assert (
+        "calls", "sym::fallback.py::caller", "file::package/worker.py"
+    ) in relationships
+    # The explicit external import stays represented by its local stub, while
+    # the internal import resolves directly to the changed target module.
+    symbol_ids = {item["id"] for item in artifact["symbols"]}
+    assert "sym::package/client.py::import::remote.worker" in symbol_ids
+    assert "sym::package/client.py::import::.worker" not in symbol_ids
+    assert not any(
+        item["kind"] == "calls"
+        and item["source_id"] == "sym::package/client.py::shadowed"
+        for item in artifact["relationships"]
+    )
+
+
 def test_as_pattern_bindings_do_not_create_import_grounded_call_edges(tmp_path):
     """with/except aliases shadow imports before their bodies execute."""
     root = repo(tmp_path)
