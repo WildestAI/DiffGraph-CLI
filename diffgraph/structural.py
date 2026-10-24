@@ -86,7 +86,17 @@ class _Import:
     position: int
     snippet: str
     bindings: Tuple[str, ...]
+    imported_names: Tuple[str, ...]
     scope: Optional[str]
+
+
+@dataclass(frozen=True)
+class _ParsedFile:
+    """Exact post-change parse state retained for cross-file resolution."""
+
+    path: str
+    new_symbols: List[_Symbol]
+    new_imports: List[_Import]
 
 
 @dataclass(frozen=True)
@@ -493,8 +503,8 @@ def _parse_python(
                         # ``import package.submodule`` binds ``package``.
                         binding = raw.split(".", 1)[0]
                     imports.append(_Import(
-                        raw, node.start_point[0] + 1, node.end_byte, snippet, (binding,),
-                        parents[-1][0] if parents else None,
+                        raw, node.start_point[0] + 1, node.end_byte, snippet,
+                        (binding,), (raw,), parents[-1][0] if parents else None,
                     ))
             else:
                 # Tree-sitter exposes absolute modules through ``module_name``
@@ -511,7 +521,8 @@ def _parse_python(
                     )
                 )
                 if module_node is not None:
-                    imported = []
+                    bindings_for_import = []
+                    imported_names = []
                     after_import = False
                     for child in node.children:
                         if child.type == "import":
@@ -522,13 +533,19 @@ def _parse_python(
                         ):
                             continue
                         if child.type == "aliased_import":
-                            imported.append(_node_text(content, child.children[-1]))
+                            name_node = child.child_by_field_name("name")
+                            if name_node is None:
+                                raise ValueError("aliased import has no name")
+                            imported_names.append(_node_text(content, name_node))
+                            bindings_for_import.append(_node_text(content, child.children[-1]))
                         else:
-                            imported.append(_node_text(content, child).split(".", 1)[0])
+                            name = _node_text(content, child)
+                            imported_names.append(name)
+                            bindings_for_import.append(name.split(".", 1)[0])
                     imports.append(_Import(
                         _node_text(content, module_node), node.start_point[0] + 1,
-                        node.end_byte, snippet, tuple(imported),
-                        parents[-1][0] if parents else None,
+                        node.end_byte, snippet, tuple(bindings_for_import),
+                        tuple(imported_names), parents[-1][0] if parents else None,
                     ))
         elif not parents and node.type in (
             "assignment", "annotated_assignment", "type_alias_statement"
@@ -773,6 +790,123 @@ def _keyed_imports(items: List[_Import]) -> Dict[Tuple[str, int], _Import]:
     return result
 
 
+def _module_name_for_path(path: str) -> str:
+    """Return the conventional dotted module spelling for a Python path."""
+    candidate = Path(path)
+    parts = list(candidate.with_suffix("").parts)
+    if parts and parts[-1] == "__init__":
+        parts.pop()
+    return ".".join(parts)
+
+
+def _module_map(parsed_files: Sequence[_ParsedFile]) -> Dict[str, Optional[str]]:
+    """Map changed Python modules to one path, or ``None`` when ambiguous."""
+    paths: Dict[str, List[str]] = {}
+    for parsed in parsed_files:
+        module = _module_name_for_path(parsed.path)
+        if module:
+            paths.setdefault(module, []).append(parsed.path)
+    return {
+        module: candidates[0] if len(candidates) == 1 else None
+        for module, candidates in paths.items()
+    }
+
+
+def _relative_module_name(source_path: str, module: str) -> Optional[str]:
+    """Resolve a relative import spelling against its source package path."""
+    dots = len(module) - len(module.lstrip("."))
+    if not dots:
+        return module
+    source_parts = list(Path(source_path).with_suffix("").parts)
+    package = source_parts if source_parts[-1] == "__init__" else source_parts[:-1]
+    if dots - 1 > len(package):
+        return None
+    prefix = package[: len(package) - (dots - 1)]
+    suffix = module[dots:].split(".") if module[dots:] else []
+    return ".".join((*prefix, *suffix))
+
+
+def _import_module_path(
+    modules: Dict[str, Optional[str]], module: str, item: _Import
+) -> Optional[str]:
+    """Resolve an import's module, including one changed namespace child.
+
+    ``from package import child`` is a valid import of ``package.child`` even
+    when no ``package/__init__.py`` appears in the selected changeset.  A
+    single child path is safe to use for the statement-level import edge;
+    multiple children remain unresolved rather than being collapsed together.
+    """
+    direct_path = modules.get(module)
+    if direct_path is not None:
+        return direct_path
+    child_paths = {
+        modules.get("{}.{}".format(module, imported_name))
+        for imported_name in item.imported_names
+        if modules.get("{}.{}".format(module, imported_name)) is not None
+    }
+    return next(iter(child_paths)) if len(child_paths) == 1 else None
+
+
+def _resolved_import_paths(
+    parsed_files: Sequence[_ParsedFile],
+) -> Dict[Tuple[str, Tuple[str, int]], str]:
+    """Resolve import modules to unique changed Python paths."""
+    modules = _module_map(parsed_files)
+    result: Dict[Tuple[str, Tuple[str, int]], str] = {}
+    for parsed in parsed_files:
+        for key, item in _keyed_imports(parsed.new_imports).items():
+            module = _relative_module_name(parsed.path, item.module)
+            target_path = _import_module_path(modules, module, item) if module else None
+            if target_path is not None:
+                result[(parsed.path, key)] = target_path
+    return result
+
+
+def _resolved_import_targets(
+    parsed_files: Sequence[_ParsedFile],
+) -> Dict[Tuple[str, Tuple[str, int]], Dict[str, str]]:
+    """Resolve in-changeset ``from`` bindings without guessing package state.
+
+    The map deliberately contains only a unique changed module and a unique
+    top-level declaration (when one is named).  The caller can otherwise retain
+    its local import stub, preserving the existing external-import behavior.
+    """
+    modules = _module_map(parsed_files)
+    import_paths = _resolved_import_paths(parsed_files)
+    symbols_by_path = {
+        parsed.path: {symbol.qualified_name: symbol for symbol in parsed.new_symbols}
+        for parsed in parsed_files
+    }
+    resolved: Dict[Tuple[str, Tuple[str, int]], Dict[str, str]] = {}
+    for parsed in parsed_files:
+        for key, item in _keyed_imports(parsed.new_imports).items():
+            module = _relative_module_name(parsed.path, item.module)
+            module_path = import_paths.get((parsed.path, key))
+            if not module or module_path is None:
+                continue
+            bindings: Dict[str, str] = {}
+            declarations = symbols_by_path[module_path]
+            for binding, imported_name in zip(item.bindings, item.imported_names):
+                declaration = declarations.get(imported_name)
+                has_duplicate = any(
+                    qualified_name.startswith(imported_name + "#")
+                    for qualified_name in declarations
+                )
+                if (
+                    declaration is not None
+                    and not has_duplicate
+                    and declaration.kind in ("function", "class")
+                ):
+                    bindings[binding] = _symbol_id(module_path, imported_name)
+                    continue
+                # Only unique callable declarations can be targets of a
+                # ``calls`` edge. Non-declarations, module objects, and
+                # ambiguous declarations retain their local import stubs.
+            if bindings:
+                resolved[(parsed.path, key)] = bindings
+    return resolved
+
+
 def _resolve_call_target(
     call: _Call,
     symbols: Dict[str, _Symbol],
@@ -842,6 +976,7 @@ def _resolve_call_target(
 def _imported_call_targets(
     imports: Dict[Tuple[str, int], _Import],
     rebindings: List[Tuple[Optional[str], str, int]],
+    resolved_targets: Optional[Dict[Tuple[str, int], Dict[str, str]]] = None,
 ) -> Dict[Optional[str], Dict[str, List[Tuple[int, Optional[str]]]]]:
     """Map import bindings to conservative, lexical and line-aware histories.
 
@@ -855,13 +990,15 @@ def _imported_call_targets(
     for (module, occurrence), item in imports.items():
         suffix = "" if occurrence == 0 else "#{}".format(occurrence)
         target = "import::{}{}".format(module, suffix)
+        resolved_bindings = (resolved_targets or {}).get((module, occurrence), {})
         scope_targets = targets.setdefault(item.scope, {})
         scope_bindings = imported_bindings.setdefault(item.scope, set())
         for binding in item.bindings:
             # A later import of the same local name is intentionally
             # unresolved, but calls before it retain the earlier binding.
             scope_targets.setdefault(binding, []).append((
-                item.position, None if binding in scope_bindings else target
+                item.position,
+                None if binding in scope_bindings else resolved_bindings.get(binding, target),
             ))
             scope_bindings.add(binding)
     for scope, binding, position in rebindings:
@@ -906,6 +1043,43 @@ def analyze_local_diff(
     symbols: List[Dict] = []
     relationships: List[Dict] = []
     analyzed = skipped = 0
+
+    # Build a closed-world module map before emitting relationships.  It covers
+    # every changed Python post-image, so a source file can resolve an import
+    # regardless of diff ordering without reading arbitrary repository files.
+    # This preserves the artifact's changeset scope and makes duplicate module
+    # names deliberately unresolved rather than guessed.
+    cross_file_parses: List[_ParsedFile] = []
+    for candidate in resolution.entries:
+        candidate_path = candidate.new_path
+        if (
+            candidate_path is None
+            or candidate.new_mode == "160000"
+            or Path(candidate_path).suffix.lower() not in PYTHON_SUFFIXES
+            or _non_regular_modes(candidate)
+        ):
+            continue
+        try:
+            candidate_new = (
+                _blob(root, candidate.new_oid)
+                if staged or is_commit_range
+                else _worktree_bytes(root, candidate)
+            )
+            if candidate_new is None:
+                continue
+            new_symbols, new_imports, _new_calls, _new_bindings, _new_rebindings = (
+                _parse_python(candidate_new)
+            )
+        except (
+            OSError, GitSnapshotError, StructuralDependencyError,
+            UnicodeDecodeError, ValueError, RuntimeError, TypeError,
+        ):
+            continue
+        cross_file_parses.append(
+            _ParsedFile(candidate_path, new_symbols, new_imports)
+        )
+    cross_import_paths = _resolved_import_paths(cross_file_parses)
+    cross_import_targets = _resolved_import_targets(cross_file_parses)
 
     for entry in resolution.entries:
         path = entry.new_path or entry.old_path
@@ -1059,8 +1233,15 @@ def analyze_local_diff(
         old_import_map = _keyed_imports(old_imports)
         new_import_map = _keyed_imports(new_imports)
         imported_call_targets = _imported_call_targets(
-            new_import_map, new_rebindings
+            new_import_map,
+            new_rebindings,
+            {
+                key: targets
+                for (source_path, key), targets in cross_import_targets.items()
+                if source_path == output_path
+            },
         )
+        resolved_import_occurrences: Dict[Tuple[str, str], int] = {}
         for import_key in sorted(set(old_import_map) | set(new_import_map)):
             before = old_import_map.get(import_key)
             after = new_import_map.get(import_key)
@@ -1100,6 +1281,14 @@ def analyze_local_diff(
                 if after is not None
                 else None
             )
+            resolved_path = (
+                cross_import_paths.get((output_path, import_key))
+                if after is not None
+                else None
+            )
+            # Retain the local import evidence node even for an internal
+            # module edge: unresolved/non-callable bindings may still refer to
+            # it as a conservative call target.
             symbols.append(
                 {
                     "id": target,
@@ -1114,7 +1303,25 @@ def analyze_local_diff(
                     "evidence": evidence,
                 }
             )
-            if after is not None:
+            if resolved_path is not None:
+                edge_key = (output_path, resolved_path)
+                occurrence = resolved_import_occurrences.get(edge_key, 0)
+                resolved_import_occurrences[edge_key] = occurrence + 1
+                edge_suffix = "" if occurrence == 0 else "#{}".format(occurrence)
+                relationships.append(
+                    {
+                        "id": "rel::file::{}->file::{}{}".format(
+                            output_path, resolved_path, edge_suffix
+                        ),
+                        "kind": "imports",
+                        "source_id": "file::" + output_path,
+                        "target_id": "file::" + resolved_path,
+                        "analysis_source": "structural",
+                        "evidence": evidence,
+                        "label": "resolved module: " + module,
+                    }
+                )
+            elif after is not None:
                 relationships.append(
                     {
                         "id": "rel::file::{}->{}".format(output_path, target),
@@ -1139,7 +1346,11 @@ def analyze_local_diff(
                 if call.caller is not None
                 else "file::" + output_path
             )
-            target = _symbol_id(output_path, target_qname)
+            target = (
+                target_qname
+                if target_qname.startswith(("sym::", "file::"))
+                else _symbol_id(output_path, target_qname)
+            )
             edge = (source, target)
             occurrence = call_occurrences.get(edge, 0)
             call_occurrences[edge] = occurrence + 1

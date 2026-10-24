@@ -1596,6 +1596,186 @@ def test_relative_from_imports_preserve_package_evidence_and_call_bindings(tmp_p
     assert calls[0]["evidence"][0]["snippet"] == "run_local()"
 
 
+def test_changeset_python_imports_resolve_across_files_conservatively(tmp_path):
+    """Changed package modules provide deterministic import and call targets."""
+    root = repo(tmp_path)
+    write(
+        root,
+        "package/worker.py",
+        "def run():\n"
+        "    return 1\n",
+    )
+    write(
+        root,
+        "package/client.py",
+        "from .worker import run as run_worker\n"
+        "from remote.worker import execute as run_remote\n\n"
+        "def caller():\n"
+        "    run_worker()\n"
+        "    run_remote()\n\n"
+        "def shadowed():\n"
+        "    run_worker = lambda: None\n"
+        "    run_worker()\n",
+    )
+    write(
+        root,
+        "fallback.py",
+        "from package.worker import not_a_declaration\n\n"
+        "def caller():\n"
+        "    not_a_declaration()\n",
+    )
+    git(root, "add", "package", "fallback.py")
+
+    artifact = analyze_local_diff(str(root), staged=True)
+
+    assert_valid(artifact)
+    relationships = {
+        (item["kind"], item["source_id"], item["target_id"]): item
+        for item in artifact["relationships"]
+    }
+    assert (
+        "imports", "file::package/client.py", "file::package/worker.py"
+    ) in relationships
+    assert relationships[(
+        "imports", "file::package/client.py", "file::package/worker.py"
+    )]["label"] == "resolved module: .worker"
+    assert (
+        "calls", "sym::package/client.py::caller", "sym::package/worker.py::run"
+    ) in relationships
+    assert relationships[(
+        "calls", "sym::package/client.py::caller", "sym::package/worker.py::run"
+    )]["resolution_method"] == "resolved"
+    assert (
+        "imports", "file::fallback.py", "file::package/worker.py"
+    ) in relationships
+    # A name that is not a callable declaration must retain the local import
+    # stub; a call edge must never point at a file node.
+    assert (
+        "calls", "sym::fallback.py::caller",
+        "sym::fallback.py::import::package.worker",
+    ) in relationships
+    assert relationships[(
+        "calls", "sym::fallback.py::caller",
+        "sym::fallback.py::import::package.worker",
+    )]["resolution_method"] == "import_grounded"
+    # The explicit external import and non-callable import stay represented by
+    # local stubs, while callable internal imports resolve directly.
+    symbol_ids = {item["id"] for item in artifact["symbols"]}
+    assert "sym::package/client.py::import::remote.worker" in symbol_ids
+    assert "sym::package/client.py::import::.worker" in symbol_ids
+    assert "sym::fallback.py::import::package.worker" in symbol_ids
+    assert not any(
+        item["kind"] == "calls"
+        and item["source_id"] == "sym::package/client.py::shadowed"
+        for item in artifact["relationships"]
+    )
+
+
+def test_namespace_package_child_imports_resolve_without_init_files(tmp_path):
+    """Absolute and relative child imports resolve across namespace packages."""
+    root = repo(tmp_path)
+    write(root, "package/worker.py", "def run():\n    return 1\n")
+    write(root, "absolute.py", "from package import worker\n")
+    write(root, "package/relative.py", "from . import worker\n")
+    git(root, "add", "package", "absolute.py")
+
+    artifact = analyze_local_diff(str(root), staged=True)
+
+    assert_valid(artifact)
+    imports = {
+        (item["source_id"], item["target_id"]): item
+        for item in artifact["relationships"]
+        if item["kind"] == "imports"
+    }
+    assert ("file::absolute.py", "file::package/worker.py") in imports
+    assert ("file::package/relative.py", "file::package/worker.py") in imports
+    assert imports[("file::absolute.py", "file::package/worker.py")]["label"] == (
+        "resolved module: package"
+    )
+    assert imports[("file::package/relative.py", "file::package/worker.py")]["label"] == (
+        "resolved module: ."
+    )
+
+
+def test_cross_file_import_resolution_handles_module_named_callables(tmp_path):
+    """A callable with the same name as its module resolves to its symbol."""
+    root = repo(tmp_path)
+    write(root, "helpers.py", "def helpers():\n    return 1\n")
+    write(
+        root,
+        "consumer.py",
+        "from helpers import helpers\n\n"
+        "def caller():\n"
+        "    helpers()\n",
+    )
+    git(root, "add", "helpers.py", "consumer.py")
+
+    artifact = analyze_local_diff(str(root), staged=True)
+
+    assert_valid(artifact)
+    assert (
+        "calls", "sym::consumer.py::caller", "sym::helpers.py::helpers"
+    ) in {
+        (item["kind"], item["source_id"], item["target_id"])
+        for item in artifact["relationships"]
+    }
+
+
+def test_cross_file_import_resolution_keeps_duplicate_callables_ambiguous(tmp_path):
+    """Repeated declarations must not select the first callable arbitrarily."""
+    root = repo(tmp_path)
+    write(root, "helpers.py", "def run():\n    return 1\n\ndef run():\n    return 2\n")
+    write(
+        root,
+        "consumer.py",
+        "from helpers import run\n\n"
+        "def caller():\n"
+        "    run()\n",
+    )
+    git(root, "add", "helpers.py", "consumer.py")
+
+    artifact = analyze_local_diff(str(root), staged=True)
+
+    assert_valid(artifact)
+    call_targets = {
+        item["target_id"]
+        for item in artifact["relationships"]
+        if item["kind"] == "calls" and item["source_id"] == "sym::consumer.py::caller"
+    }
+    assert call_targets == {"sym::consumer.py::import::helpers"}
+
+
+def test_resolved_import_relationship_ids_are_unique(tmp_path):
+    """Multiple imports from one changed module retain distinct edge IDs."""
+    root = repo(tmp_path)
+    write(root, "package/worker.py", "def run():\n    return 1\n\ndef other():\n    return 2\n")
+    write(
+        root,
+        "package/client.py",
+        "from .worker import run\n"
+        "from .worker import other\n",
+    )
+    git(root, "add", "package")
+
+    artifact = analyze_local_diff(str(root), staged=True)
+
+    assert_valid(artifact)
+    resolved_imports = [
+        item for item in artifact["relationships"]
+        if item["kind"] == "imports"
+        and item["source_id"] == "file::package/client.py"
+        and item["target_id"] == "file::package/worker.py"
+    ]
+    assert len(resolved_imports) == 2
+    assert {item["id"] for item in resolved_imports} == {
+        "rel::file::package/client.py->file::package/worker.py",
+        "rel::file::package/client.py->file::package/worker.py#1",
+    }
+    assert len({item["id"] for item in artifact["relationships"]}) == len(
+        artifact["relationships"]
+    )
+
+
 def test_as_pattern_bindings_do_not_create_import_grounded_call_edges(tmp_path):
     """with/except aliases shadow imports before their bodies execute."""
     root = repo(tmp_path)
