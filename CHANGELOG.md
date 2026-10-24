@@ -15,6 +15,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Resolved `from module import name` bindings are recorded as file →
   declaration `imports` edges.
 
+### Changed
+- The HTML report is graph-first: a full-window graph, a details panel for the
+  selected node, and a top bar. The textual file/symbol/topology/metadata
+  dumps are gone (use `--format json`), roughly halving report size.
+- Graph files show changed symbols by default; unchanged ones expand per file.
+
 ### Fixed
 - Terminal "imported by" is credited per symbol instead of to every changed
   symbol in an imported file; import statements are no longer ranked as

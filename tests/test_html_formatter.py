@@ -60,9 +60,11 @@ def test_html_formatter_renders_complete_golden_artifact_without_inference():
     assert embedded_artifact(report) == value
     assert "src/greeting.py" in report
     assert "sym::src/greeting.py::greet" in report
-    assert "rel::file::src/greeting.py-&gt;sym::src/greeting.py::greet" in report
     assert "privacy_tier" in report
-    assert "Deterministic topology" in report
+    # Graph-first report: no textual dumps of the artifact.
+    assert "Deterministic topology" not in report
+    assert "<pre>" not in report.split('<script type="application/json"', 1)[0]
+    assert "Local only" in report
     # The canonical example has no prose summary or inferred impact claim.
     assert "likely impact" not in report.lower()
     assert "AI analysis" not in report
@@ -83,9 +85,10 @@ def test_html_formatter_is_self_contained_interactive_and_uses_safe_details_api(
     assert "module-container" in report
     assert "file-container" in report
     assert "symbol-node" in report
-    assert "Scroll to zoom, drag blank space to pan" in report
+    assert "Scroll to zoom; drag empty space to pan." in report
+    assert 'id="diffgraph-details"' in report
     assert "state.collapsed" in report
-    assert "tooltip.textContent = prefix + JSON.stringify(value, null, 2)" in report
+    assert "tooltip.textContent = text" in report
     assert "innerHTML" not in report
     assert "cdn" not in report.lower()
     assert "unsafe-inline" not in report.split("script-src", 1)[1].split("style-src", 1)[0]
@@ -127,36 +130,49 @@ def test_html_formatter_csp_hash_allows_only_the_static_interactive_script():
     assert csp_match.group(1) == digest
 
 
-def test_html_formatter_sorts_topology_and_escapes_artifact_text():
+def test_html_formatter_embeds_artifact_strings_inertly():
     value = golden_artifact()
     first = dict(value["relationships"][0])
-    first["id"] = "rel::z->target"
-    second = dict(first)
-    second.update(
-        {"id": "rel::a->target", "label": "</script><script>bad()</script>"}
-    )
-    value["relationships"] = [first, second]
+    first.update({"id": "rel::a->target", "label": "</script><script>bad()</script>"})
+    value["relationships"] = [first]
+    value["diff_ref"]["pathspecs"] = ["<img src=x onerror=bad()>"]
     artifact = ValidatedArtifact.from_value(value)
 
     report = HtmlFormatter(artifact).render()
 
-    assert report.index("rel::a-&gt;target") < report.index("rel::z-&gt;target")
     assert "</script><script>bad()" not in report
+    assert "<img src=x" not in report
+    assert "&lt;img src=x onerror=bad()&gt;" in report  # top-bar snapshot label
     assert embedded_artifact(report) == value
 
 
-def test_html_formatter_links_relationship_endpoints_to_stable_object_anchors():
+def test_html_formatter_topbar_reports_snapshot_privacy_and_warnings():
     value = golden_artifact()
-    artifact = ValidatedArtifact.from_value(value)
+    value["metadata"]["warnings"] = [
+        {"code": "UNSUPPORTED_LANGUAGE", "file": "README.md", "detail": "blob ids"},
+        {"code": "PARSE_FAILURE", "file": "bad.py", "detail": "syntax error at line 3"},
+    ]
+    report = HtmlFormatter(ValidatedArtifact.from_value(value)).render()
+    topbar = report.split('<header class="topbar">', 1)[1].split("</header>", 1)[0]
 
-    report = HtmlFormatter(artifact).render()
+    assert '<span class="brand">wild diff</span>' in topbar
+    assert "Local only" in topbar
+    assert "⚠ 2 warnings" in topbar
+    assert "Not analyzed (Python only, 1 file): README.md" in topbar
+    assert "PARSE_FAILURE  bad.py: syntax error at line 3" in topbar
+    assert "wild diff --format json" in topbar  # where to get the raw artifact
+    assert "{'code'" not in topbar
 
-    relationship = value["relationships"][0]
-    for item_id in (relationship["source_id"], relationship["target_id"]):
-        anchor = HtmlFormatter._object_anchor(item_id)
-        assert f'<article id="{anchor}">' in report
-        assert f'href="#{anchor}"' in report
-        assert f'aria-label="Jump to {item_id}"' in report
+
+def test_html_formatter_topbar_names_llm_model_and_calls():
+    value = golden_artifact()
+    value["metadata"].update(
+        {"privacy_tier": "cloud_llm", "llm_model": "claude-opus-5-5", "llm_calls": 2, "cloud_providers_used": ["anthropic"]}
+    )
+    report = HtmlFormatter(ValidatedArtifact.from_value(value)).render()
+
+    assert 'title="Code was sent to anthropic">AI: claude-opus-5-5 · 2 calls</span>' in report
+    assert "Local only" not in report
 
 
 def test_html_formatter_rejects_duplicate_object_ids_before_rendering_anchors():
@@ -226,7 +242,7 @@ def test_canonical_html_no_change_writes_a_complete_report(tmp_path, monkeypatch
     assert result.exit_code == 0, result.output
     report = destination.read_text(encoding="utf-8")
     assert embedded_artifact(report)["files"] == []
-    assert "No files in the selected snapshot." in report
+    assert "No changes in the selected snapshot." in report
 
 
 def test_canonical_html_cancellation_does_not_create_output(tmp_path, monkeypatch):
@@ -308,16 +324,14 @@ def test_html_formatter_renders_node_summaries_as_labelled_escaped_text():
     value["files"][0]["summary"] = _node_summary("Adds <b>token</b> & cache checks.")
     value["symbols"][0]["summary"] = _node_summary("Validates <script>alert(1)</script> input.")
     report = HtmlFormatter(ValidatedArtifact.from_value(value)).render()
-    body = report.split('<script type="application/json"', 1)[0]
 
-    assert '<span class="ai-badge">AI</span>AI summary (claude-haiku-4-5): ' in body
-    assert "Adds &lt;b&gt;token&lt;/b&gt; &amp; cache checks." in body
-    assert "Validates &lt;script&gt;alert(1)&lt;/script&gt; input." in body
     assert "<script>alert(1)" not in report
     assert "<b>token</b>" not in report
-    # The graph reads summaries from inert JSON and renders them as SVG text.
+    # The graph and details panel read summaries from inert JSON and render
+    # them only through textContent, labelled with the model.
     assert "summaryOf(file)" in report and "summaryOf(symbol)" in report
-    assert "'summary-label'" in report
+    assert "'summary-label'" in report and "'ai-badge', 'AI'" in report
+    assert "innerHTML" not in report
     assert embedded_artifact(report)["symbols"][0]["summary"]["text"].startswith("Validates <script>")
 
 
@@ -325,8 +339,8 @@ def test_html_formatter_without_node_summaries_renders_no_summary_markup():
     report = HtmlFormatter(ValidatedArtifact.from_value(golden_artifact())).render()
     body = report.split("<style>", 1)[0] + report.split("</style>", 1)[1].split("<script", 1)[0]
 
-    assert "ai-summary" not in body
-    assert "AI summary" not in body
+    assert "ai-badge" not in body
+    assert "overall-summary" not in body
 
 
 def test_package_sources_compile_without_warnings():

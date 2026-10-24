@@ -215,12 +215,15 @@ than treating binary bytes as source code.
 
 ## 📊 Example Output
 
-The canonical HTML report includes:
-- Exact artifact metadata and optional canonical summary
-- Files, symbols, warnings, and relationship evidence
-- Deterministically ordered relationship topology
-- Dark mode support
-- Responsive, self-contained styling
+The canonical HTML report is the interactive graph:
+- A full-window graph of changed files and symbols (unchanged symbols one
+  click away per file), with optional AI summaries in each box
+- A details panel for the selected file, symbol, or edge: summary, location,
+  calls, callers, importers, and evidence
+- A top bar with the snapshot, change counts, privacy/AI status, and warnings
+- Light and dark themes; self-contained and offline
+
+The raw artifact is not shown in the page; use `wild diff --format json`.
 
 The deprecated `legacy-html` report retains its Mermaid.js diagram,
 syntax-highlighted code blocks, and AI-generated summary during the one-release
