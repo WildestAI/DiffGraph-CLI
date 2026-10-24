@@ -16,7 +16,7 @@ Use this skill to analyse git diffs with WildestAI's `wild` CLI and get semantic
 # Install
 pip install wildest-ai
 # or from source:
-git clone https://github.com/WildestAI/DiffGraph-CLI && cd DiffGraph-CLI && pip install -e .
+git clone https://github.com/WildestAI/wild && cd wild && pip install -e .
 
 # Set your OpenAI API key
 export OPENAI_API_KEY=sk-...
