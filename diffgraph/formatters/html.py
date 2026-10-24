@@ -1,17 +1,19 @@
-"""Deterministic HTML adapter for a validated canonical DiffGraph artifact.
+"""Deterministic, offline HTML adapter for canonical DiffGraph artifacts.
 
-This consumer performs no repository reads, structural analysis, AI calls, or
-network access.  It renders only values already present in the artifact.  The
-report is self-contained; the deprecated legacy HTML renderer remains the only
-HTML path with external CDN assets.
+The interactive view is deliberately a small inline SVG renderer instead of a
+runtime dependency.  It consumes the same embedded, validated artifact as the
+textual report and performs no repository reads, structural analysis, AI calls,
+or network access.
 """
 from __future__ import annotations
 
-import html
+import base64
 import hashlib
+import html
 import json
 import os
 import tempfile
+import textwrap
 from pathlib import Path
 
 from diffgraph.contract import ValidatedArtifact
@@ -41,6 +43,150 @@ def _embedded_json(value: object) -> str:
     )
 
 
+# This code is static: artifact values remain inert JSON until it is parsed, and
+# all details are assigned through textContent (never innerHTML).  Its CSP hash
+# is calculated at render time so the report can permit exactly this script.
+_INTERACTIVE_SCRIPT = textwrap.dedent(
+    """\
+    (() => {
+      'use strict';
+      const NS = 'http://www.w3.org/2000/svg';
+      const source = document.getElementById('diffgraph-artifact');
+      const host = document.getElementById('diffgraph-graph');
+      if (!source || !host) return;
+      let artifact;
+      try { artifact = JSON.parse(source.textContent); } catch (_) { return; }
+
+      const svg = document.createElementNS(NS, 'svg');
+      svg.setAttribute('viewBox', '0 0 1200 720');
+      svg.setAttribute('role', 'img');
+      svg.setAttribute('aria-label', 'Interactive DiffGraph visualization');
+      svg.setAttribute('tabindex', '0');
+      const title = document.createElementNS(NS, 'title');
+      title.textContent = 'Interactive DiffGraph visualization';
+      svg.appendChild(title);
+      const viewport = document.createElementNS(NS, 'g');
+      svg.appendChild(viewport);
+      host.appendChild(svg);
+
+      const tooltip = document.createElement('pre');
+      tooltip.className = 'graph-tooltip';
+      tooltip.hidden = true;
+      host.appendChild(tooltip);
+      const state = { scale: 1, x: 0, y: 0, dragging: false, collapsed: new Set() };
+      const color = { added: '#18794e', deleted: '#b42318', modified: '#175cd3', unchanged: '#667085', untracked: '#7a5af8', renamed: '#b54708' };
+      const svgEl = (name, attrs = {}) => {
+        const node = document.createElementNS(NS, name);
+        Object.entries(attrs).forEach(([key, value]) => node.setAttribute(key, String(value)));
+        return node;
+      };
+      const addText = (parent, value, x, y, cls) => {
+        const node = svgEl('text', { x, y, class: cls || '' });
+        node.textContent = value == null ? '' : String(value);
+        parent.appendChild(node);
+        return node;
+      };
+      const details = (value, event) => {
+        tooltip.textContent = JSON.stringify(value, null, 2);
+        tooltip.hidden = false;
+        const rect = host.getBoundingClientRect();
+        tooltip.style.left = Math.max(8, event.clientX - rect.left + 12) + 'px';
+        tooltip.style.top = Math.max(8, event.clientY - rect.top + 12) + 'px';
+      };
+      const hideDetails = () => { tooltip.hidden = true; };
+      const attachDetails = (node, value) => {
+        node.addEventListener('pointerenter', (event) => details(value, event));
+        node.addEventListener('pointermove', (event) => details(value, event));
+        node.addEventListener('pointerleave', hideDetails);
+        node.addEventListener('focus', (event) => details(value, event));
+        node.addEventListener('blur', hideDetails);
+      };
+      const setTransform = () => viewport.setAttribute('transform', `translate(${state.x} ${state.y}) scale(${state.scale})`);
+      const draw = () => {
+        viewport.replaceChildren();
+        const files = [...(artifact.files || [])].sort((a, b) => a.id.localeCompare(b.id));
+        const symbols = [...(artifact.symbols || [])].sort((a, b) => a.id.localeCompare(b.id));
+        const modules = new Map();
+        files.forEach((file) => {
+          const bits = String(file.path || file.id).split('/');
+          const module = bits.length > 1 ? bits.slice(0, -1).join('/') : '(root)';
+          if (!modules.has(module)) modules.set(module, []);
+          modules.get(module).push(file);
+        });
+        const positions = new Map();
+        let y = 44;
+        [...modules.entries()].sort(([a], [b]) => a.localeCompare(b)).forEach(([module, group]) => {
+          const moduleY = y;
+          const moduleGroup = svgEl('g', { class: 'module-container' });
+          viewport.appendChild(moduleGroup);
+          addText(moduleGroup, `module: ${module}`, 34, y + 22, 'module-label');
+          y += 34;
+          group.forEach((file) => {
+            const fileSymbols = symbols.filter((symbol) => symbol.file_id === file.id);
+            const collapsed = state.collapsed.has(file.id);
+            const height = collapsed ? 56 : Math.max(72, 44 + fileSymbols.length * 38);
+            const groupNode = svgEl('g', { class: 'file-container', tabindex: '0', role: 'button', 'aria-expanded': String(!collapsed), 'aria-label': `${collapsed ? 'Expand' : 'Collapse'} ${file.path || file.id}` });
+            const rect = svgEl('rect', { x: 48, y, width: 1080, height, rx: 10, fill: '#ffffff', stroke: color[file.change_kind] || color.unchanged, 'stroke-width': 3 });
+            groupNode.appendChild(rect);
+            addText(groupNode, collapsed ? '▶' : '▼', 64, y + 29, 'toggle');
+            addText(groupNode, file.path || file.id, 88, y + 29, 'file-label');
+            addText(groupNode, file.change_kind || 'unknown', 1014, y + 29, 'change-label');
+            attachDetails(groupNode, file);
+            const toggle = () => { if (state.collapsed.has(file.id)) state.collapsed.delete(file.id); else state.collapsed.add(file.id); draw(); };
+            groupNode.addEventListener('click', toggle);
+            groupNode.addEventListener('keydown', (event) => { if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); toggle(); } });
+            viewport.appendChild(groupNode);
+            positions.set(file.id, { x: 92, y: y + 29, visible: true });
+            if (!collapsed) fileSymbols.forEach((symbol, index) => {
+              const sy = y + 48 + index * 38;
+              const node = svgEl('g', { class: 'symbol-node', tabindex: '0', role: 'img', 'aria-label': `${symbol.kind || 'symbol'} ${symbol.qualified_name || symbol.name || symbol.id}` });
+              node.appendChild(svgEl('rect', { x: 80, y: sy, width: 620, height: 28, rx: 7, fill: '#f8fafc', stroke: color[symbol.change_kind] || color.unchanged }));
+              addText(node, `${symbol.kind || 'symbol'}: ${symbol.qualified_name || symbol.name || symbol.id}`, 94, sy + 19, 'symbol-label');
+              node.appendChild(svgEl('circle', { cx: 678, cy: sy + 14, r: 5, fill: color[symbol.change_kind] || color.unchanged }));
+              attachDetails(node, symbol);
+              viewport.appendChild(node);
+              positions.set(symbol.id, { x: 390, y: sy + 14, visible: true });
+            });
+            if (collapsed) fileSymbols.forEach((symbol) => positions.set(symbol.id, { visible: false }));
+            y += height + 14;
+          });
+          const moduleHeight = y - moduleY - 14;
+          const outline = svgEl('rect', { x: 24, y: moduleY, width: 1128, height: moduleHeight, rx: 14, fill: 'none', stroke: '#98a2b3', 'stroke-dasharray': '6 5' });
+          moduleGroup.insertBefore(outline, moduleGroup.firstChild);
+          y += 18;
+        });
+        const edges = svgEl('g', { class: 'relationship-edges' });
+        (artifact.relationships || []).slice().sort((a, b) => a.id.localeCompare(b.id)).forEach((relationship) => {
+          const source = positions.get(relationship.source_id);
+          const target = positions.get(relationship.target_id);
+          if (!source || !target || !source.visible || !target.visible) return;
+          const edge = svgEl('line', { x1: source.x, y1: source.y, x2: target.x, y2: target.y, stroke: '#475467', 'stroke-width': 1.5, 'marker-end': 'url(#arrow)' });
+          attachDetails(edge, relationship);
+          edges.appendChild(edge);
+        });
+        const defs = svgEl('defs');
+        const marker = svgEl('marker', { id: 'arrow', markerWidth: 8, markerHeight: 8, refX: 7, refY: 3, orient: 'auto' });
+        marker.appendChild(svgEl('path', { d: 'M0,0 L0,6 L8,3 z', fill: '#475467' }));
+        defs.appendChild(marker);
+        edges.insertBefore(defs, edges.firstChild);
+        viewport.insertBefore(edges, viewport.firstChild);
+        setTransform();
+      };
+      svg.addEventListener('wheel', (event) => { event.preventDefault(); const factor = event.deltaY < 0 ? 1.12 : 0.89; state.scale = Math.max(0.35, Math.min(3, state.scale * factor)); setTransform(); }, { passive: false });
+      svg.addEventListener('pointerdown', (event) => { if (event.target === svg) { state.dragging = true; state.startX = event.clientX - state.x; state.startY = event.clientY - state.y; svg.setPointerCapture(event.pointerId); } });
+      svg.addEventListener('pointermove', (event) => { if (state.dragging) { state.x = event.clientX - state.startX; state.y = event.clientY - state.startY; setTransform(); } });
+      svg.addEventListener('pointerup', () => { state.dragging = false; });
+      draw();
+    })();
+    """
+).strip()
+
+
+def _script_csp_hash(script: str) -> str:
+    digest = hashlib.sha256(script.encode("utf-8")).digest()
+    return base64.b64encode(digest).decode("ascii")
+
+
 class HtmlFormatter:
     """Render one already-validated DiffGraph artifact as self-contained HTML."""
 
@@ -59,33 +205,20 @@ class HtmlFormatter:
         warnings = metadata.get("warnings", [])
 
         self._validate_unique_object_ids(files, symbols)
-        anchors = {
-            item["id"]: self._object_anchor(item["id"])
-            for item in (*files, *symbols)
-        }
-        file_items = self._object_items(
-            files, "No files in the selected snapshot.", anchors
-        )
-        symbol_items = self._object_items(
-            symbols, "No symbols in the artifact.", anchors
-        )
+        anchors = {item["id"]: self._object_anchor(item["id"]) for item in (*files, *symbols)}
+        file_items = self._object_items(files, "No files in the selected snapshot.", anchors)
+        symbol_items = self._object_items(symbols, "No symbols in the artifact.", anchors)
         relationship_items = self._relationship_items(relationships, anchors)
-        warning_items = (
-            "".join(f"<li><pre>{_json(warning)}</pre></li>" for warning in warnings)
-            or "<li>None</li>"
-        )
-        summary = (
-            f"<h3>Summary</h3><pre>{_json(self.dg['summary'])}</pre>"
-            if "summary" in self.dg
-            else ""
-        )
+        warning_items = "".join(f"<li><pre>{_json(warning)}</pre></li>" for warning in warnings) or "<li>None</li>"
+        summary = f"<h3>Summary</h3><pre>{_json(self.dg['summary'])}</pre>" if "summary" in self.dg else ""
+        script_hash = _script_csp_hash(_INTERACTIVE_SCRIPT)
 
         return f"""<!doctype html>
 <html lang="en">
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; img-src data:; base-uri 'none'; form-action 'none'">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'sha256-{script_hash}'; style-src 'unsafe-inline'; img-src data:; base-uri 'none'; form-action 'none'">
   <title>DiffGraph Report</title>
   <style>
     :root {{ color-scheme: light dark; font-family: system-ui, sans-serif; }}
@@ -98,10 +231,28 @@ class HtmlFormatter:
     .edge code {{ overflow-wrap: anywhere; }}
     .kind {{ border: 1px solid #8888; border-radius: 1rem; padding: .15rem .55rem; }}
     dt {{ font-weight: 700; }} dd {{ margin-bottom: .5rem; }}
+    #diffgraph-graph {{ position: relative; height: 46rem; min-height: 28rem; overflow: hidden; border: 1px solid #8886; border-radius: .6rem; background: #f8fafc; }}
+    #diffgraph-graph svg {{ display: block; width: 100%; height: 100%; cursor: grab; }}
+    #diffgraph-graph svg:active {{ cursor: grabbing; }}
+    .module-label {{ font-size: 16px; font-weight: 700; fill: #344054; }}
+    .file-label {{ font-size: 16px; font-weight: 700; fill: #101828; }}
+    .symbol-label {{ font-size: 14px; fill: #344054; }}
+    .change-label {{ font-size: 12px; fill: #475467; }}
+    .toggle {{ font-size: 15px; fill: #344054; }}
+    .file-container, .symbol-node {{ cursor: pointer; outline: none; }}
+    .file-container:focus rect, .symbol-node:focus rect {{ stroke: #101828; stroke-width: 3; }}
+    .relationship-edges line {{ pointer-events: stroke; }}
+    .graph-tooltip {{ position: absolute; z-index: 2; max-width: min(34rem, 80%); max-height: 18rem; margin: 0; padding: .65rem; overflow: auto; border: 1px solid #667085; border-radius: .4rem; background: #101828; color: #f9fafb; font-size: .75rem; pointer-events: none; }}
+    @media (prefers-color-scheme: dark) {{ #diffgraph-graph {{ background: #101828; }} .module-label, .file-label, .symbol-label, .change-label, .toggle {{ fill: #eaecf0; }} }}
   </style>
 </head>
 <body>
   <h1>DiffGraph Report</h1>
+  <section aria-labelledby="graph-heading">
+    <h2 id="graph-heading">Interactive graph</h2>
+    <p class="panel">Scroll to zoom, drag blank space to pan, and select a file container to expand or collapse its canonical symbols. Hover or focus an item for its canonical details.</p>
+    <div id="diffgraph-graph"></div>
+  </section>
   <section aria-labelledby="artifact-heading">
     <h2 id="artifact-heading">Artifact</h2>
     <dl class="panel">
@@ -121,6 +272,7 @@ class HtmlFormatter:
   <section aria-labelledby="warnings-heading"><h2 id="warnings-heading">Warnings</h2><ul>{warning_items}</ul></section>
   <section aria-labelledby="metadata-heading"><h2 id="metadata-heading">Metadata</h2><pre>{_json(metadata)}</pre></section>
   <script type="application/json" id="diffgraph-artifact">{_embedded_json(self.dg)}</script>
+  <script>{_INTERACTIVE_SCRIPT}</script>
 </body>
 </html>
 """
@@ -128,41 +280,27 @@ class HtmlFormatter:
     @staticmethod
     def _object_anchor(item_id: str) -> str:
         """Return a stable, safe fragment target for a canonical object ID."""
-        return "object-{}".format(
-            hashlib.sha256(item_id.encode("utf-8")).hexdigest()
-        )
+        return "object-{}".format(hashlib.sha256(item_id.encode("utf-8")).hexdigest())
 
     @staticmethod
-    def _validate_unique_object_ids(
-        files: list[dict], symbols: list[dict]
-    ) -> None:
+    def _validate_unique_object_ids(files: list[dict], symbols: list[dict]) -> None:
         """Reject duplicate object IDs before rendering ambiguous anchor targets."""
         object_ids = [item["id"] for item in (*files, *symbols)]
-        duplicate_ids = sorted(
-            item_id for item_id in set(object_ids) if object_ids.count(item_id) > 1
-        )
+        duplicate_ids = sorted(item_id for item_id in set(object_ids) if object_ids.count(item_id) > 1)
         if duplicate_ids:
-            raise ValueError(
-                "DiffGraph HTML rendering requires unique file and symbol IDs; "
-                f"duplicates: {', '.join(duplicate_ids)}"
-            )
+            raise ValueError("DiffGraph HTML rendering requires unique file and symbol IDs; duplicates: " + ", ".join(duplicate_ids))
 
     @staticmethod
-    def _object_items(
-        items: list[dict], empty_message: str, anchors: dict[str, str]
-    ) -> str:
+    def _object_items(items: list[dict], empty_message: str, anchors: dict[str, str]) -> str:
         if not items:
             return f'<p class="panel">{html.escape(empty_message)}</p>'
         return "".join(
-            f'<article id="{anchors[item["id"]]}"><h3><code>{_text(item["id"])}</code></h3>'
-            f'<pre>{_json(item)}</pre></article>'
+            f'<article id="{anchors[item["id"]]}"><h3><code>{_text(item["id"])}</code></h3><pre>{_json(item)}</pre></article>'
             for item in items
         )
 
     @staticmethod
-    def _relationship_items(
-        relationships: list[dict], anchors: dict[str, str]
-    ) -> str:
+    def _relationship_items(relationships: list[dict], anchors: dict[str, str]) -> str:
         if not relationships:
             return '<p class="panel">No relationships in the artifact.</p>'
 
@@ -171,17 +309,12 @@ class HtmlFormatter:
             text = _text(item_id)
             if anchor is None:
                 return f"<code>{text}</code>"
-            return (
-                f'<a href="#{anchor}" aria-label="Jump to {text}">'
-                f"<code>{text}</code></a>"
-            )
+            return f'<a href="#{anchor}" aria-label="Jump to {text}"><code>{text}</code></a>'
 
         return "".join(
             "<article>"
-            f'<div class="edge">{endpoint(item["source_id"])}'
-            f'<span class="kind">{_text(item["kind"])}</span>'
-            f'{endpoint(item["target_id"])}</div>'
-            f'<pre>{_json(item)}</pre>'
+            f'<div class="edge">{endpoint(item["source_id"])}<span class="kind">{_text(item["kind"])}</span>{endpoint(item["target_id"])}</div>'
+            f"<pre>{_json(item)}</pre>"
             "</article>"
             for item in relationships
         )
@@ -191,14 +324,7 @@ class HtmlFormatter:
         rendered = self.render()
         temporary_path = None
         try:
-            with tempfile.NamedTemporaryFile(
-                mode="w",
-                encoding="utf-8",
-                dir=destination.parent,
-                prefix=f".{destination.name}.",
-                suffix=".tmp",
-                delete=False,
-            ) as temporary:
+            with tempfile.NamedTemporaryFile(mode="w", encoding="utf-8", dir=destination.parent, prefix=f".{destination.name}.", suffix=".tmp", delete=False) as temporary:
                 temporary_path = Path(temporary.name)
                 temporary.write(rendered)
             os.replace(temporary_path, destination)
