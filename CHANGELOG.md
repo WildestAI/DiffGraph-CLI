@@ -5,6 +5,23 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+- `wild diff --llm MODEL`: opt-in AI summaries for each changed file and
+  symbol through BYOK Relay (Claude, GPT, and Gemini models), rendered in
+  JSON, HTML, and terminal output. Schema 2.1 adds optional per-node
+  `summary` fields.
+- Resolved `from module import name` bindings are recorded as file →
+  declaration `imports` edges.
+
+### Fixed
+- Terminal "imported by" is credited per symbol instead of to every changed
+  symbol in an imported file; import statements are no longer ranked as
+  imported.
+- The HTML graph is readable in dark mode.
+- Terminal warnings render as readable lines.
+
 ## [1.2.0] - 2026-10-09
 
 ### Added

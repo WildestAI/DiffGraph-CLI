@@ -68,6 +68,10 @@ wild diff -o diffgraph.html
   output is always stdout and never writes a file.
 - `--no-open`: Don't automatically open the HTML report in browser
 - `--structural-json`: Write a local Python structural DiffGraph v2 artifact to the given path (`-` for stdout). Applies to `wild diff` only.
+- `--llm MODEL`: Opt in to AI summaries for each changed file and symbol via
+  [BYOK Relay](https://byokrelay.com) (e.g. `claude-haiku-5-5`, `gpt-5-mini`,
+  `gemini-2.5-flash`). Sends the changed code to the model provider. See
+  [AI summaries](#ai-summaries-opt-in).
 - `--version`: Show version information
 
 Example:
@@ -148,11 +152,34 @@ and caller-relative pathspecs are preserved.
   cancellation failures return `1`; option/command usage errors return `2`.
   Ctrl-C prints Click's `Aborted!` diagnostic and does not dispatch an artifact
   or print a success message.
-- Canonical HTML, JSON, and terminal modes are local/offline. They import or
+- Without `--llm`, canonical HTML, JSON, and terminal modes are local/offline. They import or
   invoke no AI or network module, make no network calls, report
   `privacy_tier: local` and `llm_calls: 0`, and use only local
   Git/object/worktree data plus packaged parser/schema resources. Canonical HTML
   is self-contained and has no external asset dependency.
+
+#### AI summaries (opt-in)
+
+`wild diff --llm MODEL` adds a one-sentence AI summary to every changed file
+and non-import symbol, in all three formats (JSON `summary` fields, HTML graph
+boxes and lists, terminal `AI:` lines). Requests go through
+[BYOK Relay](https://byokrelay.com)'s OpenAI-format endpoint, which routes
+`claude-*`, `gpt-*`, and `gemini-*` models (or an explicit
+`anthropic/`, `openai/`, `google/` prefix) to that provider.
+
+- **Keys:** on first use in an interactive terminal, `wild` registers with the
+  relay and prompts (hidden input) for the provider key, which is sent once to
+  the relay and stored there encrypted. `wild` saves only the relay token, in
+  `~/.config/wild/byok-relay.json` (mode 0600). Non-interactive runs need
+  `BYOK_RELAY_TOKEN`; `BYOK_RELAY_URL` selects a self-hosted relay.
+- **What is sent:** the unified diff of each changed text file at the exact
+  analyzed snapshot (working-tree content is re-verified against its recorded
+  blob id; binary files are skipped), plus node ids and names.
+- **Contract:** the model only writes prose for existing nodes. Unknown ids
+  are discarded, topology is never changed, and the artifact reports
+  `schema_version: "2.1"`, `privacy_tier: cloud_llm`, the provider, model, and
+  call count. Failed requests become scoped `LLM_ERROR`/`LLM_TIMEOUT`
+  warnings rather than failing the run.
 
 #### Deprecated AI HTML compatibility
 

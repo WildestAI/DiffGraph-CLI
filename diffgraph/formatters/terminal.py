@@ -106,6 +106,20 @@ def _collapsed(items: list[str], max_inline: int = 3) -> str:
     return text
 
 
+def _summary_text(node: dict) -> Optional[str]:
+    """Return a node's AI summary text, if the artifact carries one."""
+    summary = node.get("summary")
+    if isinstance(summary, dict) and isinstance(summary.get("text"), str):
+        return " ".join(summary["text"].split()) or None
+    return None
+
+
+def _write_summary(out, node: dict, color: bool) -> None:
+    text = _summary_text(node)
+    if text:
+        out.write("    " + dim(f"AI: {text}", color) + "\n")
+
+
 def _warning_lines(warnings: list[dict]) -> list[str]:
     """Return one readable line per warning.
 
@@ -376,7 +390,19 @@ class TerminalFormatter:
                     additions = f.get("lines_added") or 0
                     deletions = f.get("lines_removed") or 0
                     out.write(f"  {path}  +{additions} / -{deletions}\n")
+                    _write_summary(out, f, color)
                 out.write("\n")
+        elif any(_summary_text(f) for f in files):
+            # Symbol sections cover code; this keeps per-file summaries,
+            # including non-Python files, visible too.
+            out.write(bold("▶ FILES", color) + "\n")
+            for f in files:
+                if _summary_text(f):
+                    path = f.get("path", f.get("id", "?"))
+                    label = _change_label(f.get("change_kind", "unknown"), color)
+                    out.write(f"  {path} {label}\n")
+                    _write_summary(out, f, color)
+            out.write("\n")
 
     def _write_section(
         self,
@@ -438,6 +464,7 @@ class TerminalFormatter:
             if loc_lines:
                 line += f"  · {loc_lines} lines"
         out.write(line + "\n")
+        _write_summary(out, sym, color)
 
         # Importer line (REVIEW FIRST only)
         if rs.importer_paths and section_title == "REVIEW FIRST":
@@ -490,5 +517,17 @@ class TerminalFormatter:
         # Optional LLM upgrade hint (shown only for local-structural analysis)
         privacy_tier = metadata.get("privacy_tier", "local")
         if privacy_tier == "local":
-            hint = "Optional: wild diff --llm openai  (adds LLM summary · diff sent to OpenAI)"
+            hint = (
+                "Optional: wild diff --llm claude-haiku-5-5  "
+                "(adds AI summaries · code sent to the model provider via BYOK Relay)"
+            )
             out.write(dim(hint, color) + "\n")
+        elif metadata.get("llm_model"):
+            calls = metadata.get("llm_calls") or 0
+            providers = ", ".join(metadata.get("cloud_providers_used") or [])
+            note = (
+                f"AI summaries: {metadata['llm_model']} via BYOK Relay"
+                f"{f' ({providers})' if providers else ''}"
+                f" · {calls} call{'s' if calls != 1 else ''}"
+            )
+            out.write(dim(note, color) + "\n")

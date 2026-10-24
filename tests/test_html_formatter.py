@@ -85,7 +85,7 @@ def test_html_formatter_is_self_contained_interactive_and_uses_safe_details_api(
     assert "symbol-node" in report
     assert "Scroll to zoom, drag blank space to pan" in report
     assert "state.collapsed" in report
-    assert "textContent = JSON.stringify(value, null, 2)" in report
+    assert "tooltip.textContent = prefix + JSON.stringify(value, null, 2)" in report
     assert "innerHTML" not in report
     assert "cdn" not in report.lower()
     assert "unsafe-inline" not in report.split("script-src", 1)[1].split("style-src", 1)[0]
@@ -288,3 +288,42 @@ def test_html_write_failure_preserves_existing_report(tmp_path, monkeypatch):
 
     assert destination.read_text(encoding="utf-8") == "previous complete report"
     assert not list(tmp_path.glob(".report.html.*.tmp"))
+
+
+def _node_summary(text: str, model: str = "claude-haiku-4-5") -> dict:
+    return {
+        "text": text,
+        "analysis_source": "inferred",
+        "confidence": None,
+        "evidence": [
+            {"kind": "llm_inference", "model": model},
+            {"kind": "structural_basis", "file_ids": [], "symbol_ids": []},
+        ],
+    }
+
+
+def test_html_formatter_renders_node_summaries_as_labelled_escaped_text():
+    value = golden_artifact()
+    value["schema_version"] = "2.1"
+    value["files"][0]["summary"] = _node_summary("Adds <b>token</b> & cache checks.")
+    value["symbols"][0]["summary"] = _node_summary("Validates <script>alert(1)</script> input.")
+    report = HtmlFormatter(ValidatedArtifact.from_value(value)).render()
+    body = report.split('<script type="application/json"', 1)[0]
+
+    assert '<span class="ai-badge">AI</span>AI summary (claude-haiku-4-5): ' in body
+    assert "Adds &lt;b&gt;token&lt;/b&gt; &amp; cache checks." in body
+    assert "Validates &lt;script&gt;alert(1)&lt;/script&gt; input." in body
+    assert "<script>alert(1)" not in report
+    assert "<b>token</b>" not in report
+    # The graph reads summaries from inert JSON and renders them as SVG text.
+    assert "summaryOf(file)" in report and "summaryOf(symbol)" in report
+    assert "'summary-label'" in report
+    assert embedded_artifact(report)["symbols"][0]["summary"]["text"].startswith("Validates <script>")
+
+
+def test_html_formatter_without_node_summaries_renders_no_summary_markup():
+    report = HtmlFormatter(ValidatedArtifact.from_value(golden_artifact())).render()
+    body = report.split("<style>", 1)[0] + report.split("</style>", 1)[1].split("<script", 1)[0]
+
+    assert "ai-summary" not in body
+    assert "AI summary" not in body

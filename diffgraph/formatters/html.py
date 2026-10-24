@@ -88,8 +88,19 @@ _INTERACTIVE_SCRIPT = textwrap.dedent(
         parent.appendChild(node);
         return node;
       };
+      // Optional inferred summary: untrusted model text, only ever set via textContent.
+      const summaryOf = (item) => {
+        const summary = item && item.summary;
+        if (!summary || typeof summary.text !== 'string' || !summary.text.trim()) return null;
+        const inference = (summary.evidence || []).find((entry) => entry && entry.kind === 'llm_inference');
+        return { text: summary.text.trim().replace(/\s+/g, ' '), model: inference && inference.model ? String(inference.model) : null };
+      };
+      const truncate = (value, max) => (value.length > max ? value.slice(0, max - 1) + '…' : value);
+      const summaryLine = (summary, max) => truncate(`AI · ${summary.text}`, max);
       const details = (value, event) => {
-        tooltip.textContent = JSON.stringify(value, null, 2);
+        const summary = summaryOf(value);
+        const prefix = summary ? `AI summary${summary.model ? ` (${summary.model})` : ''}: ${summary.text}\n\n` : '';
+        tooltip.textContent = prefix + JSON.stringify(value, null, 2);
         tooltip.hidden = false;
         const rect = host.getBoundingClientRect();
         tooltip.style.left = Math.max(8, event.clientX - rect.left + 12) + 'px';
@@ -126,28 +137,36 @@ _INTERACTIVE_SCRIPT = textwrap.dedent(
           group.forEach((file) => {
             const fileSymbols = symbols.filter((symbol) => symbol.file_id === file.id);
             const collapsed = state.collapsed.has(file.id);
-            const height = collapsed ? 56 : Math.max(72, 44 + fileSymbols.length * 38);
+            const fileSummary = summaryOf(file);
+            const headerHeight = fileSummary ? 66 : 44;
+            const symbolRows = fileSymbols.map((symbol) => ({ symbol, summary: summaryOf(symbol) }));
+            const symbolsHeight = symbolRows.reduce((total, row) => total + (row.summary ? 54 : 38), 0);
+            const height = collapsed ? headerHeight + 12 : Math.max(headerHeight + 28, headerHeight + symbolsHeight);
             const groupNode = svgEl('g', { class: 'file-container', tabindex: '0', role: 'button', 'aria-expanded': String(!collapsed), 'aria-label': `${collapsed ? 'Expand' : 'Collapse'} ${file.path || file.id}` });
             const rect = svgEl('rect', { x: 48, y, width: 1080, height, rx: 10, class: `file-box ${changeClass(file.change_kind)}` });
             groupNode.appendChild(rect);
             addText(groupNode, collapsed ? '▶' : '▼', 64, y + 29, 'toggle');
             addText(groupNode, file.path || file.id, 88, y + 29, 'file-label');
             addText(groupNode, file.change_kind || 'unknown', 1014, y + 29, 'change-label');
+            if (fileSummary) addText(groupNode, summaryLine(fileSummary, 150), 88, y + 52, 'summary-label');
             attachDetails(groupNode, file);
             const toggle = () => { if (state.collapsed.has(file.id)) state.collapsed.delete(file.id); else state.collapsed.add(file.id); draw(); };
             groupNode.addEventListener('click', toggle);
             groupNode.addEventListener('keydown', (event) => { if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); toggle(); } });
             viewport.appendChild(groupNode);
             positions.set(file.id, { x: 92, y: y + 29, visible: true });
-            if (!collapsed) fileSymbols.forEach((symbol, index) => {
-              const sy = y + 48 + index * 38;
+            let sy = y + headerHeight + 4;
+            if (!collapsed) symbolRows.forEach(({ symbol, summary }) => {
+              const boxHeight = summary ? 44 : 28;
               const node = svgEl('g', { class: 'symbol-node', tabindex: '0', role: 'img', 'aria-label': `${symbol.kind || 'symbol'} ${symbol.qualified_name || symbol.name || symbol.id}` });
-              node.appendChild(svgEl('rect', { x: 80, y: sy, width: 620, height: 28, rx: 7, class: `symbol-box ${changeClass(symbol.change_kind)}` }));
+              node.appendChild(svgEl('rect', { x: 80, y: sy, width: 620, height: boxHeight, rx: 7, class: `symbol-box ${changeClass(symbol.change_kind)}` }));
               addText(node, `${symbol.kind || 'symbol'}: ${symbol.qualified_name || symbol.name || symbol.id}`, 94, sy + 19, 'symbol-label');
+              if (summary) addText(node, summaryLine(summary, 84), 94, sy + 36, 'summary-label');
               node.appendChild(svgEl('circle', { cx: 678, cy: sy + 14, r: 5, class: `change-dot ${changeClass(symbol.change_kind)}` }));
               attachDetails(node, symbol);
               viewport.appendChild(node);
               positions.set(symbol.id, { x: 390, y: sy + 14, visible: true });
+              sy += boxHeight + 10;
             });
             if (collapsed) fileSymbols.forEach((symbol) => positions.set(symbol.id, { visible: false }));
             y += height + 14;
@@ -182,6 +201,23 @@ _INTERACTIVE_SCRIPT = textwrap.dedent(
     })();
     """
 ).strip()
+
+
+def _summary_html(item: dict) -> str:
+    """Render an optional inferred summary, clearly labelled as AI-generated."""
+    summary = item.get("summary")
+    if not isinstance(summary, dict) or not str(summary.get("text") or "").strip():
+        return ""
+    model = next(
+        (
+            entry.get("model")
+            for entry in summary.get("evidence", [])
+            if isinstance(entry, dict) and entry.get("kind") == "llm_inference" and entry.get("model")
+        ),
+        None,
+    )
+    label = f"AI summary ({_text(model)})" if model else "AI summary"
+    return f'<p class="ai-summary"><span class="ai-badge">AI</span>{label}: {_text(summary["text"])}</p>'
 
 
 def _script_csp_hash(script: str) -> str:
@@ -258,6 +294,9 @@ class HtmlFormatter:
     .file-label {{ font-size: 16px; font-weight: 700; fill: var(--text-strong); }}
     .symbol-label {{ font-size: 14px; fill: var(--text); }}
     .change-label {{ font-size: 12px; fill: var(--text-muted); }}
+    .summary-label {{ font-size: 12px; font-style: italic; fill: var(--text-muted); }}
+    .ai-summary {{ margin: 0 0 .5rem; font-style: italic; }}
+    .ai-badge {{ display: inline-block; margin-right: .35rem; padding: 0 .4rem; border: 1px solid #8888; border-radius: .3rem; font-size: .75em; font-style: normal; font-weight: 700; }}
     .toggle {{ font-size: 15px; fill: var(--text); }}
     .module-outline {{ fill: none; stroke: var(--outline); stroke-dasharray: 6 5; }}
     .file-box {{ fill: var(--node-bg); stroke: var(--ck-unchanged); stroke-width: 3; }}
@@ -328,7 +367,7 @@ class HtmlFormatter:
         if not items:
             return f'<p class="panel">{html.escape(empty_message)}</p>'
         return "".join(
-            f'<article id="{anchors[item["id"]]}"><h3><code>{_text(item["id"])}</code></h3><pre>{_json(item)}</pre></article>'
+            f'<article id="{anchors[item["id"]]}"><h3><code>{_text(item["id"])}</code></h3>{_summary_html(item)}<pre>{_json(item)}</pre></article>'
             for item in items
         )
 

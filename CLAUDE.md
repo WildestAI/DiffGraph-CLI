@@ -36,12 +36,16 @@ cli.py ──► artifact.build_validated_artifact
 Key invariants (tests enforce them):
 
 - **Build once, validate once, dispatch once.** Each invocation resolves the snapshot once and builds one artifact. Consumers get only a `ValidatedArtifact`. They never re-read the repo or rebuild anything. `ValidatedArtifact` can only be created through `from_value`, and `.value` returns a deep copy.
-- **No AI or network imports on canonical paths.** `test_artifact_dispatch.py` and `test_html_formatter.py` check that `diffgraph.ai_analysis` and `agents` (openai-agents) are never imported and that sockets are never opened. Keep new imports in canonical modules local-only. The legacy modules must only be imported lazily, inside the `legacy-html` branch of `cli.py`.
+- **No AI or network imports on canonical paths without `--llm`.** `test_artifact_dispatch.py` and `test_html_formatter.py` check that `diffgraph.ai_analysis` and `agents` (openai-agents) are never imported and that sockets are never opened. Keep new imports in canonical modules local-only. The legacy modules must only be imported lazily, inside the `legacy-html` branch of `cli.py`.
 - **`contract.py` stays independent** of Git, tree-sitter and AI code, so outside consumers can validate artifacts without pulling those in. `enrich_with_prose` can attach AI prose to `summary` only. It must never change files, symbols or relationships.
 - **No guessing.** Anything the analyzer can't prove gets a scoped warning (`UNSUPPORTED_LANGUAGE`, `PARSE_FAILURE`, `PARTIAL_ANALYSIS` for NUL/binary content, and the resolution warnings). It never invents symbols or edges. Only Python (`.py`/`.pyi`) gets structural extraction. A call edge is emitted only when it resolves to exactly one target, either in the same file or through a changed-file import. Attribute dispatch and shadowed names are left out on purpose.
 - **Schema versioning.** `schema_version` is `MAJOR.MINOR`. Unknown majors are rejected. Minor bumps within v2 must be additive, and the whole artifact must still validate against the packaged schema. If the schema changes, also update `diffgraph-v2.structural.example.json` (both files are listed in `package_data` in `setup.py`).
 - **Determinism.** JSON is written with `sort_keys=True`, written atomically, and missing parent directories are not created. Ordering everywhere must be stable.
 - **CLI contract.** Exit code 0 means success (no changes still counts as success). 1 means a runtime, validation or output failure. 2 means a usage error. stdout carries only the artifact or terminal report. Diagnostics go to stderr. Option conflicts (`--structural-json` together with `--format`/`--output`, `--format terminal` together with `-o`, and so on) are `click.UsageError`s in `cli.main`. Pathspecs after `--` are relative to the directory where `wild` is invoked.
+
+### Opt-in AI summaries (`--llm`)
+
+`cli._enrich_with_llm` lazily imports `llm_summaries.py` (builds per-file prompts from the artifact's recorded blob ids, batches them, keeps only requested node ids) and `relay.py` (stdlib BYOK Relay client; the only network code on canonical paths). `contract.enrich_with_node_summaries` attaches `summary` to existing file/symbol entries, bumps `schema_version` to 2.1, and records privacy metadata. Formatters just render `summary` when present. Any backend implementing `llm_summaries.ChatClient` can replace the relay. Tests must never hit the network (`tests/test_llm_summaries.py` fakes the transport).
 
 ### Deprecated legacy path
 

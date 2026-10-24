@@ -213,6 +213,13 @@
             { "$ref": "#/$defs/Classification" },
             { "type": "null" }
           ]
+        },
+        "summary": {
+          "oneOf": [
+            { "$ref": "#/$defs/SummaryEntry" },
+            { "type": "null" }
+          ],
+          "description": "Optional LLM summary of this file's change (schema 2.1+). Absent in local-only mode."
         }
       }
     },
@@ -278,6 +285,13 @@
           "type": "array",
           "items": { "$ref": "#/$defs/Evidence" },
           "description": "Required for inferred; strongly recommended for structural. Structural symbols should include at least one ast_parse entry."
+        },
+        "summary": {
+          "oneOf": [
+            { "$ref": "#/$defs/SummaryEntry" },
+            { "type": "null" }
+          ],
+          "description": "Optional LLM summary of this symbol's change (schema 2.1+). Absent in local-only mode."
         }
       },
       "if": {

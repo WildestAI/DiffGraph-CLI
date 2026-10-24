@@ -300,6 +300,93 @@ def load_file_contents(changed_files: List[Dict[str, str]], diff_args: List[str]
 
     return files_with_content
 
+def _stdin_is_interactive() -> bool:
+    return sys.stdin.isatty()
+
+
+def _enrich_with_llm(artifact, model: str):
+    """Add per-node AI summaries through BYOK Relay (explicit opt-in only).
+
+    Network-capable modules are imported here, lazily, so canonical output
+    without --llm never loads them. All progress goes to stderr so JSON on
+    stdout stays a pure artifact.
+    """
+    from diffgraph.contract import enrich_with_node_summaries
+    from diffgraph.llm_summaries import PROMPT_REF, summarize_artifact
+    from diffgraph.relay import (
+        MissingProviderKey,
+        RelayClient,
+        RelayError,
+        load_token,
+        provider_for_model,
+        relay_url,
+        save_token,
+    )
+
+    try:
+        provider = provider_for_model(model)
+    except ValueError as error:
+        raise click.UsageError(str(error)) from error
+    interactive = _stdin_is_interactive()
+    base_url = relay_url()
+    client = RelayClient(base_url, load_token(base_url))
+
+    def require_interactive(what: str) -> None:
+        if not interactive:
+            raise click.ClickException(
+                f"{what}; run 'wild diff --llm {model}' once in an interactive "
+                "terminal to set up BYOK Relay, or set BYOK_RELAY_TOKEN"
+            )
+
+    def store_provider_key() -> None:
+        require_interactive(f"no {provider} key is stored on BYOK Relay")
+        click.echo(
+            f"🔑 wild sends your {provider} key once to BYOK Relay ({base_url}), "
+            "which stores it encrypted and never returns it. wild keeps only "
+            "the relay token.",
+            err=True,
+        )
+        key = click.prompt(f"{provider} API key", hide_input=True, err=True)
+        client.store_key(provider, key)
+
+    try:
+        if not client.token:
+            require_interactive("no BYOK Relay token is configured")
+            client.register()
+            path = save_token(base_url, client.token)
+            click.echo(f"🔐 BYOK Relay token saved to {path}", err=True)
+            store_provider_key()
+
+        def progress(done: int, total: int) -> None:
+            click.echo(f"🧠 Summarizing with {model} ({done}/{total})...", err=True)
+
+        click.echo(
+            f"📤 Sending the changed code to {provider} via BYOK Relay...", err=True
+        )
+        try:
+            result = summarize_artifact(artifact, client, model, progress=progress)
+        except MissingProviderKey:
+            store_provider_key()
+            result = summarize_artifact(artifact, client, model, progress=progress)
+    except MissingProviderKey as error:
+        raise click.ClickException(f"BYOK Relay: {error}") from error
+    except RelayError as error:
+        raise click.ClickException(f"BYOK Relay: {error}") from error
+
+    try:
+        return enrich_with_node_summaries(
+            artifact,
+            result.summaries,
+            provider=provider,
+            model=model,
+            llm_calls=result.llm_calls,
+            prompt_ref=PROMPT_REF,
+            warnings=result.warnings,
+        )
+    except (DiffGraphContractError, ValueError) as error:
+        raise click.ClickException(f"could not attach AI summaries: {error}") from error
+
+
 @click.command(
     cls=_RawArgsCommand,
     context_settings={"ignore_unknown_options": True, "allow_extra_args": True},
@@ -335,6 +422,17 @@ def load_file_contents(changed_files: List[Dict[str, str]], diff_args: List[str]
     type=click.Path(dir_okay=False, path_type=Path),
     help="Write the local Python structural DiffGraph v2 artifact ('-' for stdout)",
 )
+@click.option(
+    '--llm',
+    'llm_model',
+    metavar='MODEL',
+    default=None,
+    help=(
+        'Add AI summaries to each changed file and symbol using MODEL through '
+        'BYOK Relay (e.g. claude-haiku-5-5, gpt-5-mini, gemini-2.5-flash). '
+        'Sends the changed code to the model provider.'
+    ),
+)
 def main(
     args,
     api_key: str,
@@ -343,6 +441,7 @@ def main(
     no_open: bool,
     debug_env: bool,
     structural_json: Path,
+    llm_model: Optional[str],
 ):
     """wild - Git wrapper CLI with DiffGraph for diff commands."""
 
@@ -368,6 +467,10 @@ def main(
         raise click.UsageError("--structural-json cannot be combined with --output")
     if output_format == "terminal" and output is not None:
         raise click.UsageError("--format terminal writes to stdout and cannot use --output")
+    if llm_model is not None and (not args or args[0] != "diff"):
+        raise click.UsageError("--llm can only be used with 'diff'")
+    if llm_model is not None and output_format == "legacy-html":
+        raise click.UsageError("--llm cannot be combined with --format legacy-html")
     if debug_env and canonical_output_requested:
         raise click.UsageError(
             "--debug-env cannot be combined with canonical artifact output"
@@ -415,6 +518,8 @@ def main(
                 DiffGraphContractError,
             ) as error:
                 raise click.ClickException(str(error)) from error
+            if llm_model is not None:
+                artifact = _enrich_with_llm(artifact, llm_model)
             if structural_json is None and output_format == "terminal":
                 from diffgraph.formatters.terminal import TerminalFormatter
 
