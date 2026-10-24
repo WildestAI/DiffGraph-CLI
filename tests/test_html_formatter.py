@@ -327,3 +327,27 @@ def test_html_formatter_without_node_summaries_renders_no_summary_markup():
 
     assert "ai-summary" not in body
     assert "AI summary" not in body
+
+
+def test_package_sources_compile_without_warnings():
+    """Embedded JS lives in Python strings; invalid escapes (e.g. a bare \\s)
+    are SyntaxWarnings today and errors in future Python versions."""
+    import pathlib
+    import warnings
+
+    for path in pathlib.Path(__file__).resolve().parents[1].joinpath("diffgraph").rglob("*.py"):
+        with warnings.catch_warnings():
+            warnings.simplefilter("error")
+            compile(path.read_text(encoding="utf-8"), str(path), "exec")
+
+
+def test_graph_defaults_to_changed_symbols_with_toggle_for_the_rest():
+    from diffgraph.formatters.html import _INTERACTIVE_SCRIPT
+
+    # Unchanged symbols are hidden behind a per-file ▾/▴ toggle; call
+    # neighbours of changed code are counted in its label, not drawn.
+    assert "changedSymbolIds" in _INTERACTIVE_SCRIPT
+    assert "call or called by changed code" in _INTERACTIVE_SCRIPT
+    assert "state.expanded" in _INTERACTIVE_SCRIPT
+    assert "more-toggle" in _INTERACTIVE_SCRIPT
+    assert "▾" in _INTERACTIVE_SCRIPT and "▴" in _INTERACTIVE_SCRIPT

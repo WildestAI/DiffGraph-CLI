@@ -73,7 +73,7 @@ _INTERACTIVE_SCRIPT = textwrap.dedent(
       tooltip.className = 'graph-tooltip';
       tooltip.hidden = true;
       host.appendChild(tooltip);
-      const state = { scale: 1, x: 0, y: 0, dragging: false, collapsed: new Set() };
+      const state = { scale: 1, x: 0, y: 0, dragging: false, collapsed: new Set(), expanded: new Set() };
       // Colors live in the stylesheet so both light and dark themes apply.
       const changeKinds = new Set(['added', 'deleted', 'modified', 'unchanged', 'untracked', 'renamed']);
       const changeClass = (kind) => `ck-${changeKinds.has(kind) ? kind : 'unchanged'}`;
@@ -93,7 +93,7 @@ _INTERACTIVE_SCRIPT = textwrap.dedent(
         const summary = item && item.summary;
         if (!summary || typeof summary.text !== 'string' || !summary.text.trim()) return null;
         const inference = (summary.evidence || []).find((entry) => entry && entry.kind === 'llm_inference');
-        return { text: summary.text.trim().replace(/\s+/g, ' '), model: inference && inference.model ? String(inference.model) : null };
+        return { text: summary.text.trim().replace(/\\s+/g, ' '), model: inference && inference.model ? String(inference.model) : null };
       };
       const truncate = (value, max) => (value.length > max ? value.slice(0, max - 1) + '…' : value);
       const summaryLine = (summary, max) => truncate(`AI · ${summary.text}`, max);
@@ -114,6 +114,23 @@ _INTERACTIVE_SCRIPT = textwrap.dedent(
         node.addEventListener('focus', (event) => details(value, event));
         node.addEventListener('blur', hideDetails);
       };
+      // Default view: changed symbols plus their containing declarations.
+      // Call neighbours are not shown by default: one hub function can call,
+      // or be called by, dozens of unchanged symbols. They are counted in the
+      // per-file toggle so the change's dependency graph stays one click away.
+      const symbolIndex = new Map((artifact.symbols || []).map((symbol) => [symbol.id, symbol]));
+      const changedSymbolIds = new Set((artifact.symbols || []).filter((symbol) => symbol.change_kind && symbol.change_kind !== 'unchanged').map((symbol) => symbol.id));
+      const relevantSymbolIds = new Set(changedSymbolIds);
+      [...changedSymbolIds].forEach((id) => {
+        let parent = symbolIndex.get(id).parent_id;
+        while (parent && symbolIndex.has(parent) && !relevantSymbolIds.has(parent)) { relevantSymbolIds.add(parent); parent = symbolIndex.get(parent).parent_id; }
+      });
+      const callNeighbourIds = new Set();
+      (artifact.relationships || []).forEach((relationship) => {
+        if (relationship.kind !== 'calls') return;
+        if (changedSymbolIds.has(relationship.source_id)) callNeighbourIds.add(relationship.target_id);
+        if (changedSymbolIds.has(relationship.target_id)) callNeighbourIds.add(relationship.source_id);
+      });
       const setTransform = () => viewport.setAttribute('transform', `translate(${state.x} ${state.y}) scale(${state.scale})`);
       const draw = () => {
         viewport.replaceChildren();
@@ -139,8 +156,14 @@ _INTERACTIVE_SCRIPT = textwrap.dedent(
             const collapsed = state.collapsed.has(file.id);
             const fileSummary = summaryOf(file);
             const headerHeight = fileSummary ? 66 : 44;
-            const symbolRows = fileSymbols.map((symbol) => ({ symbol, summary: summaryOf(symbol) }));
-            const symbolsHeight = symbolRows.reduce((total, row) => total + (row.summary ? 54 : 38), 0);
+            const expanded = state.expanded.has(file.id);
+            const hiddenSymbols = fileSymbols.filter((symbol) => !relevantSymbolIds.has(symbol.id));
+            const hiddenCount = hiddenSymbols.length;
+            const relatedCount = hiddenSymbols.filter((symbol) => callNeighbourIds.has(symbol.id)).length;
+            const shownSymbols = expanded ? fileSymbols : fileSymbols.filter((symbol) => relevantSymbolIds.has(symbol.id));
+            const symbolRows = shownSymbols.map((symbol) => ({ symbol, summary: summaryOf(symbol) }));
+            const moreHeight = hiddenCount ? 34 : 0;
+            const symbolsHeight = symbolRows.reduce((total, row) => total + (row.summary ? 54 : 38), 0) + moreHeight;
             const height = collapsed ? headerHeight + 12 : Math.max(headerHeight + 28, headerHeight + symbolsHeight);
             const groupNode = svgEl('g', { class: 'file-container', tabindex: '0', role: 'button', 'aria-expanded': String(!collapsed), 'aria-label': `${collapsed ? 'Expand' : 'Collapse'} ${file.path || file.id}` });
             const rect = svgEl('rect', { x: 48, y, width: 1080, height, rx: 10, class: `file-box ${changeClass(file.change_kind)}` });
@@ -168,7 +191,23 @@ _INTERACTIVE_SCRIPT = textwrap.dedent(
               positions.set(symbol.id, { x: 390, y: sy + 14, visible: true });
               sy += boxHeight + 10;
             });
-            if (collapsed) fileSymbols.forEach((symbol) => positions.set(symbol.id, { visible: false }));
+            if (!collapsed && hiddenCount) {
+              const more = svgEl('g', { class: 'more-toggle', tabindex: '0', role: 'button', 'aria-expanded': String(expanded) });
+              const related = relatedCount ? ` · ${relatedCount} call or called by changed code` : '';
+              const label = expanded ? `▴ Show fewer (hide ${hiddenCount} unchanged)` : `▾ ${hiddenCount} more unchanged symbol${hiddenCount === 1 ? '' : 's'}${related}`;
+              more.setAttribute('aria-label', label);
+              more.appendChild(svgEl('rect', { x: 80, y: sy, width: 620, height: 24, rx: 7, class: 'more-box' }));
+              addText(more, label, 94, sy + 16, 'more-label');
+              const toggleMore = (event) => {
+                event.stopPropagation();
+                if (state.expanded.has(file.id)) state.expanded.delete(file.id); else state.expanded.add(file.id);
+                draw();
+              };
+              more.addEventListener('click', toggleMore);
+              more.addEventListener('keydown', (event) => { if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); toggleMore(event); } });
+              viewport.appendChild(more);
+            }
+            fileSymbols.forEach((symbol) => { if (collapsed || !positions.has(symbol.id)) positions.set(symbol.id, { visible: false }); });
             y += height + 14;
           });
           const moduleHeight = y - moduleY - 14;
@@ -315,6 +354,11 @@ class HtmlFormatter:
     .file-container, .symbol-node {{ cursor: pointer; outline: none; }}
     .file-container:hover > rect, .symbol-node:hover > rect {{ stroke-width: 3; }}
     .file-container:focus > rect, .symbol-node:focus > rect {{ stroke: var(--focus); stroke-width: 3; }}
+    .more-toggle {{ cursor: pointer; outline: none; }}
+    .more-box {{ fill: none; stroke: var(--outline); stroke-dasharray: 4 4; }}
+    .more-label {{ font-size: 13px; fill: var(--text-muted); }}
+    .more-toggle:hover .more-label, .more-toggle:focus .more-label {{ fill: var(--text-strong); }}
+    .more-toggle:focus > rect {{ stroke: var(--focus); stroke-dasharray: none; }}
     .graph-tooltip {{ position: absolute; z-index: 2; max-width: min(34rem, 80%); max-height: 18rem; margin: 0; padding: .65rem; overflow: auto; border: 1px solid var(--tooltip-border); border-radius: .4rem; background: var(--tooltip-bg); color: var(--tooltip-text); font-size: .75rem; pointer-events: none; }}
   </style>
 </head>
@@ -322,7 +366,7 @@ class HtmlFormatter:
   <h1>DiffGraph Report</h1>
   <section aria-labelledby="graph-heading">
     <h2 id="graph-heading">Interactive graph</h2>
-    <p class="panel">Scroll to zoom, drag blank space to pan, and select a file container to expand or collapse its canonical symbols. Hover or focus an item for its canonical details.</p>
+    <p class="panel">Scroll to zoom, drag blank space to pan, and select a file container to expand or collapse it. Files show changed symbols; use ▾/▴ to show or hide the unchanged ones. Hover or focus an item for its canonical details.</p>
     <div id="diffgraph-graph"></div>
   </section>
   <section aria-labelledby="artifact-heading">
