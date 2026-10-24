@@ -1,6 +1,6 @@
 # DiffGraph-CLI
 
-DiffGraph-CLI visualizes code changes from a validated canonical artifact. Its default HTML, terminal, and JSON reports are deterministic and local; the former AI-driven HTML report remains available for one compatibility release under an explicit deprecated option.
+DiffGraph-CLI visualizes code changes from a validated canonical artifact. Its terminal-default, HTML, and JSON reports are deterministic and local; the former AI-driven HTML report remains available for one compatibility release under an explicit deprecated option.
 
 ## 🌟 Features
 
@@ -47,19 +47,25 @@ Basic usage:
 wild diff
 ```
 
-This will:
-1. Resolve the selected local Git snapshot once
-2. Build and validate one canonical DiffGraph artifact
-3. Generate an HTML report (`diffgraph.html`) from that artifact
-4. Open the complete report in your default browser
+This will resolve the selected local Git snapshot once, build and validate one
+canonical DiffGraph artifact, then print the ranked review path to stdout. It
+writes no report and does not open a browser.
+
+To generate the interactive self-contained HTML report, choose HTML explicitly:
+```bash
+wild diff --format html
+# or use an HTML output path shorthand:
+wild diff -o diffgraph.html
+```
 
 ### Command-line Options
 
 - `--api-key`: Specify the OpenAI API key used only by `--format legacy-html`
   (defaults to `OPENAI_API_KEY`)
-- `--format`: Select canonical `html` (default), `terminal`, or `json` output. `legacy-html` temporarily selects the deprecated AI report.
-- `--output` or `-o`: Specify the HTML or JSON output path. HTML defaults to
-  `diffgraph.html`; JSON defaults to stdout. Terminal output is always stdout.
+- `--format`: Select canonical `terminal` (default), `html`, or `json` output. `legacy-html` temporarily selects the deprecated AI report.
+- `--output` or `-o`: Specify an HTML or JSON output path. Without an explicit
+  `--format`, an output path selects HTML. JSON defaults to stdout. Terminal
+  output is always stdout and never writes a file.
 - `--no-open`: Don't automatically open the HTML report in browser
 - `--structural-json`: Write a local Python structural DiffGraph v2 artifact to the given path (`-` for stdout). Applies to `wild diff` only.
 - `--version`: Show version information
@@ -75,7 +81,9 @@ A deterministic, network-free Python baseline can be rendered from one validated
 DiffGraph v2 artifact:
 
 ```bash
-wild diff --format html --no-open
+wild diff                         # terminal review path on stdout
+wild diff --format html --no-open  # self-contained visual report
+wild diff -o diffgraph.html        # HTML shorthand; opens unless --no-open
 wild diff --format json
 wild diff --format json --output diffgraph.json
 wild diff --format terminal
@@ -129,8 +137,9 @@ and caller-relative pathspecs are preserved.
   one artifact, validates it against the packaged schema, and passes that same
   validated object to the HTML, JSON, or terminal consumer. Consumers never
   re-read repository files or rebuild the artifact.
-- JSON sent to stdout contains only the artifact. Terminal output also uses
-  stdout. A successful JSON file write reports its path on stderr; diagnostics,
+- The flagless `wild diff` path uses terminal output only: it writes no files and
+  launches no browser. JSON sent to stdout contains only the artifact. Terminal
+  output also uses stdout. A successful JSON file write reports its path on stderr; diagnostics,
   usage help, and errors use stderr. Explicit JSON paths are replaced atomically
   and parent directories are not created implicitly.
 - Exit code `0` means success, including a snapshot with no changes. Empty JSON

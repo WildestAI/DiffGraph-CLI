@@ -4,11 +4,12 @@ Use this skill to analyse git diffs with WildestAI's `wild` CLI and get semantic
 
 ## What it does
 
-`wild diff` analyses your current git diff using AI and produces:
+`wild diff` deterministically analyses your current Git diff and prints a ranked
+review path to stdout. Canonical HTML and JSON reports are available explicitly:
 - A dependency graph of changed components and their relationships
-- An HTML report (`diffgraph.html`) with Mermaid.js visualisation
-- Syntax-highlighted code blocks with AI-generated summaries
-- Answers to: what changed, how components relate, what needs attention
+- An offline self-contained HTML report (`--format html` or `-o report.html`)
+- A schema-v2 JSON artifact for IDEs and CI (`--format json`)
+- Optional deprecated AI HTML compatibility (`--format legacy-html`)
 
 ## Prerequisites
 
@@ -40,8 +41,10 @@ wild diff <commit1> <commit2>
 # Diff for a specific file
 wild diff path/to/file.py
 
-# Write output to a custom file, don't auto-open
-wild diff --output report.html --no-open
+# Generate an interactive HTML report, don't auto-open
+wild diff --format html --output report.html --no-open
+# `-o` alone also selects HTML
+wild diff -o report.html --no-open
 
 # All other git commands pass through transparently
 wild log
@@ -51,10 +54,10 @@ wild status
 
 ## Output
 
-By default, generates `diffgraph.html` in the current directory and opens it in your browser.
-
-Use `--no-open` to suppress auto-open (useful in CI or headless environments).
-Use `--output <path>` to write to a specific location.
+By default, writes the terminal review path to stdout without creating files or
+opening a browser. Use `--format html` for the interactive offline report; it
+opens automatically unless `--no-open` is passed. `--output <path>` without an
+explicit format is an HTML shorthand.
 
 ## MCP Server
 
