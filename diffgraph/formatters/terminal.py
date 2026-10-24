@@ -97,6 +97,54 @@ def _change_label(change_kind: str, color: bool) -> str:
     return colorize(label, color)
 
 
+def _collapsed(items: list[str], max_inline: int = 3) -> str:
+    """Join items, collapsing any beyond max_inline into '(+N more)'."""
+    text = ", ".join(items[:max_inline])
+    extra = len(items) - max_inline
+    if extra > 0:
+        text += f"  (+{extra} more)"
+    return text
+
+
+def _warning_lines(warnings: list[dict]) -> list[str]:
+    """Return one readable line per warning.
+
+    File-scoped UNSUPPORTED_LANGUAGE warnings collapse into a single line:
+    their detail is a fixed message plus blob ids, which the JSON artifact
+    already carries. Other warnings keep their detail, since it is specific
+    (e.g. the location of a syntax error).
+    """
+    lines: list[str] = []
+    unsupported: list[str] = []
+    unsupported_index = 0
+    for w in warnings:
+        code = w.get("code", "UNKNOWN")
+        path = w.get("file")
+        if code == "UNSUPPORTED_LANGUAGE" and path:
+            if not unsupported:
+                # Placeholder keeps the summary at the first occurrence's position.
+                unsupported_index = len(lines)
+                lines.append("")
+            unsupported.append(path)
+            continue
+        detail = w.get("detail", "")
+        # Git resolution details already start with their own code.
+        if detail.startswith(f"{code}: "):
+            detail = detail[len(code) + 2:]
+        line = code
+        if path:
+            line += f"  {path}"
+        if detail:
+            line += f": {detail}" if path else f"  {detail}"
+        lines.append(line)
+    if unsupported:
+        lines[unsupported_index] = (
+            f"Not analyzed (Python only, {len(unsupported)} "
+            f"file{'s' if len(unsupported) != 1 else ''}): {_collapsed(unsupported)}"
+        )
+    return lines
+
+
 # ---------------------------------------------------------------------------
 # Ranking data structures
 # ---------------------------------------------------------------------------
@@ -299,8 +347,8 @@ class TerminalFormatter:
         """Write any per-file warnings (e.g. unsupported language fallbacks)."""
         metadata = self.dg.get("metadata", {})
         warnings = metadata.get("warnings", [])
-        for w in warnings:
-            out.write(dim_red("⚠", color) + f"  {w}\n")
+        for line in _warning_lines(warnings):
+            out.write(dim_red("⚠", color) + f"  {line}\n")
         if warnings:
             out.write("\n")
 
@@ -381,13 +429,7 @@ class TerminalFormatter:
 
         # Importer line (REVIEW FIRST only)
         if rs.importer_paths and section_title == "REVIEW FIRST":
-            importers = rs.importer_paths
-            max_inline = 3
-            shown = importers[:max_inline]
-            extra = len(importers) - len(shown)
-            importer_str = ", ".join(shown)
-            if extra:
-                importer_str += f"  (+{extra} more)"
+            importer_str = _collapsed(rs.importer_paths)
             arrow = "↳" if not _is_dumb_terminal() else "+->"
             out.write(
                 "    " + dim(f"{arrow} imported by: {importer_str}", color) + "\n"
