@@ -16,7 +16,7 @@ DiffGraph-CLI visualizes code changes from a validated canonical artifact. Its d
 
 1. Clone the repository:
 ```bash
-git clone https://github.com/WildestAI/wild.git
+git clone https://github.com/yourusername/wild.git
 cd wild
 ```
 
