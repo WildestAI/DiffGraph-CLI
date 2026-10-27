@@ -129,10 +129,20 @@ def test_provider_for_model(model, provider):
         ("Claude", ("anthropic", "claude-opus-5-5")),
         ("openai", ("openai", "gpt-6-astra")),
         ("gemini-3.8-flash", ("google", "gemini-3.8-flash")),
+        ("claude:fast", ("anthropic", "claude-haiku-5-5")),
+        ("Claude:Balanced", ("anthropic", "claude-sonnet-5-5")),
+        ("gpt:fast", ("openai", "gpt-6-luna")),
+        ("gemini:fast", ("google", "gemini-3.8-flash")),
+        ("gemini:best", ("google", "gemini-4-argon")),
     ],
 )
-def test_resolve_model_accepts_provider_defaults_and_exact_ids(value, expected):
+def test_resolve_model_accepts_provider_defaults_tiers_and_exact_ids(value, expected):
     assert resolve_model(value) == expected
+
+
+def test_resolve_model_rejects_unknown_tiers():
+    with pytest.raises(ValueError, match="unknown tier 'balanced' for gemini; use one of: best, fast"):
+        resolve_model("gemini:balanced")
 
 
 def test_provider_for_unknown_model_is_rejected():
