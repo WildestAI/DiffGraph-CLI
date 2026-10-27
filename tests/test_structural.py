@@ -2496,3 +2496,39 @@ def test_symbol_source_and_file_diff_split_lines_like_git(tmp_path):
     }
     unified = next(item for item in artifact["files"] if item["path"] == "mod.py")["diff"]["unified"]
     assert "-    return 2\n\\ No newline at end of file\n+    return 3\n\\ No newline at end of file\n" in unified
+
+
+def test_inherits_edges_require_a_confirmed_class_target(tmp_path):
+    """External bases, and functions or constants used as bases, are not
+    inheritance edges; the import symbol and its evidence remain."""
+    root = repo(tmp_path)
+    write(root, "pkg/__init__.py", "")
+    write(root, "pkg/base.py", "def factory():\n    return object\n\nclass Base:\n    pass\n\nclass Old:\n    pass\n")
+    write(root, "pkg/outside.py",
+          "from pkg.base import factory, Base, Old\n\n"
+          "class FromFunction(factory):\n    pass\n\n"
+          "class FromClass(Base):\n    pass\n\n"
+          "class FromDeleted(Old):\n    pass\n")
+    git(root, "add", ".")
+    git(root, "commit", "-m", "base")
+    # factory and Base change, Old is deleted; outside.py is untouched.
+    write(root, "pkg/base.py", "def factory():\n    return dict\n\nclass Base:\n    x = 1\n")
+    write(root, "pkg/inside.py",
+          "from external import Framework\nfrom pkg.base import factory\n\n"
+          "class UsesExternal(Framework):\n    pass\n\n"
+          "class UsesFunction(factory):\n    pass\n")
+
+    artifact = analyze_local_diff(str(root))
+
+    assert_valid(artifact)
+    inherits = {
+        (item["source_id"], item["target_id"])
+        for item in artifact["relationships"] if item["kind"] == "inherits"
+    }
+    assert inherits == {
+        ("sym::pkg/outside.py::FromClass", "sym::pkg/base.py::Base"),
+        ("sym::pkg/outside.py::FromDeleted", "sym::pkg/base.py::Old"),
+    }
+    # The external import is still recorded as an import symbol with evidence.
+    stub = next(item for item in artifact["symbols"] if item["id"] == "sym::pkg/inside.py::import::external")
+    assert stub["kind"] == "import" and stub["evidence"][0]["snippet"] == "from external import Framework"
