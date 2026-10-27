@@ -92,9 +92,8 @@ _INTERACTIVE_SCRIPT = textwrap.dedent(
       svg.setAttribute('role', 'img');
       svg.setAttribute('aria-label', 'Interactive DiffGraph visualization');
       svg.setAttribute('tabindex', '0');
-      const title = document.createElementNS(NS, 'title');
-      title.textContent = 'Interactive DiffGraph visualization';
-      svg.appendChild(title);
+      // No SVG <title>: browsers show it as a native tooltip over every child,
+      // hiding the graph's own tooltip. aria-label already names the graph.
       const viewport = document.createElementNS(NS, 'g');
       svg.appendChild(viewport);
       host.appendChild(svg);
@@ -103,10 +102,11 @@ _INTERACTIVE_SCRIPT = textwrap.dedent(
       tooltip.className = 'graph-tooltip';
       tooltip.hidden = true;
       host.appendChild(tooltip);
-      const state = { scale: 1, x: 0, y: 0, dragging: false, collapsed: new Set(), expanded: new Set(), selected: null, wide: false };
+      const state = { scale: 1, x: 0, y: 0, dragging: false, collapsed: new Set(), expanded: new Set(), collapsedModules: new Set(), showUnchanged: false, selected: null, wide: false };
       const DRAWN_KINDS = new Set(['calls', 'imports', 'inherits', 'implements']);
       const SYMBOL_RIGHT = 700;
       const FILE_RIGHT = 1128;
+      const MODULE_RIGHT = 1152;
       const edgeIndex = new Map();
       // Colors live in the stylesheet so both light and dark themes apply.
       const changeKinds = new Set(['added', 'deleted', 'modified', 'unchanged', 'untracked', 'renamed']);
@@ -145,6 +145,7 @@ _INTERACTIVE_SCRIPT = textwrap.dedent(
         if (file) return file.path || id;
         const symbol = symbolIndex.get(id);
         if (symbol) return symbol.qualified_name || symbol.name || id;
+        if (String(id).startsWith('module::')) { const module = moduleList.find((entry) => entry.id === id); return `module ${module ? module.name : id}`; }
         return id;
       };
 
@@ -348,6 +349,7 @@ _INTERACTIVE_SCRIPT = textwrap.dedent(
         const symbol = symbolIndex.get(id);
         const fileId = symbol ? symbol.file_id : id;
         state.collapsed.delete(fileId);
+        state.collapsedModules.delete(moduleIdOf.get(fileId));
         if (symbol && !relevantSymbolIds.has(id)) state.expanded.add(fileId);
       };
       const linkTo = (id) => {
@@ -448,6 +450,8 @@ _INTERACTIVE_SCRIPT = textwrap.dedent(
           if (symbol.source) parts.push(symbolDiff(symbol));
           else if (!changedSymbolIds.has(symbol.id)) parts.push(htmlEl('p', 'details-meta', 'Unchanged in this snapshot.'));
           if (symbol.parent_id) parts.push(section('Defined in', [symbol.parent_id]));
+          parts.push(section('Inherits from', outgoing(symbol.id, 'inherits')));
+          parts.push(section('Subclassed by', incoming(symbol.id, 'inherits')));
           parts.push(section('Calls', outgoing(symbol.id, 'calls')));
           parts.push(section('Called by', incoming(symbol.id, 'calls')));
           parts.push(section('Imported by', incoming(symbol.id, 'imports').filter((id) => id !== symbol.file_id)));
@@ -486,23 +490,135 @@ _INTERACTIVE_SCRIPT = textwrap.dedent(
         node.addEventListener('keydown', (event) => { if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); onSelect(); } });
       };
       const isSelected = (id) => Boolean(state.selected && state.selected.id === id);
+
+      // ---- Reading order: top to bottom, callers above the code they call ----
+      // Changed source comes first (the change's entry points at the very top),
+      // then files outside the diff, then tests, which call everything.
+      const fileOf = (id) => (symbolIndex.has(id) ? symbolIndex.get(id).file_id : id);
+      const isTestPath = (path) => {
+        const parts = String(path || '').split('/');
+        const base = parts[parts.length - 1];
+        return parts.slice(0, -1).some((part) => part === 'tests' || part === 'test') || base.startsWith('test_') || base.endsWith('_test.py');
+      };
+      const category = (file) => (isTestPath(file.path) ? 2 : file.change_kind === 'unchanged' ? 1 : 0);
+      const dependencyEdges = relationships.filter((r) => DRAWN_KINDS.has(r.kind) && !(r.kind === 'imports' && fileOf(r.target_id) === r.source_id));
+      // Kahn's algorithm: a node is placed once everything that depends on it
+      // (its callers) is placed. A cycle releases the node with the fewest
+      // unplaced callers. Ties use ``compare``.
+      const topoOrder = (ids, pairs, compare) => {
+        const idSet = new Set(ids);
+        const callers = new Map(ids.map((id) => [id, new Set()]));
+        const callees = new Map(ids.map((id) => [id, new Set()]));
+        pairs.forEach(([from, to]) => {
+          if (from === to || !idSet.has(from) || !idSet.has(to)) return;
+          callees.get(from).add(to);
+          callers.get(to).add(from);
+        });
+        const placed = new Set();
+        const order = [];
+        const pending = (id) => [...callers.get(id)].filter((from) => !placed.has(from)).length;
+        const tie = (a, b) => compare(a, b, callees);
+        while (order.length < ids.length) {
+          const open = ids.filter((id) => !placed.has(id));
+          const ready = open.filter((id) => pending(id) === 0);
+          const next = (ready.length ? ready.sort(tie) : open.sort((a, b) => pending(a) - pending(b) || tie(a, b)))[0];
+          placed.add(next);
+          order.push(next);
+        }
+        return order;
+      };
+      const filePairs = dependencyEdges.map((r) => [fileOf(r.source_id), fileOf(r.target_id)]);
+      const byOutdegreeThenPath = (a, b, callees) => callees.get(b).size - callees.get(a).size || nameOf(a).localeCompare(nameOf(b));
+      const fileOrder = [0, 1, 2].flatMap((group) => topoOrder(files.filter((file) => category(file) === group).map((file) => file.id), filePairs, byOutdegreeThenPath));
+      const fileRank = new Map(fileOrder.map((id, index) => [id, index]));
+      const moduleNameOf = (file) => { const bits = String(file.path || file.id).split('/'); return bits.length > 1 ? bits.slice(0, -1).join('/') : '(root)'; };
+      const moduleList = [];
+      const moduleIdOf = new Map();
+      // A module is a directory within one reading group (changed source,
+      // outside the diff, tests), so grouping never pulls a later group above
+      // an earlier one, and every module id is unique.
+      const GROUP_SUFFIX = ['', ' · outside the diff', ' · tests'];
+      fileOrder.forEach((id) => {
+        const file = fileIndex.get(id);
+        const directory = moduleNameOf(file);
+        const group = category(file);
+        let module = moduleList.find((entry) => entry.directory === directory && entry.group === group);
+        if (!module) {
+          const testsDirectory = directory.split('/').some((part) => part === 'tests' || part === 'test');
+          const suffix = group === 2 && testsDirectory ? '' : GROUP_SUFFIX[group];
+          module = { directory, group, name: `${directory}${suffix}`, id: `module::${group}::${directory}`, files: [] };
+          moduleList.push(module);
+        }
+        module.files.push(file);
+        moduleIdOf.set(file.id, module.id);
+      });
+      // Many modules start collapsed, except the first: there is always a place to start.
+      if (moduleList.length >= 5) moduleList.slice(1).forEach((module) => state.collapsedModules.add(module.id));
+      const lineOf = (symbol) => (symbol.location && symbol.location.line_start) || ((symbol.evidence || [])[0] || {}).line_start || 0;
+      const topOf = (id) => { let current = symbolIndex.get(id); while (current && current.parent_id && symbolIndex.has(current.parent_id)) current = symbolIndex.get(current.parent_id); return current ? current.id : id; };
+      const symbolRank = new Map();
+      files.forEach((file) => {
+        const own = symbols.filter((symbol) => symbol.file_id === file.id);
+        const tops = own.filter((symbol) => !symbol.parent_id || !symbolIndex.has(symbol.parent_id)).map((symbol) => symbol.id);
+        const pairs = dependencyEdges.filter((r) => symbolIndex.has(r.source_id) && symbolIndex.has(r.target_id) && fileOf(r.source_id) === file.id && fileOf(r.target_id) === file.id).map((r) => [topOf(r.source_id), topOf(r.target_id)]);
+        // Ties favour symbols that call more of the file (entry points), then source order.
+        const byLine = (a, b, callees) => callees.get(b).size - callees.get(a).size || lineOf(symbolIndex.get(a)) - lineOf(symbolIndex.get(b));
+        let rank = 0;
+        topoOrder(tops, pairs, byLine).forEach((topId) => {
+          symbolRank.set(topId, rank++);
+          own.filter((symbol) => symbol.id !== topId && topOf(symbol.id) === topId).sort((a, b) => lineOf(a) - lineOf(b)).forEach((symbol) => symbolRank.set(symbol.id, rank++));
+        });
+      });
+      const startFileId = fileOrder.length ? fileOrder[0] : null;
+
+      // ---- Graph toolbar ----
+      const toolbar = htmlEl('div', 'graph-toolbar');
+      const tool = (label, onClick) => { const button = htmlEl('button', 'tool', label); button.type = 'button'; button.addEventListener('click', onClick); toolbar.appendChild(button); return button; };
+      const unchangedButton = tool('Show unchanged', () => {
+        state.showUnchanged = !state.showUnchanged;
+        unchangedButton.textContent = state.showUnchanged ? 'Hide unchanged' : 'Show unchanged';
+        unchangedButton.setAttribute('aria-pressed', String(state.showUnchanged));
+        draw();
+      });
+      unchangedButton.setAttribute('aria-pressed', 'false');
+      if (moduleList.length > 1) {
+        tool('Expand modules', () => { state.collapsedModules.clear(); draw(); });
+        tool('Collapse modules', () => { moduleList.forEach((module) => state.collapsedModules.add(module.id)); draw(); });
+      }
+      host.appendChild(toolbar);
       const setTransform = () => viewport.setAttribute('transform', `translate(${state.x} ${state.y}) scale(${state.scale})`);
       const draw = () => {
         viewport.replaceChildren();
-        const modules = new Map();
-        files.forEach((file) => {
-          const bits = String(file.path || file.id).split('/');
-          const module = bits.length > 1 ? bits.slice(0, -1).join('/') : '(root)';
-          if (!modules.has(module)) modules.set(module, []);
-          modules.get(module).push(file);
-        });
         const positions = new Map();
-        let y = 24;
-        [...modules.entries()].sort(([a], [b]) => a.localeCompare(b)).forEach(([module, group]) => {
+        let y = 60;
+        moduleList.forEach((module) => {
           const moduleY = y;
+          const group = module.files;
           const moduleGroup = svgEl('g', { class: 'module-container' });
           viewport.appendChild(moduleGroup);
-          addText(moduleGroup, `module: ${module}`, 34, y + 22, 'module-label');
+          const moduleCollapsed = state.collapsedModules.has(module.id);
+          const moduleToggle = svgEl('g', { class: 'module-toggle', tabindex: '0', role: 'button', 'aria-expanded': String(!moduleCollapsed), 'aria-label': `${moduleCollapsed ? 'Expand' : 'Collapse'} module ${module.name}` });
+          moduleToggle.appendChild(svgEl('rect', { x: 28, y: y + 4, width: 1120, height: 26, rx: 6, class: 'toggle-hit' }));
+          addText(moduleToggle, `${moduleCollapsed ? '▶' : '▼'}  module: ${module.name}`, 34, y + 22, 'module-label');
+          if (moduleCollapsed) {
+            const changedCount = symbols.filter((symbol) => moduleIdOf.get(symbol.file_id) === module.id && changedSymbolIds.has(symbol.id)).length;
+            const outside = group.filter((file) => file.change_kind === 'unchanged').length;
+            const summaryText = `${group.length} file${group.length === 1 ? '' : 's'} · ${changedCount} changed symbol${changedCount === 1 ? '' : 's'}${outside ? ` · ${outside} outside the diff` : ''}`;
+            addText(moduleToggle, summaryText, 34, y + 44, 'change-label');
+          }
+          const flipModule = (event) => { event.stopPropagation(); if (state.collapsedModules.has(module.id)) state.collapsedModules.delete(module.id); else state.collapsedModules.add(module.id); draw(); };
+          moduleToggle.addEventListener('click', flipModule);
+          moduleToggle.addEventListener('keydown', (event) => { if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); flipModule(event); } });
+          moduleGroup.appendChild(moduleToggle);
+          if (moduleCollapsed) {
+            positions.set(module.id, { y: y + 22, visible: true });
+            group.forEach((file) => { positions.set(file.id, { visible: false }); });
+            y += 60;
+            const outline = svgEl('rect', { x: 24, y: moduleY, width: 1128, height: 56, rx: 14, class: 'module-outline collapsed' });
+            moduleGroup.insertBefore(outline, moduleGroup.firstChild);
+            y += 18;
+            return;
+          }
           y += 34;
           group.forEach((file) => {
             const fileSymbols = symbols.filter((symbol) => symbol.file_id === file.id);
@@ -513,15 +629,18 @@ _INTERACTIVE_SCRIPT = textwrap.dedent(
             const hiddenSymbols = fileSymbols.filter((symbol) => !relevantSymbolIds.has(symbol.id));
             const hiddenCount = hiddenSymbols.length;
             const relatedCount = hiddenSymbols.filter((symbol) => callNeighbourIds.has(symbol.id)).length;
-            const shownSymbols = expanded ? fileSymbols : fileSymbols.filter((symbol) => relevantSymbolIds.has(symbol.id));
+            const showAll = expanded || state.showUnchanged;
+            const shownSymbols = (showAll ? fileSymbols : fileSymbols.filter((symbol) => relevantSymbolIds.has(symbol.id)))
+              .sort((a, b) => (symbolRank.get(a.id) || 0) - (symbolRank.get(b.id) || 0));
             const symbolRows = shownSymbols.map((symbol) => ({ symbol, summary: summaryOf(symbol) }));
-            const moreHeight = hiddenCount ? 34 : 0;
+            const moreHeight = hiddenCount && !state.showUnchanged ? 34 : 0;
             const symbolsHeight = symbolRows.reduce((total, row) => total + (row.summary ? 54 : 38), 0) + moreHeight;
             const height = collapsed || !fileSymbols.length ? headerHeight + 12 : Math.max(headerHeight + 28, headerHeight + symbolsHeight);
             const groupNode = svgEl('g', { class: 'file-container', tabindex: '0', role: 'button', 'aria-label': `Details for ${file.path || file.id}` });
             const context = contextFileIds.has(file.id);
             groupNode.appendChild(svgEl('rect', { x: 48, y, width: 1080, height, rx: 10, class: `file-box ${changeClass(file.change_kind)}${context ? ' context' : ''}${isSelected(file.id) ? ' selected' : ''}` }));
             addText(groupNode, file.path || file.id, 88, y + 29, 'file-label');
+            if (file.id === startFileId) addText(groupNode, '◆ start here', 880, y + 29, 'start-label');
             addText(groupNode, context ? 'outside diff' : file.change_kind || 'unknown', context ? 1000 : 1014, y + 29, 'change-label');
             if (fileSummary) addText(groupNode, summaryLine(fileSummary, 150), 88, y + 52, 'summary-label');
             interactive(groupNode, file, () => select(file.id));
@@ -549,7 +668,7 @@ _INTERACTIVE_SCRIPT = textwrap.dedent(
               positions.set(symbol.id, { x: 390, y: sy + 14, visible: true });
               sy += boxHeight + 10;
             });
-            if (!collapsed && hiddenCount) {
+            if (!collapsed && hiddenCount && !state.showUnchanged) {
               const more = svgEl('g', { class: 'more-toggle', tabindex: '0', role: 'button', 'aria-expanded': String(expanded) });
               const related = relatedCount ? ` · ${relatedCount} call or called by changed code` : '';
               const label = expanded ? `▴ Show fewer (hide ${hiddenCount})` : `▾ ${hiddenCount} more symbol${hiddenCount === 1 ? '' : 's'} (unchanged or imports)${related}`;
@@ -578,14 +697,17 @@ _INTERACTIVE_SCRIPT = textwrap.dedent(
         // touching a file header), so boxes never hide them. An endpoint hidden
         // by a collapsed file or the ▾ toggle is lifted to its file header, and
         // parallel edges between the same two anchors merge into one with a count.
+        // Lift an endpoint to the nearest visible anchor: symbol, file, module.
         const anchorOf = (id) => {
           const pos = positions.get(id);
-          if (pos && pos.visible) return { id, y: pos.y, symbol: symbolIndex.has(id) };
-          const symbol = symbolIndex.get(id);
-          const filePos = symbol && positions.get(symbol.file_id);
-          return filePos ? { id: symbol.file_id, y: filePos.y, symbol: false } : null;
+          if (pos && pos.visible) return { id, y: pos.y, x: symbolIndex.has(id) ? SYMBOL_RIGHT : FILE_RIGHT, symbol: symbolIndex.has(id) };
+          const fileId = fileOf(id);
+          const filePos = fileId !== id ? positions.get(fileId) : null;
+          if (filePos && filePos.visible) return { id: fileId, y: filePos.y, x: FILE_RIGHT, symbol: false };
+          const moduleId = moduleIdOf.get(fileId);
+          const modulePos = moduleId && positions.get(moduleId);
+          return modulePos && modulePos.visible ? { id: moduleId, y: modulePos.y, x: MODULE_RIGHT, symbol: false } : null;
         };
-        const fileOf = (id) => (symbolIndex.has(id) ? symbolIndex.get(id).file_id : id);
         const merged = new Map();
         relationships.forEach((relationship) => {
           if (!DRAWN_KINDS.has(relationship.kind)) return;
@@ -604,10 +726,10 @@ _INTERACTIVE_SCRIPT = textwrap.dedent(
         edgeIndex.clear();
         [...merged.values()].sort((a, b) => a.key.localeCompare(b.key)).forEach((edge) => {
           const inner = edge.from.symbol && edge.to.symbol;
-          const x = inner ? SYMBOL_RIGHT : FILE_RIGHT;
+          const x = Math.max(edge.from.x, edge.to.x);
           const dy = Math.abs(edge.to.y - edge.from.y);
-          const bulge = inner ? Math.min(290, 28 + dy * 0.35) : Math.min(240, 28 + dy * 0.3);
-          const d = `M ${x} ${edge.from.y} C ${x + bulge} ${edge.from.y}, ${x + bulge} ${edge.to.y}, ${x} ${edge.to.y}`;
+          const bulge = inner ? Math.min(290, 28 + dy * 0.35) : Math.min(220, 28 + dy * 0.3);
+          const d = `M ${edge.from.x} ${edge.from.y} C ${x + bulge} ${edge.from.y}, ${x + bulge} ${edge.to.y}, ${edge.to.x} ${edge.to.y}`;
           const kinds = new Set(edge.relationships.map((r) => r.kind));
           const classes = ['edge', kinds.has('calls') ? 'kind-calls' : kinds.has('inherits') || kinds.has('implements') ? 'kind-inherits' : 'kind-imports'];
           if (isSelected(edge.key)) classes.push('selected');
@@ -802,6 +924,13 @@ class HtmlFormatter:
     .more-label {{ font-size: 13px; fill: var(--text-muted); }}
     .more-toggle:hover .more-label, .more-toggle:focus .more-label {{ fill: var(--text-strong); }}
     .more-toggle:focus > rect {{ stroke: var(--focus); stroke-dasharray: none; }}
+    .graph-toolbar {{ position: absolute; top: .55rem; left: .6rem; z-index: 2; display: flex; gap: .35rem; }}
+    .tool {{ padding: .2rem .6rem; border: 1px solid var(--outline); border-radius: .35rem; background: var(--node-bg); color: var(--text); font: inherit; font-size: .78rem; cursor: pointer; }}
+    .tool[aria-pressed="true"] {{ border-color: var(--selected); color: var(--selected); }}
+    .module-toggle {{ cursor: pointer; outline: none; }}
+    .module-toggle:hover .toggle-hit, .module-toggle:focus .toggle-hit {{ fill: var(--symbol-bg); }}
+    .module-outline.collapsed {{ fill: var(--node-bg); }}
+    .start-label {{ font-size: 12px; font-weight: 700; fill: var(--selected); }}
     .graph-tooltip {{ position: absolute; z-index: 2; max-width: min(28rem, 80%); margin: 0; padding: .45rem .6rem; white-space: pre-line; border: 1px solid var(--tooltip-border); border-radius: .4rem; background: var(--tooltip-bg); color: var(--tooltip-text); font-size: .75rem; pointer-events: none; }}
   </style>
 </head>
@@ -819,11 +948,12 @@ class HtmlFormatter:
           <li>Scroll to zoom; drag empty space to pan.</li>
           <li>▶/▼ collapses a file; ▾/▴ shows or hides its unchanged symbols.</li>
           <li>Dashed files are outside the diff: they call or import changed code.</li>
+          <li>Read top to bottom: code that calls is above the code it calls (◆ marks where to start); tests and files outside the diff come last.</li>
         </ul>
         <div class="legend">
           <span class="badge ck-added">added</span><span class="badge ck-modified">modified</span><span class="badge ck-deleted">deleted</span><span class="badge ck-renamed">renamed</span><span class="badge ck-unchanged">unchanged</span>
         </div>
-        <p class="details-meta">Solid arcs are calls, dashed arcs imports; a number counts merged edges. Hover a box to highlight its connections.</p>
+        <p class="details-meta">Solid arcs are calls, dashed arcs imports, dotted arcs inheritance; a number counts merged edges. Hover a box to highlight its connections.</p>
       </div>
       <div class="details-body" hidden></div>
     </aside>

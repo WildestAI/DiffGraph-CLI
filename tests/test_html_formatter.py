@@ -414,6 +414,22 @@ def test_context_files_are_marked_and_counted_separately():
     assert "'outside diff'" in report and "file-box.context" in report
 
 
+def test_graph_reads_top_to_bottom_with_collapsible_modules_and_unchanged_toggle():
+    from diffgraph.formatters.html import _INTERACTIVE_SCRIPT as script
+
+    # Callers above the code they call (Kahn order), tests and context last.
+    assert "const topoOrder = (ids, pairs, compare)" in script
+    assert "isTestPath(file.path) ? 2 : file.change_kind === 'unchanged' ? 1 : 0" in script
+    assert "'◆ start here'" in script
+    # Modules collapse (by default from five, keeping the first open) and
+    # edges into a collapsed module attach to its header.
+    assert "if (moduleList.length >= 5) moduleList.slice(1)" in script
+    assert "MODULE_RIGHT" in script and "moduleIdOf.get(fileId)" in script
+    # One toggle shows or hides every unchanged symbol.
+    assert "state.showUnchanged = !state.showUnchanged" in script
+    assert "'Show unchanged'" in script
+
+
 def test_unified_diff_parser_keeps_dash_dash_lines_inside_hunks():
     from diffgraph.formatters.html import _INTERACTIVE_SCRIPT as script
 
@@ -426,3 +442,30 @@ def test_changed_symbol_without_source_is_not_called_unchanged():
     from diffgraph.formatters.html import _INTERACTIVE_SCRIPT as script
 
     assert "else if (!changedSymbolIds.has(symbol.id)) parts.push(htmlEl('p', 'details-meta', 'Unchanged in this snapshot.'));" in script
+
+
+def test_graph_has_no_native_svg_title_tooltip():
+    from diffgraph.formatters.html import _INTERACTIVE_SCRIPT as script
+
+    # An SVG <title> becomes a browser tooltip over the whole graph and hides
+    # the node tooltips (including AI summaries); aria-label names it instead.
+    assert "createElementNS(NS, 'title')" not in script
+    assert "svg.setAttribute('aria-label', 'Interactive DiffGraph visualization')" in script
+
+
+def test_modules_split_by_reading_group_with_unique_ids():
+    from diffgraph.formatters.html import _INTERACTIVE_SCRIPT as script
+
+    # A directory holding changed files and callers outside the diff becomes
+    # two modules, so a later reading group never jumps above an earlier one
+    # and module ids stay unique.
+    assert "entry.directory === directory && entry.group === group" in script
+    assert "id: `module::${group}::${directory}`" in script
+    assert "' · outside the diff'" in script
+
+
+def test_details_link_reveals_symbol_inside_a_collapsed_module():
+    from diffgraph.formatters.html import _INTERACTIVE_SCRIPT as script
+
+    reveal = script.split("const reveal = (id) => {", 1)[1].split("};", 1)[0]
+    assert "state.collapsedModules.delete(moduleIdOf.get(fileId));" in reveal

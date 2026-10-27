@@ -8,6 +8,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- `inherits` edges for bare-name base classes, only to a confirmed class:
+  local, imported from a changed file, or a changed or deleted class
+  subclassed outside the diff. External bases keep only their import symbol.
 - Callers outside the diff: unchanged files that call or import changed or
   deleted declarations are found at the analyzed snapshot and included as
   context files with their call sites (terminal "called outside the diff",
@@ -26,7 +29,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   selected node, and a top bar. The textual file/symbol/topology/metadata
   dumps are gone (use `--format json`), roughly halving report size.
 - Graph files show changed symbols by default; unchanged symbols and import
-  statements expand per file.
+  statements expand per file, or all at once with "Show unchanged".
+- The graph reads top to bottom: modules, files, and symbols are ordered so
+  callers sit above the code they call (changed source first, then files
+  outside the diff, then tests), and "◆ start here" marks the entry point.
+- Modules are collapsible (collapsed by default from five modules, keeping
+  the first open); a collapsed module summarizes its files and changed
+  symbols, and edges into it attach to its header.
 - Graph edges are drawn on top as arcs beside the boxes: symbol-to-symbol
   when both are visible, otherwise lifted to file headers and merged with a
   count; hovering or selecting a node highlights its connections.

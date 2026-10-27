@@ -247,7 +247,7 @@ class TerminalFormatter:
             source = rel.get("source_id", "")
             source_symbol = symbols_by_id.get(source)
             source_file = source_symbol.get("file_id") if source_symbol else source
-            if rel.get("kind") != "calls" or source_file not in context_file_ids:
+            if rel.get("kind") not in ("calls", "inherits") or source_file not in context_file_ids:
                 continue
             line = next(
                 (e.get("line_start") for e in rel.get("evidence") or [] if e.get("kind") == "call_site"),
@@ -258,6 +258,8 @@ class TerminalFormatter:
                 where += f":{source_symbol.get('qualified_name') or source_symbol.get('name')}"
             if line:
                 where += f" (L{line})"
+            if rel.get("kind") == "inherits":
+                where += " (subclass)"
             outside_calls.setdefault(rel.get("target_id", ""), []).append(where)
 
         ranked = RankedSymbols()

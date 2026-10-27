@@ -2442,6 +2442,44 @@ def test_caller_search_is_capped_with_a_warning(tmp_path, monkeypatch):
     )
 
 
+def test_inherits_edges_resolve_local_imported_and_outside_the_diff(tmp_path):
+    root = repo(tmp_path)
+    write(root, "pkg/__init__.py", "")
+    write(root, "pkg/base.py", "class Base:\n    pass\n")
+    write(root, "pkg/sub.py", "class Plain:\n    pass\n")
+    write(root, "pkg/user.py", "from pkg.base import Base\n\nclass Outside(Base):\n    pass\n")
+    git(root, "add", ".")
+    git(root, "commit", "-m", "base")
+    write(root, "pkg/base.py", "class Base:\n    x = 1\n")
+    write(
+        root, "pkg/sub.py",
+        "import abc\nfrom pkg.base import Base\n\n"
+        "def helper():\n    pass\n\n"
+        "class Local:\n    pass\n\n"
+        "class Child(Base, Local, abc.ABC, helper, metaclass=abc.ABCMeta):\n    pass\n",
+    )
+
+    artifact = analyze_local_diff(str(root))
+
+    assert_valid(artifact)
+    inherits = {
+        (item["source_id"], item["target_id"]): item
+        for item in artifact["relationships"] if item["kind"] == "inherits"
+    }
+    # Imported base in another changed file, a local base, and a base in the
+    # diff subclassed by an untouched file. Attribute bases (abc.ABC), a
+    # function used as a base, and metaclass keywords are not inheritance edges.
+    assert set(inherits) == {
+        ("sym::pkg/sub.py::Child", "sym::pkg/base.py::Base"),
+        ("sym::pkg/sub.py::Child", "sym::pkg/sub.py::Local"),
+        ("sym::pkg/user.py::Outside", "sym::pkg/base.py::Base"),
+    }
+    evidence = inherits[("sym::pkg/sub.py::Child", "sym::pkg/base.py::Base")]["evidence"][0]
+    assert evidence["line_start"] == 10 and evidence["snippet"].startswith("class Child(Base")
+    outside = {item["path"]: item for item in artifact["files"]}
+    assert outside["pkg/user.py"]["change_kind"] == "unchanged"
+
+
 def test_symbol_source_and_file_diff_split_lines_like_git(tmp_path):
     """Form feeds must not shift spans; a missing final newline gets Git's marker."""
     root = repo(tmp_path)
@@ -2458,3 +2496,39 @@ def test_symbol_source_and_file_diff_split_lines_like_git(tmp_path):
     }
     unified = next(item for item in artifact["files"] if item["path"] == "mod.py")["diff"]["unified"]
     assert "-    return 2\n\\ No newline at end of file\n+    return 3\n\\ No newline at end of file\n" in unified
+
+
+def test_inherits_edges_require_a_confirmed_class_target(tmp_path):
+    """External bases, and functions or constants used as bases, are not
+    inheritance edges; the import symbol and its evidence remain."""
+    root = repo(tmp_path)
+    write(root, "pkg/__init__.py", "")
+    write(root, "pkg/base.py", "def factory():\n    return object\n\nclass Base:\n    pass\n\nclass Old:\n    pass\n")
+    write(root, "pkg/outside.py",
+          "from pkg.base import factory, Base, Old\n\n"
+          "class FromFunction(factory):\n    pass\n\n"
+          "class FromClass(Base):\n    pass\n\n"
+          "class FromDeleted(Old):\n    pass\n")
+    git(root, "add", ".")
+    git(root, "commit", "-m", "base")
+    # factory and Base change, Old is deleted; outside.py is untouched.
+    write(root, "pkg/base.py", "def factory():\n    return dict\n\nclass Base:\n    x = 1\n")
+    write(root, "pkg/inside.py",
+          "from external import Framework\nfrom pkg.base import factory\n\n"
+          "class UsesExternal(Framework):\n    pass\n\n"
+          "class UsesFunction(factory):\n    pass\n")
+
+    artifact = analyze_local_diff(str(root))
+
+    assert_valid(artifact)
+    inherits = {
+        (item["source_id"], item["target_id"])
+        for item in artifact["relationships"] if item["kind"] == "inherits"
+    }
+    assert inherits == {
+        ("sym::pkg/outside.py::FromClass", "sym::pkg/base.py::Base"),
+        ("sym::pkg/outside.py::FromDeleted", "sym::pkg/base.py::Old"),
+    }
+    # The external import is still recorded as an import symbol with evidence.
+    stub = next(item for item in artifact["symbols"] if item["id"] == "sym::pkg/inside.py::import::external")
+    assert stub["kind"] == "import" and stub["evidence"][0]["snippet"] == "from external import Framework"

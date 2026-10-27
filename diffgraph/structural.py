@@ -109,6 +109,11 @@ class _Call:
     position: int
     snippet: str
     comprehension_bindings: Tuple[str, ...] = ()
+    # "inherits": a base class in ``class subject(name)``. Bases are evaluated
+    # in the class's enclosing scope, so ``caller`` is that scope and the
+    # resolved edge starts at ``subject`` (the class).
+    kind: str = "call"
+    subject: Optional[str] = None
 
 
 def _blob(repository: str, oid: Optional[str]) -> Optional[bytes]:
@@ -546,6 +551,20 @@ def _parse_python(
                     )
                 )
                 next_parents = (*parents, (qname, kind))
+                superclasses = (
+                    node.child_by_field_name("superclasses")
+                    if node.type == "class_definition" else None
+                )
+                if superclasses is not None:
+                    header = content[node.start_byte:superclasses.end_byte].decode("utf-8")
+                    for base in superclasses.named_children:
+                        # Bare names only: ``pkg.Base`` is attribute dispatch,
+                        # and ``metaclass=...`` is a keyword argument.
+                        if base.type == "identifier":
+                            calls.append(_Call(
+                                parent, _node_text(content, base), node.start_point[0] + 1,
+                                node.start_byte, header, (), "inherits", qname,
+                            ))
                 # A declaration overwrites an imported binding in its enclosing
                 # scope, but only after its declaration header is evaluated.
                 body = node.child_by_field_name("body")
@@ -1193,6 +1212,8 @@ def _context_callers(
         if item["change_kind"] != "unchanged" and item["kind"] != "import"
     }
     deleted_ids = {item["id"] for item in symbols if item["change_kind"] == "deleted"}
+    # Deleted classes stay valid inheritance targets through pre-change parses.
+    class_ids = {item["id"] for item in symbols if item["id"] in target_ids and item["kind"] == "class"}
     names = sorted({
         item["name"] for item in symbols
         if item["id"] in target_ids and item["parent_id"] is None
@@ -1266,16 +1287,18 @@ def _context_callers(
         occurrences: Dict[Tuple[str, str], int] = {}
         for call in calls:
             target = _resolve_call_target(call, symbol_map, bindings, imported)
-            if target not in target_ids:
+            if target not in (class_ids if call.kind == "inherits" else target_ids):
                 continue
-            source = _symbol_id(path, call.caller) if call.caller is not None else "file::" + path
-            if call.caller is not None:
-                callers.add(call.caller)
+            subject = call.subject if call.kind == "inherits" else call.caller
+            source = _symbol_id(path, subject) if subject is not None else "file::" + path
+            if subject is not None:
+                callers.add(subject)
             occurrence = occurrences.get((source, target), 0)
             occurrences[(source, target)] = occurrence + 1
             edges.append({
                 "id": "rel::{}->{}{}".format(source, target, "" if occurrence == 0 else "#{}".format(occurrence)),
-                "kind": "calls", "source_id": source, "target_id": target,
+                "kind": "inherits" if call.kind == "inherits" else "calls",
+                "source_id": source, "target_id": target,
                 "analysis_source": "structural", "resolution_method": "resolved", "confidence": None,
                 "evidence": [{
                     "kind": "call_site", "file": path, "line_start": call.line, "line_end": call.line,
@@ -1418,6 +1441,12 @@ def analyze_local_diff(
             pre_change_id_paths["sym::{}::".format(old_path)] = "sym::{}::".format(output)
     cross_import_paths = _resolved_import_paths(cross_file_parses)
     cross_import_targets = _resolved_import_targets(cross_file_parses)
+    changed_class_ids = {
+        _symbol_id(parsed.path, item.qualified_name)
+        for parsed in cross_file_parses
+        for item in parsed.new_symbols
+        if item.kind == "class"
+    }
     # Import attribution is broader than call resolution: any unique top-level
     # declaration can be imported by name, but only callables are call targets.
     cross_import_declarations = _resolved_import_targets(
@@ -1714,9 +1743,17 @@ def analyze_local_diff(
             )
             if target_qname is None:
                 continue
+            # Inheritance edges need a confirmed class: local, or in a changed
+            # file. An external base keeps only its import symbol and evidence.
+            if call.kind == "inherits" and not (
+                (target_qname in new_map and new_map[target_qname].kind == "class")
+                or target_qname in changed_class_ids
+            ):
+                continue
+            subject = call.subject if call.kind == "inherits" else call.caller
             source = (
-                _symbol_id(output_path, call.caller)
-                if call.caller is not None
+                _symbol_id(output_path, subject)
+                if subject is not None
                 else "file::" + output_path
             )
             target = (
@@ -1731,7 +1768,7 @@ def analyze_local_diff(
             relationships.append(
                 {
                     "id": "rel::{}->{}{}".format(source, target, suffix),
-                    "kind": "calls",
+                    "kind": "inherits" if call.kind == "inherits" else "calls",
                     "source_id": source,
                     "target_id": target,
                     "analysis_source": "structural",
