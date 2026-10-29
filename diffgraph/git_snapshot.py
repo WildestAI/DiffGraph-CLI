@@ -75,8 +75,27 @@ class CommitRangeResolution:
     three_dot: bool
 
 
+@dataclass(frozen=True)
+class RefComparisonResolution:
+    """Entries comparing one resolved commit with the index or working tree.
+
+    Matches ``git diff <ref>`` (working tree, including ordinary untracked
+    files like an unstaged snapshot) and ``git diff --cached <ref>`` (index).
+    """
+
+    entries: Tuple[SnapshotEntry, ...]
+    warnings: Tuple[ResolutionWarning, ...]
+    base_ref: str
+    base_oid: str
+    staged: bool
+
+
 class GitSnapshotError(RuntimeError):
     """A Git or working-tree operation required for exact snapshots failed."""
+
+
+class UnknownRevisionError(GitSnapshotError):
+    """A single diff operand is not a commit (usually a pathspec without ``--``)."""
 
 
 @dataclass(frozen=True)
@@ -116,6 +135,33 @@ def resolve_unstaged(
     """
 
     return _resolve(repository, pathspecs, staged=False)
+
+
+def resolve_against_commit(
+    repository: str,
+    ref: str,
+    *,
+    staged: bool = False,
+    pathspecs: Optional[Sequence[str]] = None,
+) -> RefComparisonResolution:
+    """Resolve changes from one commit to the working tree (or the index).
+
+    An operand that is not a commit is an error rather than an empty diff:
+    pathspecs must follow ``--``, so a mistyped ref must never look like a
+    snapshot without changes.
+    """
+
+    root = repository_root(repository)
+    warnings: List[ResolutionWarning] = []
+    base_oid = _resolve_commit(root, ref, "invalid_base_ref", warnings)
+    if base_oid is None:
+        raise UnknownRevisionError(
+            "unknown revision {!r}; put pathspecs after '--'".format(ref)
+        )
+    resolution = _resolve(repository, pathspecs, staged=staged, base_oid=base_oid)
+    return RefComparisonResolution(
+        resolution.entries, resolution.warnings, ref, base_oid, staged
+    )
 
 
 def resolve_commit_range(
@@ -264,7 +310,8 @@ def _is_hex_oid(value: str) -> bool:
 
 
 def _resolve(
-    repository: str, pathspecs: Optional[Sequence[str]], staged: bool
+    repository: str, pathspecs: Optional[Sequence[str]], staged: bool,
+    base_oid: Optional[str] = None,
 ) -> SnapshotResolution:
     warnings: List[ResolutionWarning] = []
     root = _repository_root(repository, warnings)
@@ -277,6 +324,9 @@ def _resolve(
     command.extend(
         ["--raw", "-z", "--no-abbrev", "--no-ext-diff", "--find-renames=50%"]
     )
+    if base_oid is not None:
+        # A full object ID cannot be mistaken for an option or a path.
+        command.append(base_oid)
     scoped_pathspecs = _root_relative_pathspecs(
         repository, root, pathspecs, warnings
     )

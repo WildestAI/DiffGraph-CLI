@@ -36,8 +36,8 @@
       "properties": {
         "kind": {
           "type": "string",
-          "enum": ["unstaged", "staged", "commit_range", "file_scope"],
-          "description": "Maps directly to the `wild diff` variant used."
+          "enum": ["unstaged", "staged", "commit_range", "working_tree", "file_scope"],
+          "description": "Maps directly to the `wild diff` variant used: unstaged (index → working tree), staged (HEAD → index, or REF → index for `--staged REF`), commit_range (BASE..HEAD / BASE...HEAD), working_tree (REF → working tree for `wild diff REF`)."
         },
         "base_ref": {
           "type": ["string", "null"],

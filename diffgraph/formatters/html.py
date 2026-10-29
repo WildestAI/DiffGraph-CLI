@@ -58,6 +58,10 @@ def _diff_label(diff_ref: dict) -> str:
         head = diff_ref.get("requested_head_ref") or _short_ref(diff_ref.get("head_ref"))
         separator = "..." if diff_ref.get("comparison_mode") == "three_dot" else ".."
         label = f"{base}{separator}{head}"
+    elif kind == "working_tree":
+        label = f"{diff_ref.get('requested_base_ref') or _short_ref(diff_ref.get('base_ref'))} → working tree"
+    elif kind == "staged" and diff_ref.get("requested_base_ref"):
+        label = f"{diff_ref['requested_base_ref']} → index (staged)"
     else:
         label = {"unstaged": "Unstaged changes", "staged": "Staged changes"}.get(kind, str(kind))
     pathspecs = diff_ref.get("pathspecs") or []
@@ -87,7 +91,8 @@ _INTERACTIVE_SCRIPT = textwrap.dedent(
       if (!files.length) return;
 
       const svg = document.createElementNS(NS, 'svg');
-      svg.setAttribute('viewBox', '0 0 1400 840');
+      // The viewBox tracks the host's pixel size, so pan/zoom work in screen
+      // pixels; the layout itself is LAYOUT_WIDTH units wide.
       svg.setAttribute('preserveAspectRatio', 'xMinYMin meet');
       svg.setAttribute('role', 'img');
       svg.setAttribute('aria-label', 'Interactive DiffGraph visualization');
@@ -587,10 +592,38 @@ _INTERACTIVE_SCRIPT = textwrap.dedent(
       }
       host.appendChild(toolbar);
       const setTransform = () => viewport.setAttribute('transform', `translate(${state.x} ${state.y}) scale(${state.scale})`);
+
+      // ---- Viewport: fit width by default, fit everything on request, zoom at the cursor ----
+      const LAYOUT_WIDTH = 1400;
+      const TOOLBAR_SPACE = 48;
+      const MIN_SCALE = 0.1;
+      const MAX_SCALE = 3;
+      const clampScale = (value) => Math.max(MIN_SCALE, Math.min(MAX_SCALE, value));
+      const hostSize = () => ({ width: Math.max(1, host.clientWidth), height: Math.max(1, host.clientHeight) });
+      const syncViewBox = () => { const { width, height } = hostSize(); svg.setAttribute('viewBox', `0 0 ${width} ${height}`); };
+      const fitWidth = () => {
+        const { width } = hostSize();
+        state.scale = clampScale(Math.min(1.25, (width - 16) / LAYOUT_WIDTH));
+        state.x = 8;
+        state.y = TOOLBAR_SPACE;
+        setTransform();
+      };
+      const fitAll = () => {
+        const box = viewport.getBBox();
+        if (!box.width || !box.height) { fitWidth(); return; }
+        const { width, height } = hostSize();
+        state.scale = clampScale(Math.min(1.25, (width - 24) / box.width, (height - TOOLBAR_SPACE - 12) / box.height));
+        state.x = (width - box.width * state.scale) / 2 - box.x * state.scale;
+        state.y = TOOLBAR_SPACE - box.y * state.scale;
+        state.userMoved = true;
+        setTransform();
+      };
+      tool('Fit to view', fitAll);
+      tool('Fit width', () => { state.userMoved = false; fitWidth(); });
       const draw = () => {
         viewport.replaceChildren();
         const positions = new Map();
-        let y = 60;
+        let y = 8;
         moduleList.forEach((module) => {
           const moduleY = y;
           const group = module.files;
@@ -753,11 +786,30 @@ _INTERACTIVE_SCRIPT = textwrap.dedent(
         viewport.appendChild(edges);
         setTransform();
       };
-      svg.addEventListener('wheel', (event) => { event.preventDefault(); const factor = event.deltaY < 0 ? 1.12 : 0.89; state.scale = Math.max(0.35, Math.min(3, state.scale * factor)); setTransform(); }, { passive: false });
+      svg.addEventListener('wheel', (event) => {
+        event.preventDefault();
+        // Keep the layout point under the cursor fixed while zooming.
+        const rect = svg.getBoundingClientRect();
+        const px = event.clientX - rect.left;
+        const py = event.clientY - rect.top;
+        const next = clampScale(state.scale * (event.deltaY < 0 ? 1.12 : 0.89));
+        state.x = px - (px - state.x) * (next / state.scale);
+        state.y = py - (py - state.y) * (next / state.scale);
+        state.scale = next;
+        state.userMoved = true;
+        setTransform();
+      }, { passive: false });
       svg.addEventListener('pointerdown', (event) => { if (event.target === svg) { state.dragging = true; state.startX = event.clientX - state.x; state.startY = event.clientY - state.y; svg.setPointerCapture(event.pointerId); } });
-      svg.addEventListener('pointermove', (event) => { if (state.dragging) { state.x = event.clientX - state.startX; state.y = event.clientY - state.startY; setTransform(); } });
+      svg.addEventListener('pointermove', (event) => { if (state.dragging) { state.x = event.clientX - state.startX; state.y = event.clientY - state.startY; state.userMoved = true; setTransform(); } });
       svg.addEventListener('pointerup', () => { state.dragging = false; });
+      syncViewBox();
+      fitWidth();
       draw();
+      // Resizing (window, details panel, side-by-side diff) keeps the fit
+      // until the reader zooms or pans themselves.
+      if (typeof ResizeObserver === 'function') {
+        new ResizeObserver(() => { syncViewBox(); if (!state.userMoved) fitWidth(); }).observe(host);
+      }
     })();
     """
 ).strip()

@@ -469,3 +469,15 @@ def test_details_link_reveals_symbol_inside_a_collapsed_module():
 
     reveal = script.split("const reveal = (id) => {", 1)[1].split("};", 1)[0]
     assert "state.collapsedModules.delete(moduleIdOf.get(fileId));" in reveal
+
+
+def test_graph_viewport_fits_and_zooms_at_the_cursor():
+    from diffgraph.formatters.html import _INTERACTIVE_SCRIPT as script
+
+    assert "tool('Fit to view', fitAll);" in script
+    assert "tool('Fit width'" in script
+    # Wheel zoom keeps the point under the cursor fixed.
+    assert "state.x = px - (px - state.x) * (next / state.scale);" in script
+    # The viewBox follows the host's pixel size and refits until the user moves.
+    assert "svg.setAttribute('viewBox', `0 0 ${width} ${height}`)" in script
+    assert "if (!state.userMoved) fitWidth();" in script
